@@ -275,7 +275,7 @@ namespace
 #if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    bool strip_original_shaders_debug_data = false;
 #endif
-   bool use_os_reference_white_level = true;
+   bool use_os_reference_white_level = false;
 
 #if ENABLE_SR
    SR::UserType sr_user_type = SR::UserType::Auto; // If set to a non "None" value, some SR tech is enabled by the user (but not necessarily supported+initialized correctly, that's by device)
@@ -12865,7 +12865,7 @@ namespace
                   static const char* paper_white_name = "Paper White";
 
                   assert(!use_os_reference_white_level || !has_separate_ui_paper_white); // "use_os_reference_white_level" mode only uses one slider (scene paper white)!
-                  if (ImGui::Checkbox("Link to OS Reference White Level", &use_os_reference_white_level))
+                  if (false && ImGui::Checkbox("Link to OS Reference White Level", &use_os_reference_white_level))
                   {
                      if (use_os_reference_white_level)
                      {
@@ -12886,7 +12886,7 @@ namespace
 
                   const float max_white_level = use_os_reference_white_level ? 480.f : 500.f; // Windows SDR Reference White Level max is 480 nits! We use 500 otherwise (both are hardcoded elsewhere too!)
 
-                  if (ImGui::SliderFloat(has_separate_ui_paper_white ? scene_paper_white_name : paper_white_name, &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, max_white_level, "%.f"))
+                  if (ImGui::SliderFloat(has_separate_ui_paper_white ? scene_paper_white_name : paper_white_name, &cb_luma_global_settings.ScenePaperWhite, 1, max_white_level, "%.f"))
                   {
                      cb_luma_global_settings.ScenePaperWhite = max(cb_luma_global_settings.ScenePaperWhite, 0.0);
                      reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
@@ -13040,7 +13040,7 @@ namespace
                   if (has_separate_ui_paper_white)
                   {
                      ImGui::BeginDisabled(!supports_custom_ui_paper_white_scaling || !mod_active);
-                     if (ImGui::SliderFloat("UI Paper White", supports_custom_ui_paper_white_scaling ? &cb_luma_global_settings.UIPaperWhite : &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, 500.f, "%.f"))
+                     if (ImGui::SliderFloat("UI Paper White", supports_custom_ui_paper_white_scaling ? &cb_luma_global_settings.UIPaperWhite : &cb_luma_global_settings.ScenePaperWhite, 1, 500.f, "%.f"))
                      {
                         cb_luma_global_settings.UIPaperWhite = max(cb_luma_global_settings.UIPaperWhite, 0.0);
                         reshade::set_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);

@@ -34,7 +34,7 @@ void main(
   // Saturation and Tint
   LUT_SaturationAndTint();
 
-  // Upgrade and Tonemap by Luminance
+  // Upgrade and Tonemap
   LUT_UpgradeAndTonemap();
 
   o0.xyz = li.r0;

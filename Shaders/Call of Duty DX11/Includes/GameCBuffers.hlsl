@@ -10,7 +10,11 @@ namespace CB
 {
    struct LumaGameSettings
    {      
-      float Todo;
+      float MovPaperWhite;
+      
+      float PCCHue;
+      float PCCChrom;
+      float PCCPeak;
    };
    
    struct LumaGameData

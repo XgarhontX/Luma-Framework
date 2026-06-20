@@ -20,7 +20,7 @@ SamplerState s0_s : register(s0);
 
 // 3Dmigoto declarations
 #define cmp -
-#include "h1_common.hlsl"
+#include "common.hlsl"
 
 void main(
   float4 v0 : SV_POSITION0,

@@ -136,26 +136,26 @@ namespace
          }
       }
 
-      if (!IsDebuggerPresent())
-      {
-			// TODO: Add a way to skip this dialog for x minutes or until we change compilation mode. Maybe we should only show it if the build was made with debug symbols/information, however there's no way to know at runtime AFAIK
-			auto ret = MessageBoxA(NULL, "Loaded. You can now attach the debugger or continue execution (press \"Yes\").\nPress \"No\" to skip this message for this session.\nPress \"Cancel\" to close the application.", name, MB_SETFOREGROUND | MB_YESNOCANCEL);
-         if (ret == IDABORT || ret == IDCANCEL)
-         {
-            exit(0);
-         }
-         // Write a file on disk so we can avoid re-opening the debugger dialog (which can be annoying) if a program loaded and unloaded multiple times in a row (it can happen on boot)
-         // It'd be nice to delete this file when luma closes, but that's not possible as it closes many times.
-         else if (ret == IDNO)
-         {
-            std::ofstream fileWrite("Luma-Debug-Cache"); // Implies "Globals::MOD_NAME"
-            if (fileWrite)
-            {
-               fileWrite << hProcessId;
-               fileWrite.close();
-            }
-         }
-      }
+   //    if (!IsDebuggerPresent())
+   //    {
+			// // TODO: Add a way to skip this dialog for x minutes or until we change compilation mode. Maybe we should only show it if the build was made with debug symbols/information, however there's no way to know at runtime AFAIK
+			// auto ret = MessageBoxA(NULL, "Loaded. You can now attach the debugger or continue execution (press \"Yes\").\nPress \"No\" to skip this message for this session.\nPress \"Cancel\" to close the application.", name, MB_SETFOREGROUND | MB_YESNOCANCEL);
+   //       if (ret == IDABORT || ret == IDCANCEL)
+   //       {
+   //          exit(0);
+   //       }
+   //       // Write a file on disk so we can avoid re-opening the debugger dialog (which can be annoying) if a program loaded and unloaded multiple times in a row (it can happen on boot)
+   //       // It'd be nice to delete this file when luma closes, but that's not possible as it closes many times.
+   //       else if (ret == IDNO)
+   //       {
+   //          std::ofstream fileWrite("Luma-Debug-Cache"); // Implies "Globals::MOD_NAME"
+   //          if (fileWrite)
+   //          {
+   //             fileWrite << hProcessId;
+   //             fileWrite.close();
+   //          }
+   //       }
+   //    }
 #else
       // Wait for the debugger to attach
       while (!IsDebuggerPresent()) Sleep(100);

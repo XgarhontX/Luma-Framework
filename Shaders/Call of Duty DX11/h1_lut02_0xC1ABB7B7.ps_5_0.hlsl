@@ -41,7 +41,7 @@ void main(
   // Overlay
   LUT_Overlay(w1, t2, s0_s);
 
-  // Upgrade and Tonemap by Luminance
+  // Upgrade and Tonemap
   LUT_UpgradeAndTonemap();
 
   o0.xyz = li.r0;

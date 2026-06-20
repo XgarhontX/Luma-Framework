@@ -20,51 +20,7 @@ cbuffer cb2 : register(b2)
 // 3Dmigoto declarations
 #define cmp -
 
-#include "h1_common.hlsl"
-
-// Mobius Piecewise 
-// - Linear section up to rolloff
-// - CS before this computed coeffs for exposure
-// float4 Rolloff(float3 x) {
-//   // setup
-//   float4 r0,r1,r2,r3,r4;
-//   r0.xyz = x;
-//
-//   // threshold, midray, piecewise point, radiply changing
-//   // r1.xyz = cmp(cb4[0].xxx >= r0.xyz);
-//   // r2.xyz = r1.xyz ? 0 : 1; //inverse mask (floor())
-//   // // r1.xyz = r1.xyz ? 1 : 0; //mask (1-floor()) //uneeded
-//
-//   // // rolloff
-//   // r3.xyz = cb4[1].xxx * r2.xyz;
-//   // r3.xyz = r1.xyz * cb4[2].xxx + r3.xyz;
-//   // r4.xyz = cb4[1].zzz * r2.xyz;
-//   // r4.xyz = r1.xyz * cb4[2].zzz + r4.xyz;
-//   // r3.xyz = r0.xyz * r3.xyz + r4.xyz;
-//   // r4.xyz = cb4[1].yyy * r2.xyz;
-//   // r2.xyz = cb4[1].www * r2.xyz;
-//   // r2.xyz = r1.xyz * cb4[2].www + r2.xyz;
-//   // r1.xyz = r1.xyz * cb4[2].yyy + r4.xyz;
-//   // r0.xyz = r0.xyz * r1.xyz + r2.xyz;
-//   // r0.xyz = r3.xyz / r0.xyz;
-//   // r0.xyz = saturate(r0.xyz);
-//   // // r0.xyz = max(r0.xyz, 0); //clean
-//   // // r0.xyz = r0.xyz > 1 ? 0 : r0.xyz; //debug
-//
-//   return float4(r0.xyz, 1);
-// }
-float3 Rolloff(float3 x, float4 c) {
-  return (x * c.x + c.z) / (x * c.y + c.w);
-}
-float Rolloff(float x, float4 c) {
-  return (x * c.x + c.z) / (x * c.y + c.w);
-}
-float RolloffDerivative(float x, float4 c) {
-    float numer = c.y * c.z - c.w * c.x;
-    float denom = c.y * x + c.w;
-    float slope = -numer / (denom * denom);
-    return slope;
-}
+#include "common.hlsl"
 
 void main(
   float4 v0 : SV_POSITION0,
@@ -79,7 +35,7 @@ void main(
   // Bloom
   r0.xy = clamp(v1.xy, cb2[32].xy, cb2[32].zw);
   r0.xyz = t2.Sample(s0_s, r0.xy).xyz;
-  r0.xyz = cb2[28].xxx * r0.xyz; //bloom strength
+  r0.xyz = cb2[28].xxx * r0.xyz; //bloom strength TODO: user
 
   // Color
   r1.xy = clamp(v1.xy, cb2[31].xy, cb2[31].zw);
@@ -88,68 +44,69 @@ void main(
   // Exposure & Bloom
   r1.xyz = cb2[28].y * r1.xyz; //post process volume exposure * color
   r0.xyz = r1.xyz + r0.xyz; //+ bloom HDR
-  float3 colorU = r0.xyz;
+  r0.xyz *= 210/200.f; //underexposed! so this helps match MW2R
 
-  // Rolloff https://www.desmos.com/calculator/kdea4muqwb
+  /////////////////////////////////////////////////////////////////////////////////////
+
+  // Setup
+  float3 colorU, colorT;
   float3 x = r0.xyz;
-  float3 lower = Rolloff(x, cb4[2]); //when thres = \inf
-  lower = max(lower, 0); //clean
-  float3 upper = Rolloff(x, cb4[1]); //when thres = 0
-  float3 colorT = x < cb4[0].x ? lower : upper; //piecewise point/threshold
 
-  // First derivative for slope at piecewise point https://www.desmos.com/calculator/kdea4muqwb
-  // (required since some day scenes has lower section arc upwards into vert asymptote)
+  // SDR
+  float3 lower = MobiusRolloff(x, cb4[2]); //when thres = \inf
+  float3 upper = MobiusRolloff(x, cb4[1]); //when thres = 0
+  colorT = x < cb4[0].x ? lower : upper; //piecewise point/threshold
+  colorT = ClampByMaxChannel(colorT, 1); //clean
+  colorT = max(colorT, 0); //clean
+  // colorT = saturate(colorT); //clean
+  float colorTMax = max(colorT.x, max(colorT.y, colorT.z));
+
+  // HDR
   float4 c = cb4[0].x > 0 ? cb4[2] : cb4[1]; //use lower unless threshold is 0
-  float slope_at_piecewise = RolloffDerivative(cb4[0].x, c); 
-  float output_at_piecewise = Rolloff(cb4[0].x, c);
-  {  
-    float3 lower_deriv = lower; //from SDR
-    float3 upper_deriv = slope_at_piecewise * (x - cb4[0].x) + output_at_piecewise; //our own piecewise linear extension
-    colorU = x < cb4[0].x ? lower_deriv : upper_deriv;
-  }
-  // o0.xyz = colorU; return; //debug
-  // colorU = x; //debug
+  float slope_at_piecewise = MobiusRolloffDerivative(cb4[0].x, c);
+  float output_at_piecewise = MobiusRolloff(cb4[0].x, c);
+  float output_at_piecewise_safe = max(output_at_piecewise, 0.0001);
+  float3 lower_hdr = colorT; //lower from SDR
+  float3 upper_hdr = slope_at_piecewise * (x - cb4[0].x) + output_at_piecewise; //mx + b
+  colorU = x < cb4[0].x ? lower_hdr : upper_hdr;
+  colorU = max(colorU, 0); //clean
 
-  // Luma saved for LUT pass
-  float colorUy = GetLuminance(colorU, CS_BT709); /* max(max(colorU.x, colorU.y), colorU.z); */
-  o0.w = colorUy;
+  // HDR out
+  o0.w = GetLuminance(colorU, CS_BT709);
 
-  // Per-Channel Blowout Correction
+  // HDR Blowout
   {
-    // // Forced blowout
-    // const float p = HDR_PEAK;
-    // colorU = Reinhard::ReinhardPiecewise(colorU, p, cb4[0].x);
-    // // colorU = Neutwo(colorU, p);
-    // colorU = min(colorU, p); //clean
+    // Forced blowout
+    const float p = GS.PCCPeak; //TODO: user
+    // colorU = BT709_To_BT2020(colorU);
+    colorU = Reinhard::ReinhardPiecewise(colorU, p, output_at_piecewise_safe);
+    // colorU = ExponentialRollOff(colorU, output_at_piecewise_safe, p);
+    // colorU = Neutwo(colorU, p);
+    // colorU = GTTonemapNoToe(colorU, p, output_at_piecewise_safe); 
+    // colorU = BT2020_To_BT709(colorU);
 
     // 100% steal
     float colorTy = GetLuminance(colorT, CS_BT709);
-    colorUy = GetLuminance(colorU, CS_BT709);
+    float colorUy = GetLuminance(colorU, CS_BT709);
     colorU *= safeDivision(colorTy, colorUy, 1);
     colorT = colorU;
     
-    // UCS Steal
+    // // UCS Steal //TODO: remove, this causes too much flat yellow in explosions.
     // colorU = UCS_ToUCS(colorU);
     // colorT = UCS_ToUCS(colorT);
-    // // colorT = RestoreHueAndChrominanceUcs(colorT, colorU, /* DVS1 * */ 0.2, /* DVS1 * */ 0.69, 1);
-    // colorT = RestoreHueAndChrominanceUcs(colorT, colorU, 0.9, 0.9, 1);
-    // // {
-    // //   // Forced white path
-    // //   float scale = 1;
-    // //   scale = smoothstep(1.001, 0.96, colorT.x);
-    // //   colorT.yz *= scale;
-    // // }
+    // colorT = RestoreHueAndChrominanceUcs(colorT, colorU, 0.45, 0.8, 0); 
     // colorT = UCS_FromUCS(colorT); //and colorU is unused after this
   }
 
-  // Set
-  r0.xyz = colorT;
-  r0.xyz = saturate(r0.xyz); //clean
+  // SDR Clean
+  colorT = max(colorT, 0);
+  colorT = ClampByMaxChannel(colorT, min(1, colorTMax)); //cram, ensure max chrominance
 
   // Gamma (Not user, usually 1)
-  r0.xyz = pow(r0.xyz, cb4[3].zzz);
+  colorT = pow(colorT, cb4[3].zzz);
 
-  o0.xyz = r0.xyz;
+  // SDR out
+  o0.xyz = colorT;
   return;
 }
 

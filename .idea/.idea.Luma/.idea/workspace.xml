@@ -5,8 +5,25 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="f5e53d90-3e4e-473b-9c40-08f59ece332c" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/Source/Games/Call of Duty DX11/draw1.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/.idea.Luma/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.idea.Luma/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Luma.sln" beforeDir="false" afterPath="$PROJECT_DIR$/Luma.sln" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Source/External/reshade" beforeDir="false" afterPath="$PROJECT_DIR$/Source/External/reshade" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Luma.sln.DotSettings.user" beforeDir="false" afterPath="$PROJECT_DIR$/Luma.sln.DotSettings.user" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/Common.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/Common.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/GameCBuffers.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/GameCBuffers.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/decompile_cso_only.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_common.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_common.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut00_0x69C8D55D.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut00_0x69C8D55D.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut01_0xF545F4AE.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut01_0xF545F4AE.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut02_0xC1ABB7B7.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut02_0xC1ABB7B7.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_mov_0x0B19F657.ps_5_0.hlsl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_roll00_0x5BD08BA5.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_roll00_0x5BD08BA5.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_ui_pauseblur_0x2085E3DE.ps_5_0.hlsl 1" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Global/Luma_DisplayComposition.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Global/Luma_DisplayComposition.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Source/Core/core.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Core/core.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Source/Core/includes/debug.h" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Core/includes/debug.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Source/Games/Call of Duty DX11/Call of Duty DX11.vcxproj" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Games/Call of Duty DX11/Call of Duty DX11.vcxproj" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Source/Games/Call of Duty DX11/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Games/Call of Duty DX11/main.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -28,8 +45,18 @@
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
   <component name="HighlightingSettingsPerFile">
-    <setting file="file://$PROJECT_DIR$/../Luma-Framework-Clean/Source/Games/Call of Duty Black Ops 3/main.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/../Luma-Framework-Clean/Source/Games/Call of Duty Black Ops 3/main.cpp" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/Common.hlsl" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/GameCBuffers.hlsl" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Core/core.hpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Core/includes/debug.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Core/includes/game.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Core/includes/globals.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Core/includes/instance_data.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Core/includes/overlay_log.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Games/Call of Duty DX11/main.cpp" root0="FORCE_HIGHLIGHTING" />
   </component>
+  <component name="MetaFilesCheckinStateConfiguration" checkMetaFiles="true" />
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 6
 }</component>
@@ -63,13 +90,32 @@
       <workItem from="1781289640385" duration="2566000" />
       <workItem from="1781368481295" duration="8642000" />
       <workItem from="1781419571179" duration="2241000" />
+      <workItem from="1781564613181" duration="2708000" />
+      <workItem from="1781628926977" duration="40700000" />
+      <workItem from="1781715009207" duration="3058000" />
+      <workItem from="1781722717132" duration="27343000" />
+      <workItem from="1781799269809" duration="5254000" />
+      <workItem from="1781809086884" duration="35322000" />
+      <workItem from="1781888592815" duration="39744000" />
     </task>
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
   </component>
+  <component name="UnityCheckinConfiguration" checkUnsavedScenes="true" />
   <component name="UnityProjectConfiguration" hasMinimizedUI="false" />
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
   <component name="VcsManagerConfiguration">
     <option name="CLEAR_INITIAL_COMMIT_MESSAGE" value="true" />
   </component>

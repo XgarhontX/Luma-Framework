@@ -628,5 +628,33 @@ float4 main(float4 pos : SV_Position) : SV_Target0
 	color.rgb = float3(1, 0, 0);
 #endif
 
+#if SWAPCHAIN_CLAMP_PEAK == 1
+	color = min(color, PeakWhiteNits / sRGB_WhiteLevelNits);
+#endif // SWAPCHAIN_CLAMP_PEAK == 1
+
+#if SWAPCHAIN_TEST_USER_PEAK > 0
+	//black
+  color.rgb = 0;
+
+	//10000nits bigger rect
+	if (uv.x > 0.4 && uv.x < 0.6 && uv.y > 0.4 && uv.y < 0.6)
+	{
+		color.rgb = 10000.f / sRGB_WhiteLevelNits;
+	}
+
+	//user peak
+	if (uv.x > 0.45 && uv.x < 0.55 && uv.y > 0.45 && uv.y < 0.55)
+	{
+		color.rgb = PeakWhiteNits / sRGB_WhiteLevelNits;
+	}
+#endif // SWAPCHAIN_TEST_USER_PEAK > 0
+
+#if SWAPCHAIN_TEST_IS_BLACK > 0 
+{
+    bool3 isBlack = abs(color.rgb) < 0.0001f;
+    if (!all(isBlack)) color.rgb = 0.5;
+}
+#endif // SWAPCHAIN_TEST_IS_BLACK > 0
+
 	return float4(color.rgb, color.a);
 }

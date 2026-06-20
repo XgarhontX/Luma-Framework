@@ -1,4 +1,7 @@
 ﻿<wpf:ResourceDictionary xml:space="preserve" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:s="clr-namespace:System;assembly=mscorlib" xmlns:ss="urn:shemas-jetbrains-com:settings-storage-xaml" xmlns:wpf="http://schemas.microsoft.com/winfx/2006/xaml/presentation">
+	<s:String x:Key="/Default/CodeInspection/ExcludedFiles/FilesAndFoldersToSkip2/=2F4C0AFB_002DA415_002D44CE_002DAA2C_002DA94DD0FC8003_002Ff_003Amain_002Ecpp/@EntryIndexedValue">ForceIncluded</s:String>
+	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=08143144_002D3abb_002Dd7b3_002D815c_002D7c798924e8e6_0023Graphics_0020Analyzer/@EntryIndexedValue">True</s:Boolean>
+	
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=3da928fd_002D9a18_002D473e_002D8d05_002Df22b96a30197_0023Prey/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=08143144_002D3abb_002Dd7b3_002D815c_002D7a798924e8e6_0023Template/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=3898c29d_002D83bd_002D406e_002Db891_002D7e2d4bdb34df_0023Quantum_0020Break/@EntryIndexedValue">True</s:Boolean>
@@ -9,6 +12,8 @@
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=163ba26c_002D1ea0_002Deb05_002Df492_002Dc8af046a1f46_0023Trine_00205/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=32621fbe_002Deeca_002D480c_002Db110_002D57d73246398a_0023Final_0020Fantasy_0020VII_0020Remake/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=91886f0a_002De405_002D4386_002D9bba_002Dbf011c50922f_0023Thief_0020_00282014_0029/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=adae0e50_002Df63a_002D4fa5_002Dbc6a_002De1d974cc2d2c_0023Call_0020of_0020Duty_0020Black_0020Ops_00203/@EntryIndexedValue">True</s:Boolean>
+	
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=d7a1b6b7_002D9cd7_002D46d2_002D9c42_002De913f85966d4_0023Watch_0020Dogs_00202/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=23a5a14b_002Dc2ca_002D4474_002Dbc00_002D39c22c0cf778_0023Blue_0020Reflection_0020Second_0020Light/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=70ae6118_002D3f1d_002D463d_002D8d73_002D3c1528e4b838_0023L_002EA_002E_0020Noire/@EntryIndexedValue">True</s:Boolean>
@@ -21,6 +26,7 @@
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=d58eb0ed_002D8efa_002D4db0_002Db2ad_002Db2d2a098873e_0023Heavy_0020Rain/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=5605bccc_002D4f89_002D4af3_002D984f_002D991105c32602_0023Mafia_0020II_0020Definitive_0020Edition/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=12a5d475_002D264c_002D35b7_002D7c7f_002Dea9c310c41bb_0023INSIDE/@EntryIndexedValue">True</s:Boolean>
+	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=e0947f3a_002D8107_002D3bb4_002D83be_002D9a22d419719e_0023Core/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=f4605338_002D43d9_002D473f_002Dad3e_002Da95380c8ad56_0023Dying_0020Light_00202/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=9dd802e8_002D588e_002D4955_002D9ff8_002D21a0f5b06f48_0023Unreal_0020Engine/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=aac35900_002Db655_002D4c8f_002Da622_002Dca47604edc77_0023Beyond_0020Two_0020Souls/@EntryIndexedValue">True</s:Boolean>
@@ -34,7 +40,7 @@
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=457a69b6_002D422f_002D4e49_002D9ec0_002D111bf35941e1_0023NieR_0020Automata/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=51bfc834_002Dec5f_002D4f25_002D90dc_002Da2001e88b491_0023Vanquish/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=e9c6a0cb_002D74cc_002D4202_002D855b_002Dfa91eba2104b_0023Project_0020Diva_0020Mega_0020Mix/@EntryIndexedValue">True</s:Boolean>
-	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=adae0e50_002Df63a_002D4fa5_002Dbc6a_002De1d974cc2d2c_0023Call_0020of_0020Duty_0020Black_0020Ops_00203/@EntryIndexedValue">True</s:Boolean>
+	
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=36d63b53_002Dc40a_002D479c_002D94f9_002Dfc93cbb49feb_0023Granblue_0020Fantasy_0020Relink/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=d947acc3_002Dcdac_002D4227_002D8809_002Daabf39b1c75b_0023Persona_00205/@EntryIndexedValue">True</s:Boolean>
 	<s:Boolean x:Key="/Default/UnloadedProject/UnloadedProjects/=5ddd2903_002D527f_002D4cb2_002D9eeb_002Dd4bad4253b71_0023Batman_0020Arkham_0020Knight/@EntryIndexedValue">True</s:Boolean>
