@@ -27,6 +27,12 @@ void main(
 
   r0.z = t2.SampleLevel(s0_s, v1.xy, 0).x;
 
+  // motion vectors for viewmodel is just the world behind it but 1000x, unusable...
+  if (r0.z >= 0.9) {
+    o0.xy = float2(0,0);
+    return;
+  }
+
   r0.xy = v1.xy;
   r0.w = 1;
   r1.x = dot(r0.xyzw, cb2[6].xyzw);

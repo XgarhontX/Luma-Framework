@@ -9612,7 +9612,7 @@ namespace
 #endif // !GRAPHICS_ANALYZER
 #endif // DEVELOPMENT
 
-#if DEVELOPMENT || TEST
+// #if DEVELOPMENT || TEST
       if (ImGui::Button(std::format("Unload Shaders ({})", device_data.cloned_pipeline_count).c_str())) // TODO: show number of custom+native loaded shaders instead of the number of pipelines we currently cloned? Games like Lego City Undercover re-compile the same shader many many times
       {
          needs_unload_shaders = true;
@@ -9636,7 +9636,7 @@ namespace
          ImGui::SetTooltip("Unload all compiled and replaced shaders. The numbers shows how many shaders are being replaced at this moment in the game, from the custom loaded/compiled ones.\nThis will also reset many of their debug settings to default.\nYou can use ReShade's Global Effects Toggle Shortcut to toggle these on and off.");
       }
       ImGui::SameLine();
-#endif // DEVELOPMENT || TEST
+// #endif // DEVELOPMENT || TEST
 
       bool needs_compilation = false;
       {
@@ -9647,18 +9647,18 @@ namespace
             needs_compilation |= shader_defines_data[i].NeedsCompilation();
          }
       }
-#if !DEVELOPMENT && !TEST
-      ImGui::BeginDisabled(!needs_compilation);
-#endif
+// #if !DEVELOPMENT && !TEST
+//       ImGui::BeginDisabled(!needs_compilation);
+// #endif
       static const std::string reload_shaders_button_title_error = std::string("Reload Shaders ") + std::string(ICON_FK_WARNING);
       static const std::string reload_shaders_button_title_outdated = std::string("Reload Shaders ") + std::string(ICON_FK_REFRESH);
       // We skip locking "s_mutex_loading" just to read the size of "shaders_compilation_errors".
       // We could maybe check "last_pressed_unload" instead of "IsModActive()", but that wouldn't work in case unloading shaders somehow failed.
       const char* reload_shaders_button_name = shaders_compilation_errors.empty() ? (IsModActive(device_data) ? (needs_compilation ? reload_shaders_button_title_outdated.c_str() : "Reload Shaders") : "Load Shaders") : reload_shaders_button_title_error.c_str();
       bool show_reload_shaders_button = (needs_compilation && !auto_recompile_defines) || !shaders_compilation_errors.empty();
-#if DEVELOPMENT || TEST // Always show...
+// #if DEVELOPMENT || TEST // Always show...
       show_reload_shaders_button = true;
-#endif
+// #endif
       if ((show_reload_shaders_button && ImGui::Button(reload_shaders_button_name)) || (auto_recompile_defines && needs_compilation))
       {
          needs_unload_shaders = false;
@@ -9691,10 +9691,10 @@ namespace
             }
          }
       }
-#if !DEVELOPMENT && !TEST
-      ImGui::EndDisabled();
-#endif
-#if DEVELOPMENT || TEST
+// #if !DEVELOPMENT && !TEST
+//       ImGui::EndDisabled();
+// #endif
+// #if DEVELOPMENT || TEST
       ImGui::SameLine();
       if (ImGui::Button("Clean Shaders Cache"))
       {
@@ -9709,7 +9709,7 @@ namespace
             }
          }
       }
-#endif
+// #endif
 
 #if DEVELOPMENT && _DEBUG // Not usually necessary, takes unnecessary space
       ImGui::SameLine();
@@ -13000,7 +13000,7 @@ namespace
                {
                   ImGui::BeginDisabled(!mod_active);
                   // We should this even if "IsModActive()" is false
-                  if (ImGui::SliderFloat("Scene Peak White", &cb_luma_global_settings.ScenePeakWhite, 400.0, 10000.f, "%.f"))
+                  if (ImGui::SliderFloat("Display Peak White", &cb_luma_global_settings.ScenePeakWhite, 400.0, 10000.f, "%.f"))
                   {
                      if (cb_luma_global_settings.ScenePeakWhite == device_data.default_user_peak_white)
                      {

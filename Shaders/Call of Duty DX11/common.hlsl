@@ -1,6 +1,6 @@
-#include "Includes/Common.hlsl"
+#include "./Includes/Common.hlsl"
 #include "../Includes/Reinhard.hlsl"
-#include "Includes/ictcp_portable.hlsl"
+#include "./Includes/ictcp_portable.hlsl"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 float3 ClampByMaxChannel(float3 x, float p) {

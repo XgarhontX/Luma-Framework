@@ -1,4 +1,4 @@
-#include "./common.hlsl"
+#include "./Includes/Common.hlsl"
 Texture2D<float4> t4 : register(t4);
 Texture2D<float4> t2 : register(t2);
 SamplerState s4_s : register(s4);
@@ -15,10 +15,9 @@ void main(
   o0.w = 1;
 
   r1.xyz = t4.Sample(s4_s, v2.xy).xyz;
-  // if (true) {o0.xyz = r1.xyz; return;} //skip
+  if (!GS.AllowFullscreenBlur) {o0.xyz = r1.xyz; return;} //skip
   r0.xyz = t2.Sample(s0_s, v2.xy).xyz;
   r0.xyz = -r1.xyz + r0.xyz;
   o0.xyz = v1.www * r0.xyz + r1.xyz;
-  // o0.xyz = RenderIntermediatePass(o0.xyz);
   return;
 }

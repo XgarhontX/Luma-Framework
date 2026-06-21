@@ -28,7 +28,7 @@ void LUT_Gamma() {
 }
 
 void LUT_LUT(Texture3D lut, SamplerState lutS) {
-  // return; //debug
+  if (!GS.AllowVanillaColorGrade) return;
 
   li.r0 = li.r0 * 0.96875 + 0.015625; //pad (32x)
   li.r0 = lut.Sample(lutS, li.r0).xyz; //a cached texture for whole level
@@ -52,7 +52,7 @@ float3 LUT_Tint_Internal(float3 x, float l) {
 }
 
 void LUT_SaturationAndTint() {
-  // return; //debug
+  if (!GS.AllowVanillaColorGrade) return;
 
   float4 r0, r1; 
   li.r0y = dot(li.r0, float3(0.298999995,0.587000012,0.114));
@@ -82,7 +82,7 @@ void LUT_SaturationAndTint() {
   {
     float3 peak = LUT_Tint_Internal(1, 1);
     float peak_max = max(peak.x, max(peak.y, peak.z));
-    if (peak_max > 0) { //give up for invert (AC-130 scene)
+    if (peak_max > 1) { //must be a change upwards to matter (invalidates AC-130 scene invert)
       peak_max = gamma_sRGB_to_linear1(peak_max, GCT_NONE);
       li.ldrPeak = peak_max;
     }
@@ -90,6 +90,8 @@ void LUT_SaturationAndTint() {
 }
 
 void LUT_Overlay(float2 w1, Texture2D overlayTex, SamplerState overlayS) {
+  if (!GS.AllowVanillaColorGrade) return;
+
   float3 r1 = float3(1,1,1) + -li.r0; //bruh what?! Tint overshoots, so this won't cause errors?
   float3 r2 = overlayTex.Sample(overlayS, w1.xy).xyz;
   li.r0 = r2 * r1 + li.r0;
@@ -116,7 +118,6 @@ void LUT_UpgradeAndTonemap() {
     float y = y_tonemapped_graded;
     float y1 = y;
     y1 *= ratio;
-    y1 *= 220/200.f; //underexposed! so this helps match MW2R
     li.r0 *= safeDivision(y1, y, 1); //apply
 
     li.r0 = max(li.r0, 0); //clean

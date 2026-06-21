@@ -10,8 +10,15 @@ namespace CB
 {
    struct LumaGameSettings
    {      
-      float MovPaperWhite;
-      
+      float FMVPaperWhite;
+      // float RenderResolutionScale;
+      float ExposurePost;
+      float ExposurePre;
+
+      float Bloom;
+      float AllowVanillaColorGrade;
+      float AllowFullscreenBlur;
+
       float PCCHue;
       float PCCChrom;
       float PCCPeak;

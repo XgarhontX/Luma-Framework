@@ -35,7 +35,7 @@ void main(
   // Bloom
   r0.xy = clamp(v1.xy, cb2[32].xy, cb2[32].zw);
   r0.xyz = t2.Sample(s0_s, r0.xy).xyz;
-  r0.xyz = cb2[28].xxx * r0.xyz; //bloom strength TODO: user
+  r0.xyz = cb2[28].xxx * r0.xyz * GS.Bloom; //bloom strength TODO: user
 
   // Color
   r1.xy = clamp(v1.xy, cb2[31].xy, cb2[31].zw);
@@ -44,7 +44,7 @@ void main(
   // Exposure & Bloom
   r1.xyz = cb2[28].y * r1.xyz; //post process volume exposure * color
   r0.xyz = r1.xyz + r0.xyz; //+ bloom HDR
-  r0.xyz *= 210/200.f; //underexposed! so this helps match MW2R
+  r0.xyz *= GS.ExposurePre; //underexposed! so this helps match MW2R
 
   /////////////////////////////////////////////////////////////////////////////////////
 
@@ -77,7 +77,7 @@ void main(
   // HDR Blowout
   {
     // Forced blowout
-    const float p = GS.PCCPeak; //TODO: user
+    const float p = GS.PCCPeak;
     // colorU = BT709_To_BT2020(colorU);
     colorU = Reinhard::ReinhardPiecewise(colorU, p, output_at_piecewise_safe);
     // colorU = ExponentialRollOff(colorU, output_at_piecewise_safe, p);

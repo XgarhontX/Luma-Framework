@@ -41,9 +41,10 @@ void main(
   r0.x = dot(float3(1,1.40199995,-0.703749001), r1.xyw);
   r0.z = dot(float3(1,1.77199996,-0.889474511), r1.xzw);
   o0.xyzw = v2.xyzw * r0.xyzw;
-  o0.xyz = saturate(o0.xyz);
-  // o0.xyz = gamma_sRGB_to_linear(o0.xyz, GCT_NONE);
-  // o0.xyz *= HDR_INTSCALING;
-  // o0.xyz = linear_to_sRGB_gamma(o0.xyz, GCT_NONE);
+  o0.xyzw = saturate(o0.xyzw);
+  o0.xyz = gamma_sRGB_to_linear(o0.xyz, GCT_NONE);
+  o0.xyz = GammaCorrectionLinearDown(o0.xyz);
+  o0.xyz *= GS.FMVPaperWhite / UIPaperWhiteNits;
+  o0.xyz = RenderIntermediatePass_Encode(o0.xyz);
   return;
 }

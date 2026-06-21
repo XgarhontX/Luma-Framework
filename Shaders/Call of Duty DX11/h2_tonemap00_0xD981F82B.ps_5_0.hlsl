@@ -35,8 +35,8 @@ void main(
   // Bloom & Color
   r0.xy = max(cb2[37].xy, v1.xy);
   r0.xy = min(cb2[37].zw, r0.xy);
-  r0.xyz = t2.Sample(s0_s, r0.xy).xyz; //TODO: user bloom strength
-  r0.xyz = cb2[33].xxx * r0.xyz;
+  r0.xyz = t2.Sample(s0_s, r0.xy).xyz;
+  r0.xyz = cb2[33].xxx * GS.Bloom * r0.xyz ;
 
   r1.xyz = t4.Sample(s4_s, v1.xy).xyz;
   r0.xyz = cb2[33].yyy * r1.xyz + r0.xyz;
@@ -45,9 +45,8 @@ void main(
 
   // Piecewise Mobius
   TM_Rolloff();
-  if (DVS1 != 1) {o0.xyz = linear_to_sRGB_gamma(tmi.r0HDR, GCT_NONE); return;} //debug HDR
 
-  // Luminance color grade thing that is rarely used idk
+  // Luminance Per-Channel
   TM_LumaThingy();
 
   // sRGB Encode
