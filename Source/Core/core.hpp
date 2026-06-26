@@ -2677,7 +2677,7 @@ namespace
          {
             desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
          }
-         desc.fullscreen_refresh_rate = 0.f; // This fixes games forcing a specific refresh rate (e.g. Mafia III forces 60Hz for no reason)
+         // desc.fullscreen_refresh_rate = 0.f; // This fixes games forcing a specific refresh rate (e.g. Mafia III forces 60Hz for no reason)
          if (prevent_fullscreen_state)
          {
             desc.fullscreen_state = false; // Force disable FSE (see "OnSetFullscreenState()")

@@ -1,19 +1,24 @@
-// ---- Created with 3Dmigoto v1.3.16 on Fri Jun 12 22:04:13 2026
-Texture2D<float4> t6 : register(t6);
-
-Texture2D<float4> t5 : register(t5);
+// ---- Created with 3Dmigoto v1.3.16 on Tue Jun 23 19:43:37 2026
+Texture2D<float4> t4 : register(t4);
 
 Texture2D<float4> t3 : register(t3);
 
 Texture2D<float4> t2 : register(t2);
 
-SamplerState s5_s : register(s5);
+Texture2D<float4> t1 : register(t1);
+
+SamplerState s4_s : register(s4);
 
 SamplerState s3_s : register(s3);
 
 SamplerState s2_s : register(s2);
 
-SamplerState s0_s : register(s0);
+SamplerState s1_s : register(s1);
+
+cbuffer cb2 : register(b2)
+{
+  float4 cb2[1];
+}
 
 
 
@@ -32,19 +37,17 @@ void main(
   uint4 bitmask, uiDest;
   float4 fDest;
 
-  r0.w = t6.Sample(s5_s, v1.xy).x;
-  r1.y = t3.Sample(s2_s, v1.xy).x;
-  r1.z = t5.Sample(s3_s, v1.xy).x;
-  r1.x = t2.Sample(s0_s, v1.xy).x;
+  r0.xy = cb2[0].xy * v1.xy;
+  r1.y = t2.Sample(s2_s, r0.xy).x;
+  r1.z = t3.Sample(s3_s, r0.xy).x;
+  r1.x = t1.Sample(s1_s, r0.xy).x;
+  r0.w = t4.Sample(s4_s, r0.xy).x;
   r1.w = 1;
   r0.y = dot(float4(1,-0.714139998,-0.344139993,0.531215072), r1.xyzw);
   r0.x = dot(float3(1,1.40199995,-0.703749001), r1.xyw);
   r0.z = dot(float3(1,1.77199996,-0.889474511), r1.xzw);
   o0.xyzw = v2.xyzw * r0.xyzw;
-  o0.xyzw = saturate(o0.xyzw);
-  o0.xyz = gamma_sRGB_to_linear(o0.xyz, GCT_NONE);
-  o0.xyz = GammaCorrectionLinearDown(o0.xyz);
-  o0.xyz *= GS.FMVPaperWhite / UIPaperWhiteNits;
-  o0.xyz = RenderIntermediatePass_Encode(o0.xyz);
+
+  MovPass(o0);
   return;
 }

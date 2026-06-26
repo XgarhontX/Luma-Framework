@@ -5,66 +5,33 @@
 struct TMInfo
 {
   float3 r0; //main color
-  float3 r0HDR; //main color HDR
   float r0y; //main color luminance from HDR rolloff
+  float colorNy; //neutral color, input into SDR colorgrade
   float ldrPeak; //UpgradeToneMap peak, useful because tint will shift it
 };
-static TMInfo tmi = { float3(0,0,0), float3(0,0,0), 0, 1 };
+static TMInfo tmi = { float3(0,0,0), 0, 0, 1 };
 
 void TM_Color(float3 col) {
-  col = max(0, col) * GS.ExposurePre;
+  col = max(0, col);
   tmi.r0 = col;
 }
 
 void TM_Rolloff() {
-  float3 x = tmi.r0;
-  float3 colorT, colorU;
-
-  // SDR
-  float3 lower = MobiusRolloff(x, cb4[2]); //when thres = \inf
-  lower = max(lower, 0); //clean
-  float3 upper = MobiusRolloff(x, cb4[1]); //when thres = 0
-  colorT = x < cb4[0].x ? lower : upper; //piecewise point/threshold
-
-  // HDR
-  float4 c = cb4[0].x > 0 ? cb4[2] : cb4[1]; //use lower unless threshold is 0
-  float slope_at_piecewise = MobiusRolloffDerivative(cb4[0].x, c); 
-  float output_at_piecewise = MobiusRolloff(cb4[0].x, c);
-  float output_at_piecewise_safe = max(output_at_piecewise, 0.0001);
-  float3 lower_hdr = lower; //from SDR
-  float3 upper_hdr = slope_at_piecewise * (x - cb4[0].x) + output_at_piecewise; //mx + b
-  colorU = x < cb4[0].x ? lower_hdr : upper_hdr;
-  tmi.r0HDR = colorU;
-
-  // HDR out
-  tmi.r0y = GetLuminance(colorU, CS_BT709);
-
-  // HDR Blowout
-  const float p = GS.PCCPeak;
-  colorU = Reinhard::ReinhardPiecewise(colorU, p, output_at_piecewise_safe);
-
-  // Blend HDR Blowout onto SDR
-  // if (DVS2) {
-  //   colorU = UCS_ToUCS(colorU);
-  //   colorT = UCS_ToUCS(colorT);
-  //   // colorT = RestoreHueAndChrominanceUcs(colorT, colorU, 0.475, 0.8, 1);
-  //   colorT = RestoreHueAndChrominanceUcs(colorT, colorU, 1, 1, 1);
-  //   colorT = UCS_FromUCS(colorT);
-  // } else {
-    float colorTy = GetLuminance(colorT, CS_BT709);
-    float colorUy = GetLuminance(colorU, CS_BT709);
-    colorT = colorU * safeDivision(colorTy, colorUy, 1); //this gives less chroma than RestoreHueAndChrominanceUcs @ 1
-  // }
-
-  // SDR Clean
-  colorT = max(colorT, 0);
-  colorT = ClampByMaxChannel(colorT, 1); //(ensure max chrominance)
+  // colorU / Rolloff
+  RolloffResult r = Rolloff_Complete(tmi.r0, cb4[0].x, cb4[1], cb4[2]);
+  tmi.r0 = r.color;
+  tmi.r0y = r.y;
 
   // Gamma thing idk, not/barely used
-  colorT = pow(colorT, cb4[3].z);
+  tmi.r0 = pow(tmi.r0, cb4[3].z);
 
-  // SDR out
-  tmi.r0 = colorT;
+  // colorN
+  float y0 = tmi.r0y;
+  float y1 = y0;
+  y1 = HermiteSpline::HermiteSplineLuminanceRolloff(y1, 0.96, 100 * GS.ExpectedMax);
+  tmi.colorNy = y1;
+  tmi.r0 *= safeDivision(y1, y0, 1);
+  tmi.r0 = saturate(tmi.r0);
 }
 
 void TM_LumaThingy() {
@@ -96,33 +63,33 @@ void TM_Gamma() {
   tmi.r0 = linear_to_sRGB_gamma(tmi.r0, GCT_NONE);
 }
 
-float3 TM_Tint_Internal(float3 x, float l) {
-  float3 r1 = cb2[2].xyz * l + cb2[1].xyz;
-  r1 = r1 * l + cb2[0].xyz;
-  x = x * r1 + cb2[3].xyz;
+float3 TM_Tint_Internal(float3 x, float l, int cboffset) {
+  float3 r1 = cb2[2 + cboffset].xyz * l + cb2[1 + cboffset].xyz;
+  r1 = r1 * l + cb2[0 + cboffset].xyz;
+  x = x * r1 + cb2[3 + cboffset].xyz;
   return x;
 }
 
-void TM_SaturationAndTint() {
+void TM_SaturationAndTint(int cboffset = 0) {
   if (!GS.AllowVanillaColorGrade) return;
 
   // Setup
   float4 r0, r1;
   r0.xyz = tmi.r0;
+  r0.w = saturate(dot(r0.xyz, float3(0.298999995,0.587000012,0.114)));
   
   // Saturation
-  r0.w = saturate(dot(r0.xyz, float3(0.298999995,0.587000012,0.114)));
   r1.xyz = r0.www + -r0.xyz;
-  r1.w = cb2[1].w * r0.w + cb2[0].w;
+  r1.w = cb2[1 + cboffset].w * r0.w + cb2[0 + cboffset].w;
   r0.xyz = r1.www * r1.xyz + r0.xyz;
 
   // Tint
-  r0.xyz = TM_Tint_Internal(r0.xyz, r0.w);
+  r0.xyz = TM_Tint_Internal(r0.xyz, r0.w, cboffset);
 
   // tint midgray change //TODO: remove, this game is very light on color grade
   {
     float mg_in = 0.46;
-    float3 mg = TM_Tint_Internal(float3(mg_in, mg_in, mg_in), mg_in);
+    float3 mg = TM_Tint_Internal(float3(mg_in, mg_in, mg_in), mg_in, cboffset);
     mg = gamma_sRGB_to_linear(mg, GCT_NONE);
     float mg_luma = GetLuminance(mg, CS_BT709);
     float ratio = safeDivision(mg_luma, 0.18, 1);
@@ -131,7 +98,7 @@ void TM_SaturationAndTint() {
 
   // tint peak change //TODO: remove, this game is very light on color grade
   {
-    float3 peak = TM_Tint_Internal(1, 1);
+    float3 peak = TM_Tint_Internal(1, 1, cboffset);
     float peak_max = max(peak.x, max(peak.y, peak.z));
     if (peak_max > 1) { //must be a change upwards to matter
       peak_max = gamma_sRGB_to_linear1(peak_max, GCT_NONE);
@@ -158,7 +125,7 @@ void TM_Upgrade() {
   // Upgrade()
   float ratio = 1.f;
   float y_untonemapped = tmi.r0y;
-  float y_tonemapped = Neutwo(tmi.r0y, tmi.ldrPeak);
+  float y_tonemapped = /* tmi.colorNy */ HermiteSpline::HermiteSplineLuminanceRolloff(tmi.r0y, tmi.ldrPeak, 100 * GS.ExpectedMax);
   float y_tonemapped_graded = GetLuminance(tmi.r0, CS_BT709);
   if (y_untonemapped < y_tonemapped) {
     ratio = y_untonemapped / y_tonemapped;

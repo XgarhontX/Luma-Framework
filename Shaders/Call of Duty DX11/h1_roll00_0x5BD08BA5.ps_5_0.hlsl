@@ -19,7 +19,6 @@ cbuffer cb2 : register(b2)
 
 // 3Dmigoto declarations
 #define cmp -
-
 #include "common.hlsl"
 
 void main(
@@ -35,7 +34,7 @@ void main(
   // Bloom
   r0.xy = clamp(v1.xy, cb2[32].xy, cb2[32].zw);
   r0.xyz = t2.Sample(s0_s, r0.xy).xyz;
-  r0.xyz = cb2[28].xxx * r0.xyz * GS.Bloom; //bloom strength TODO: user
+  r0.xyz = cb2[28].xxx * r0.xyz * GS.Bloom; //bloom strength
 
   // Color
   r1.xy = clamp(v1.xy, cb2[31].xy, cb2[31].zw);
@@ -44,69 +43,67 @@ void main(
   // Exposure & Bloom
   r1.xyz = cb2[28].y * r1.xyz; //post process volume exposure * color
   r0.xyz = r1.xyz + r0.xyz; //+ bloom HDR
-  r0.xyz *= GS.ExposurePre; //underexposed! so this helps match MW2R
 
   /////////////////////////////////////////////////////////////////////////////////////
 
-  // Setup
-  float3 colorU, colorT;
-  float3 x = r0.xyz;
+//   // Setup
+//   float3 colorU, colorT;
+//   float3 x = r0.xyz;
+// 
+//   // SDR
+//   float3 lower = MobiusRolloff(x, cb4[2]); //when thres = \inf
+//   float3 upper = MobiusRolloff(x, cb4[1]); //when thres = 0
+//   colorT = x < cb4[0].x ? lower : upper; //piecewise point/threshold
+//   colorT = ClampByMaxChannel(colorT, 1); //clean
+//   colorT = max(colorT, 0); //clean
+//   // colorT = saturate(colorT); //clean
+//   float colorTMax = max(colorT.x, max(colorT.y, colorT.z));
+// 
+//   // HDR
+//   float4 c = cb4[0].x > 0 ? cb4[2] : cb4[1]; //use lower unless threshold is 0
+//   float slope_at_piecewise = MobiusRolloffDerivative(cb4[0].x, c);
+//   float output_at_piecewise = MobiusRolloff(cb4[0].x, c);
+//   float output_at_piecewise_safe = max(output_at_piecewise, 0.0001);
+//   float3 lower_hdr = colorT; //lower from SDR
+//   float3 upper_hdr = slope_at_piecewise * (x - cb4[0].x) + output_at_piecewise; //mx + b
+//   colorU = x < cb4[0].x ? lower_hdr : upper_hdr;
+//   colorU = max(colorU, 0); //clean
+// 
+//   // HDR out
+//   o0.w = GetLuminance(colorU, CS_BT709);
+// 
+//   // HDR Blowout
+//   {
+//     // Forced blowout
+//     colorU = Rolloff_HDRRolloff(colorU, output_at_piecewise_safe); 
+// 
+//     // 100% steal
+//     float colorTy = GetLuminance(colorT, CS_BT709);
+//     float colorUy = GetLuminance(colorU, CS_BT709);
+//     colorU *= safeDivision(colorTy, colorUy, 1);
+//     colorT = colorU;
+//     
+//     // // UCS Steal //TODO: remove, this causes too much flat yellow in explosions.
+//     // colorU = UCS_ToUCS(colorU);
+//     // colorT = UCS_ToUCS(colorT);
+//     // colorT = RestoreHueAndChrominanceUcs(colorT, colorU, 0.45, 0.8, 0); 
+//     // colorT = UCS_FromUCS(colorT); //and colorU is unused after this
+//   }
+// 
+//   // SDR Clean
+//   colorT = max(colorT, 0);
+//   colorT = ClampByMaxChannel(colorT, min(1, colorTMax)); //cram, ensure max chrominance
+//   r0.xyz = colorT; //update r0 with the cleaned SDR color
 
-  // SDR
-  float3 lower = MobiusRolloff(x, cb4[2]); //when thres = \inf
-  float3 upper = MobiusRolloff(x, cb4[1]); //when thres = 0
-  colorT = x < cb4[0].x ? lower : upper; //piecewise point/threshold
-  colorT = ClampByMaxChannel(colorT, 1); //clean
-  colorT = max(colorT, 0); //clean
-  // colorT = saturate(colorT); //clean
-  float colorTMax = max(colorT.x, max(colorT.y, colorT.z));
-
-  // HDR
-  float4 c = cb4[0].x > 0 ? cb4[2] : cb4[1]; //use lower unless threshold is 0
-  float slope_at_piecewise = MobiusRolloffDerivative(cb4[0].x, c);
-  float output_at_piecewise = MobiusRolloff(cb4[0].x, c);
-  float output_at_piecewise_safe = max(output_at_piecewise, 0.0001);
-  float3 lower_hdr = colorT; //lower from SDR
-  float3 upper_hdr = slope_at_piecewise * (x - cb4[0].x) + output_at_piecewise; //mx + b
-  colorU = x < cb4[0].x ? lower_hdr : upper_hdr;
-  colorU = max(colorU, 0); //clean
-
-  // HDR out
-  o0.w = GetLuminance(colorU, CS_BT709);
-
-  // HDR Blowout
-  {
-    // Forced blowout
-    const float p = GS.PCCPeak;
-    // colorU = BT709_To_BT2020(colorU);
-    colorU = Reinhard::ReinhardPiecewise(colorU, p, output_at_piecewise_safe);
-    // colorU = ExponentialRollOff(colorU, output_at_piecewise_safe, p);
-    // colorU = Neutwo(colorU, p);
-    // colorU = GTTonemapNoToe(colorU, p, output_at_piecewise_safe); 
-    // colorU = BT2020_To_BT709(colorU);
-
-    // 100% steal
-    float colorTy = GetLuminance(colorT, CS_BT709);
-    float colorUy = GetLuminance(colorU, CS_BT709);
-    colorU *= safeDivision(colorTy, colorUy, 1);
-    colorT = colorU;
-    
-    // // UCS Steal //TODO: remove, this causes too much flat yellow in explosions.
-    // colorU = UCS_ToUCS(colorU);
-    // colorT = UCS_ToUCS(colorT);
-    // colorT = RestoreHueAndChrominanceUcs(colorT, colorU, 0.45, 0.8, 0); 
-    // colorT = UCS_FromUCS(colorT); //and colorU is unused after this
-  }
-
-  // SDR Clean
-  colorT = max(colorT, 0);
-  colorT = ClampByMaxChannel(colorT, min(1, colorTMax)); //cram, ensure max chrominance
+  RolloffResult r = Rolloff_Complete(r0.xyz, cb4[0].x, cb4[1], cb4[2]);
+  r0.xyz = r.color;
+  o0.w = r.y;
 
   // Gamma (Not user, usually 1)
-  colorT = pow(colorT, cb4[3].zzz);
+  r0.xyz = pow(r0.xyz, cb4[3].z);
 
   // SDR out
-  o0.xyz = colorT;
+  o0.xyz = r0.xyz;
   return;
 }
 

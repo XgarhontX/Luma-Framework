@@ -55,7 +55,7 @@ void main(
   LUT_LUT(t2, s0_s);
 
   // Saturation and Tint
-  LUT_SaturationAndTint();
+  LUT_SaturationAndTint(1);
 
   // Upgrade and Tonemap
   LUT_UpgradeAndTonemap();

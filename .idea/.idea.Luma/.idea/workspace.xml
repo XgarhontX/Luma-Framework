@@ -6,24 +6,22 @@
   <component name="ChangeListManager">
     <list default="true" id="f5e53d90-3e4e-473b-9c40-08f59ece332c" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/.idea.Luma/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/.idea.Luma/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Luma.sln.DotSettings.user" beforeDir="false" afterPath="$PROJECT_DIR$/Luma.sln.DotSettings.user" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/Common.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/Common.hlsl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/GameCBuffers.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Includes/GameCBuffers.hlsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Luma_h1_SRMotionVectorIn_PS.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/Luma_h1_SRMotionVectorIn_PS.hlsl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/common.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/common.hlsl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_common.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_common.hlsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_depthcopyandscale_0x21D41B88.ps_5_0.hlsl 1" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut03_0x06858E94.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut03_0x06858E94.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut04_0xFF474774.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_lut04_0xFF474774.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_motionvectors_rigid_0x5ABE0D31.ps_5_0.hlsl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_roll00_0x5BD08BA5.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1_roll00_0x5BD08BA5.ps_5_0.hlsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1h2_blit1_0x69F5418B.ps_5_0.hlsl" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1h2_blit_pauseblur_0x2085E3DE.ps_5_0.hlsl 1" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1h2_mov_0x0B19F657.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1h2_mov_0x0B19F657.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1h2_blit_pauseblur_0x2085E3DE.ps_5_0.hlsl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h1h2_mov_0x0B19F657.ps_5_0.hlsl" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_common.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_common.hlsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_motionvectors_rigid_0x037AF3C6.ps_5_0.hlsl 1" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_tonemap00_0xD981F82B.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_tonemap00_0xD981F82B.ps_5_0.hlsl" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_tonemap01_0x02A618A0.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_tonemap01_0x02A618A0.ps_5_0.hlsl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_motionvectors_rigid_0x037AF3C6.ps_5_0.hlsl" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_rolloff00_0x796F1ECB.ps_5_0.hlsl" beforeDir="false" afterPath="$PROJECT_DIR$/Shaders/Call of Duty DX11/h2_rolloff00_0x796F1ECB.ps_5_0.hlsl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Source/Core/core.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Core/core.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Source/Core/includes/debug.h" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Core/includes/debug.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Source/Games/Call of Duty DX11/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Games/Call of Duty DX11/main.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Source/Games/Project Diva Mega Mix/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/Source/Games/Project Diva Mega Mix/main.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -65,6 +63,10 @@
     <setting file="file://$PROJECT_DIR$/Source/Games/Call of Duty Black Ops 3/main.cpp" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Source/Games/Call of Duty DX11/draw1.hpp" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Source/Games/Call of Duty DX11/main.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Games/Dishonored 2/main.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Games/Metro Redux/main.cpp" root0="SKIP_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Games/Project Diva Mega Mix/main.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Games/_Generic Mod/main.cpp" root0="SKIP_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/../Program Files (x86)/Windows Kits/10/Include/10.0.28000.0/shared/dxgi.h" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/../Program Files/Microsoft Visual Studio/18/Insiders/VC/Tools/MSVC/14.44.35207/include/list" root0="FORCE_HIGHLIGHTING" />
   </component>
@@ -87,7 +89,7 @@
     &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
     &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;editor.preferences.import&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.github.copilot.settings.keymap.KeymapConfigurable&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
@@ -112,6 +114,14 @@
       <workItem from="1781973851812" duration="2216000" />
       <workItem from="1781976096806" duration="34644000" />
       <workItem from="1782028910400" duration="7744000" />
+      <workItem from="1782085473918" duration="21688000" />
+      <workItem from="1782150135551" duration="6645000" />
+      <workItem from="1782168145878" duration="18700000" />
+      <workItem from="1782229861188" duration="29343000" />
+      <workItem from="1782311698763" duration="26703000" />
+      <workItem from="1782410103738" duration="2106000" />
+      <workItem from="1782417705860" duration="762000" />
+      <workItem from="1782451237578" duration="1039000" />
     </task>
     <servers />
   </component>
@@ -133,6 +143,10 @@
   </component>
   <component name="VcsManagerConfiguration">
     <option name="CLEAR_INITIAL_COMMIT_MESSAGE" value="true" />
+  </component>
+  <component name="XSLT-Support.FileAssociations.UIState">
+    <expand />
+    <select />
   </component>
   <component name="github-copilot-workspace">
     <instructionFileLocations>

@@ -60,6 +60,8 @@ void main(
 
   TM_Overlay(w1, t3, s2_s);
 
+  TM_Upgrade();
+
   // r1.xy = cb2[21].yz + v1.xy;
   // r0.w = dot(r1.xy, float2(353632,4234));
   // r0.w = (uint)r0.w;

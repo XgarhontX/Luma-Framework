@@ -96,10 +96,16 @@ namespace HermiteSpline {
 
 float3 TonemapHDRLuminance(float3 x) {
   float p = HDR_PEAK;
+  float em = GS.ExpectedMax;
+  em *= 100;
+  // #ifdef IW7
+  //   em *= 1.2;
+  // #endif
+
   float y = GetLuminance(x, CS_BT709);
   float y1 = y;
   y1 *= GS.ExposurePost;
-  y1 = HermiteSpline::HermiteSplineLuminanceRolloff(y1, p, 246);
+  y1 = HermiteSpline::HermiteSplineLuminanceRolloff(y1, p, em);
   x *= safeDivision(y1, y, 1); //apply
   x = clamp(x, 0, p); //clean
   return x;

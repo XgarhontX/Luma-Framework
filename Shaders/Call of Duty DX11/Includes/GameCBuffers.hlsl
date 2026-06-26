@@ -14,13 +14,14 @@ namespace CB
       // float RenderResolutionScale;
       float ExposurePost;
       float ExposurePre;
+      float ExpectedMax;
 
       float Bloom;
       float AllowVanillaColorGrade;
       float AllowFullscreenBlur;
 
-      float PCCHue;
-      float PCCChrom;
+      // float PCCHue;
+      // float PCCChrom;
       float PCCPeak;
    };
    
