@@ -1,5 +1,7 @@
 #pragma once
 
+#define DAV_CORE 1
+
 // "_DEBUG" might already be defined in debug?
 // Setting it to 0 causes the compiler to still assume it as defined and that thus we are in debug mode (don't change this manually).
 #ifndef NDEBUG
@@ -275,7 +277,7 @@ namespace
 #if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    bool strip_original_shaders_debug_data = false;
 #endif
-   bool use_os_reference_white_level = true;
+   bool use_os_reference_white_level = false;
 
 #if ENABLE_SR
    SR::UserType sr_user_type = SR::UserType::Auto; // If set to a non "None" value, some SR tech is enabled by the user (but not necessarily supported+initialized correctly, that's by device)
@@ -460,6 +462,9 @@ namespace
       // This assumes that when the upgraded texture is created (it could be at any time, if the target shader doesn't always run), the original texture values aren't relevant, because they won't be preserved.
       // Requires "enable_chain_indirect_texture_format_upgrades" to work, otherwise views from the new indirect upgraded textures don't ever get mirrored.
       std::unordered_map<uint32_t, std::pair<std::vector<uint8_t>, std::vector<uint8_t>>> auto_texture_format_upgrade_shader_hashes;
+
+      // Make GetBestResourceUpgradeFormat() return UNORM instead of FLOAT.
+      bool best_resource_unorm = false;
 
       //
       // UI
@@ -2677,7 +2682,7 @@ namespace
          {
             desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
          }
-         desc.fullscreen_refresh_rate = 0.f; // This fixes games forcing a specific refresh rate (e.g. Mafia III forces 60Hz for no reason)
+         // desc.fullscreen_refresh_rate = 0.f; // This fixes games forcing a specific refresh rate (e.g. Mafia III forces 60Hz for no reason)
          if (prevent_fullscreen_state)
          {
             desc.fullscreen_state = false; // Force disable FSE (see "OnSetFullscreenState()")
@@ -7130,7 +7135,7 @@ namespace
          return reshade::api::format::r32_typeless; // Create it as typeless of the maximum depth, so we can also cast it as SRV
       }
 
-      return reshade::api::format::r16g16b16a16_float;
+      return best_resource_unorm ? reshade::api::format::r16g16b16a16_unorm : reshade::api::format::r16g16b16a16_float;
    }
 
    // TODO: cache the last "almost" upgraded texture resolution to make sure that when the swapchain changes res, we didn't fail to upgrade resources before (needed even with indirect upgrades)
@@ -9331,7 +9336,12 @@ namespace
       else
 #endif
       {
-         ForceToggleShaders(runtime, enabled);
+         // ForceToggleShaders(runtime, enabled);
+         bool is_on = custom_shaders_enabled;
+         is_on = !is_on;
+         custom_shaders_enabled = is_on;
+         ignore_indirect_upgraded_textures = !is_on;
+         ignore_upgraded_samplers = !is_on;
       }
       return false; // You can return true to deny the change
    }
@@ -9612,7 +9622,7 @@ namespace
 #endif // !GRAPHICS_ANALYZER
 #endif // DEVELOPMENT
 
-#if DEVELOPMENT || TEST
+// #if DEVELOPMENT || TEST
       if (ImGui::Button(std::format("Unload Shaders ({})", device_data.cloned_pipeline_count).c_str())) // TODO: show number of custom+native loaded shaders instead of the number of pipelines we currently cloned? Games like Lego City Undercover re-compile the same shader many many times
       {
          needs_unload_shaders = true;
@@ -9636,7 +9646,7 @@ namespace
          ImGui::SetTooltip("Unload all compiled and replaced shaders. The numbers shows how many shaders are being replaced at this moment in the game, from the custom loaded/compiled ones.\nThis will also reset many of their debug settings to default.\nYou can use ReShade's Global Effects Toggle Shortcut to toggle these on and off.");
       }
       ImGui::SameLine();
-#endif // DEVELOPMENT || TEST
+// #endif // DEVELOPMENT || TEST
 
       bool needs_compilation = false;
       {
@@ -9647,18 +9657,18 @@ namespace
             needs_compilation |= shader_defines_data[i].NeedsCompilation();
          }
       }
-#if !DEVELOPMENT && !TEST
-      ImGui::BeginDisabled(!needs_compilation);
-#endif
+// #if !DEVELOPMENT && !TEST
+//       ImGui::BeginDisabled(!needs_compilation);
+// #endif
       static const std::string reload_shaders_button_title_error = std::string("Reload Shaders ") + std::string(ICON_FK_WARNING);
       static const std::string reload_shaders_button_title_outdated = std::string("Reload Shaders ") + std::string(ICON_FK_REFRESH);
       // We skip locking "s_mutex_loading" just to read the size of "shaders_compilation_errors".
       // We could maybe check "last_pressed_unload" instead of "IsModActive()", but that wouldn't work in case unloading shaders somehow failed.
-      const char* reload_shaders_button_name = shaders_compilation_errors.empty() ? (IsModActive(device_data) ? (needs_compilation ? reload_shaders_button_title_outdated.c_str() : "Reload Shaders") : "Load Shaders") : reload_shaders_button_title_error.c_str();
+      const char* reload_shaders_button_name = shaders_compilation_errors.empty() || !DEVELOPMENT ? (IsModActive(device_data) ? (needs_compilation ? reload_shaders_button_title_outdated.c_str() : "Reload Shaders") : "Load Shaders") : reload_shaders_button_title_error.c_str();
       bool show_reload_shaders_button = (needs_compilation && !auto_recompile_defines) || !shaders_compilation_errors.empty();
-#if DEVELOPMENT || TEST // Always show...
+// #if DEVELOPMENT || TEST // Always show...
       show_reload_shaders_button = true;
-#endif
+// #endif
       if ((show_reload_shaders_button && ImGui::Button(reload_shaders_button_name)) || (auto_recompile_defines && needs_compilation))
       {
          needs_unload_shaders = false;
@@ -9691,10 +9701,10 @@ namespace
             }
          }
       }
-#if !DEVELOPMENT && !TEST
-      ImGui::EndDisabled();
-#endif
-#if DEVELOPMENT || TEST
+// #if !DEVELOPMENT && !TEST
+//       ImGui::EndDisabled();
+// #endif
+// #if DEVELOPMENT || TEST
       ImGui::SameLine();
       if (ImGui::Button("Clean Shaders Cache"))
       {
@@ -9709,7 +9719,7 @@ namespace
             }
          }
       }
-#endif
+// #endif
 
 #if DEVELOPMENT && _DEBUG // Not usually necessary, takes unnecessary space
       ImGui::SameLine();
@@ -12865,7 +12875,7 @@ namespace
                   static const char* paper_white_name = "Paper White";
 
                   assert(!use_os_reference_white_level || !has_separate_ui_paper_white); // "use_os_reference_white_level" mode only uses one slider (scene paper white)!
-                  if (ImGui::Checkbox("Link to OS Reference White Level", &use_os_reference_white_level))
+                  if (false && ImGui::Checkbox("Link to OS Reference White Level", &use_os_reference_white_level))
                   {
                      if (use_os_reference_white_level)
                      {
@@ -12886,7 +12896,7 @@ namespace
 
                   const float max_white_level = use_os_reference_white_level ? 480.f : 500.f; // Windows SDR Reference White Level max is 480 nits! We use 500 otherwise (both are hardcoded elsewhere too!)
 
-                  if (ImGui::SliderFloat(has_separate_ui_paper_white ? scene_paper_white_name : paper_white_name, &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, max_white_level, "%.f"))
+                  if (ImGui::SliderFloat(has_separate_ui_paper_white ? scene_paper_white_name : paper_white_name, &cb_luma_global_settings.ScenePaperWhite, 1, max_white_level, "%.f"))
                   {
                      cb_luma_global_settings.ScenePaperWhite = max(cb_luma_global_settings.ScenePaperWhite, 0.0);
                      reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
@@ -13000,7 +13010,7 @@ namespace
                {
                   ImGui::BeginDisabled(!mod_active);
                   // We should this even if "IsModActive()" is false
-                  if (ImGui::SliderFloat("Scene Peak White", &cb_luma_global_settings.ScenePeakWhite, 400.0, 10000.f, "%.f"))
+                  if (ImGui::SliderFloat("Display Peak White", &cb_luma_global_settings.ScenePeakWhite, 400.0, 4000.f, "%.f"))
                   {
                      if (cb_luma_global_settings.ScenePeakWhite == device_data.default_user_peak_white)
                      {
@@ -13040,7 +13050,7 @@ namespace
                   if (has_separate_ui_paper_white)
                   {
                      ImGui::BeginDisabled(!supports_custom_ui_paper_white_scaling || !mod_active);
-                     if (ImGui::SliderFloat("UI Paper White", supports_custom_ui_paper_white_scaling ? &cb_luma_global_settings.UIPaperWhite : &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, 500.f, "%.f"))
+                     if (ImGui::SliderFloat("UI Paper White", supports_custom_ui_paper_white_scaling ? &cb_luma_global_settings.UIPaperWhite : &cb_luma_global_settings.ScenePaperWhite, 1, 500.f, "%.f"))
                      {
                         cb_luma_global_settings.UIPaperWhite = max(cb_luma_global_settings.UIPaperWhite, 0.0);
                         reshade::set_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
