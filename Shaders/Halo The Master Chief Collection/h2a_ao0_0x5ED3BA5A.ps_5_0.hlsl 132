@@ -1,0 +1,198 @@
+cbuffer CB_PS_COMMON : register(b0)
+{
+  float4 COMMON_LBUF_PARAMS : packoffset(c0);
+  float4 COMMON_VIEW_POSITION : packoffset(c1);
+  float4 COMMON_VIEWPROJ_MATRIX[4] : packoffset(c2);
+  float4 COMMON_VIEW_POSITION_COLORCAM : packoffset(c6);
+  float4 COMMON_VIEWPROJ_MATRIX_COLORCAM[4] : packoffset(c7);
+  float4 COMMON_VIEWPROJ_REFLECTION[4] : packoffset(c11);
+  float4 COMMON_OBLIQUE_MATR[4] : packoffset(c15);
+  float4 VS_REG_COMMON_FOG_PARAMS[2] : packoffset(c19);
+  float4 REG_COMMON_CLIPPING_PLANE : packoffset(c21);
+  float4 COMMON_VP_PARAMS[2] : packoffset(c22);
+  float4 PS_REG_COMMON_HDR_PARAMS : packoffset(c24);
+  float4 PS_REG_COMMON_FOG_SUN_DIR : packoffset(c25);
+  float4 PS_REG_COMMON_FOG_RAYLEIGH_FACTOR : packoffset(c26);
+  float4 PS_REG_COMMON_FOG_COLOR : packoffset(c27);
+  float4 PS_REG_COMMON_FOG_PLANE_MIRROR : packoffset(c28);
+  float4 PS_REG_COMMON_FOG_ATMOSPHERE_0[6] : packoffset(c29);
+  float4 PS_REG_COMMON_FOG_ATMOSPHERE_EXTRA : packoffset(c35);
+  float4 PS_REG_COMMON_ELAPSED_TIME : packoffset(c36);
+  float4 PS_REG_COMMON_AMBIENT : packoffset(c37);
+  float4 PS_REG_COMMON_DEBUG_SHOW_LIGHTING : packoffset(c38);
+  float4 VS_REG_COMMON_FOG_COLOR : packoffset(c39);
+  float4 VS_REG_COMMON_FOG_SUN_DIR : packoffset(c40);
+  float4 VS_REG_COMMON_FOG_RAYLEIGH_FACTOR : packoffset(c41);
+  float4 VS_REG_COMMON_FOG_VOLUME_COUNT : packoffset(c42);
+  float4 VS_REG_COMMON_FOG_VOL_START[32] : packoffset(c43);
+}
+
+cbuffer CB_DYNAMIC_PASS_SSAO : register(b7)
+{
+  float4 PS_REG_SSAO_SCREEN : packoffset(c0);
+  float4 PS_REG_SSAO_PARAMS : packoffset(c1);
+  float4 PS_REG_SSAO_MV_1 : packoffset(c2);
+  float4 PS_REG_SSAO_MV_2 : packoffset(c3);
+  float4 PS_REG_SSAO_MV_3 : packoffset(c4);
+  float4 SSAO_FRUSTUM_SCALE : packoffset(c5);
+  float4 SSAO_TEX_COORD_SCALE : packoffset(c6);
+  float4 PS_REG_SSAO_FRUSTUM_SCALE : packoffset(c7);
+  /*
+    1.62399
+    0.913496
+    0.615766
+    1.0947
+  */
+}
+
+SamplerState PS_SAMPLERS_0__s : register(s0);
+SamplerState PS_SAMPLERS_3__s : register(s3);
+Texture2D<float4> PS_TEXTURES_2D_0_ : register(t0); //depth
+Texture2D<float4> PS_TEXTURES_2D_2_ : register(t2); //per-pixel rotation/dither (2x 2D vectors, [-1,1], used to jitter the AO kernel)
+Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
+
+// 3Dmigoto declarations
+#define cmp -
+#include "./Includes/Common.hlsl"
+#include "./Includes/Math.hlsl"
+#include "./Includes/XeGTAO.hlsl"
+
+// // Fixed 8-tap kernel (bit-exact to the original shader). Each tap is rotated per-pixel by the dither
+// // vectors (ditherA/ditherB) via a dot product, i.e. tapDir = (dot(kernelDir, ditherA), dot(kernelDir, ditherB)).
+// static const float2 AO_KERNEL_DIR[8] =
+// {
+//   float2(0.0666666701, -0.0666666701),
+//   float2(-0.0599999987, -0.0599999987),
+//   float2(0.0533333346, 0.0533333346),
+//   float2(-0.0466666669, 0.0466666669),
+//   float2(-0.0424264073, 0),
+//   float2(0.0353553407, 0),
+//   float2(0, -0.0318198055),
+//   float2(0, 0.0282842703),
+// };
+// static const float AO_KERNEL_DEPTH_BIAS[8] =
+// {
+//   0.0333333351, 0.0299999993, 0.0266666673, 0.0233333334,
+//   0.0424264073, 0.0353553407, 0.0318198055, 0.0282842703,
+// };
+// 
+// // One horizon-based occlusion tap: offsets the view-space position along a dithered kernel direction,
+// // reflects it around the normal-bent view direction, reprojects it to screen space and diffs the depths.
+// float SampleHorizonTapDeltaSimpler(float2 kernelDir, float depthBias, float2 ditherA, float2 ditherB, float3 bendDir, float3 centerViewPos, float aoRange, float2 frustumScale)
+// {
+//   float2 tapDir = float2(dot(kernelDir, ditherA), dot(kernelDir, ditherB));
+//   float3 tapOffset = float3(tapDir, depthBias);
+//   tapOffset = reflect(tapOffset, bendDir);
+//   float3 samplePos = tapOffset * aoRange + centerViewPos;
+//   float2 sampleUV = (samplePos.xy / samplePos.z) * frustumScale + 0.5;
+//   float sampleDepth = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, sampleUV).x;
+//   float sampleLinearDepth = 0.100000016 / (1.33333344e-007 + sampleDepth);
+//   return sampleLinearDepth - samplePos.z; // positive => occluder closer to camera than the sample point
+// }
+// 
+// // Converts a raw depth delta into a smoothed occlusion factor and its blend weight (matches the original curve).
+// float ShapeOcclusionTapSimpler(float strength, float delta, float normFactor1, float normFactor2, out float weight)
+// {
+//   float scaledDelta = delta * normFactor1;
+//   float curved = 1.0 - 0.5 * (saturate(-scaledDelta) + min(1.0, abs(scaledDelta)));
+//   weight = max(0.5, curved);
+//   float edge = saturate(delta * normFactor2) - 1.0;
+//   return min(1.0, curved + curved) * edge * strength + 1.0;
+// }
+// 
+// float CompletePassSimpler(int sampleCount, float strength, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2) 
+// {
+//   float numerator = 0.0;
+//   float denominator = 0.0;
+//   [unroll]
+//   for (int i = 0; i < sampleCount; i++)
+//   {
+//     int slot = i % 8;
+//     int ring = i / 8;
+//     float ringScale = pow(ringScale0, ring);
+//   
+//     float delta = SampleHorizonTapDeltaSimpler(AO_KERNEL_DIR[slot] * ringScale * rightScale1, AO_KERNEL_DEPTH_BIAS[slot] * ringScale / rightScale1, ditherA, ditherB, bendDir, centerViewPos, aoRange, frustumScale);
+//   
+//     float weight;
+//     float occlusion = ShapeOcclusionTapSimpler(strength, delta, normFactor1, normFactor2, weight);
+//     numerator += occlusion * weight;
+//     denominator += weight;
+//   }
+//   return min(1.0, numerator / denominator);
+// }
+
+
+void main(
+  float4 v0 : SV_Position0,
+  float4 v1 : TEXCOORD0,
+  float4 v2 : TEXCOORD2, //unused
+  float3 v3 : TEXCOORD1,
+  out float2 o0 : SV_Target0)
+{
+  const float3 normal = normalize(PS_TEXTURES_2D_3_.Sample(PS_SAMPLERS_3__s, v1.xy).xyz * 2.0 - 1.0);
+  const float3 viewNormal = normalize(float3(
+    dot(normal, PS_REG_SSAO_MV_1.xyz),
+    dot(normal, PS_REG_SSAO_MV_2.xyz),
+    dot(normal, PS_REG_SSAO_MV_3.xyz)
+  ));
+
+  const float4 dither = PS_TEXTURES_2D_2_.Sample(PS_SAMPLERS_0__s, v1.zw) * 2.0 - 1.0;
+  const float2 localNoise = frac(dither.xy * 0.5 + 0.5 + dither.zw * 0.125);
+
+  const float centerDepth = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, v1.xy).x;
+  const float centerLinearDepth = 0.100000016 / (1.33333344e-007 + centerDepth);
+
+  uint depthWidth;
+  uint depthHeight;
+  PS_TEXTURES_2D_0_.GetDimensions(depthWidth, depthHeight);
+
+  const float2 aoResolution = float2(depthWidth, depthHeight) /* * 0.5 */; //depth & normal is 0.5x of render res, but AO output is also 0.5x
+  const uint2 pixCoord = v1.xy * aoResolution;
+
+  GTAOConstants gtao = (GTAOConstants)0;
+  gtao.RenderPixelSize = rcp(aoResolution);
+  gtao.ViewportPixelSize = gtao.RenderPixelSize;
+  gtao.ViewportSize = aoResolution;
+
+  // The VS exports v3 = float3(SSAO_FRUSTUM_SCALE.xy * (uv - 0.5), 1).
+  // GTAO needs the same screen-to-view ray reconstruction for arbitrary sample pixels,
+  // so derive it from the original frustum ray scale instead of guessing from the
+  // projection inverse. The PS constant below is just the reciprocal projection scale
+  // used for uv = view.xy / view.z * PS_REG_SSAO_FRUSTUM_SCALE.zw + 0.5.
+  float2 frustumScale = SSAO_FRUSTUM_SCALE.xy;
+  gtao.NDCToViewMul = frustumScale * gtao.RenderPixelSize;
+  gtao.NDCToViewAdd = 0.5 * frustumScale.xy;
+  gtao.NDCToViewMul_x_PixelSize = gtao.NDCToViewMul;
+
+  gtao.EffectRadius = DVS1;
+  gtao.RadiusMultiplier = DVS2;
+  gtao.EffectFalloffRange = DVS3;
+  gtao.SampleDistributionPower = DVS4;
+  gtao.ThinOccluderCompensation = DVS5;
+  gtao.FinalValuePower = 1.0;
+  gtao.OcclusionTermScale = 1.0;
+  gtao.DenoiseBlurBeta = 1.2;
+
+  o0.x = XeGTAO_MainPass(pixCoord, localNoise, viewNormal, PS_TEXTURES_2D_0_, PS_SAMPLERS_3__s, gtao).x;
+
+  /////////////////////////////
+
+  #if HALO2_AO == 0
+    o0.y = 0; //NOT USED!!!
+  #else
+    // Depth curvature edge-stopping term, used by the blur pass to avoid bleeding AO across depth discontinuities.
+    float depthA0 = PS_TEXTURES_2D_0_.SampleLevel(PS_SAMPLERS_3__s, v1.xy - COMMON_VP_PARAMS[0].xy, 0).x;
+    float depthA1 = PS_TEXTURES_2D_0_.SampleLevel(PS_SAMPLERS_3__s, v1.xy + COMMON_VP_PARAMS[0].xy, 0).x;
+    float depthB0 = PS_TEXTURES_2D_0_.SampleLevel(PS_SAMPLERS_3__s, v1.xy - COMMON_VP_PARAMS[0].xy * float2(1, -1), 0).x;
+    float depthB1 = PS_TEXTURES_2D_0_.SampleLevel(PS_SAMPLERS_3__s, v1.xy + COMMON_VP_PARAMS[0].xy * float2(1, -1), 0).x;
+
+    float centerRemap = 0.100000016 / centerLinearDepth - 1.33333344e-007;
+    float curvatureA = (depthA0 + depthA1) - 2.0 * centerRemap;
+    float curvatureB = (depthB0 + depthB1) - 2.0 * centerRemap;
+
+    float curvature = max(abs(curvatureA), abs(curvatureB)) * centerLinearDepth;
+    o0.y = saturate(1.0 - curvature * 1024.0);
+  #endif
+
+  return;
+}

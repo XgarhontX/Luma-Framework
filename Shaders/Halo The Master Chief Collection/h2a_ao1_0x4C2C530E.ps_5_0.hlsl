@@ -120,32 +120,32 @@ void main(
   r0.z = cmp(0.00048828125 < r0.z);
   r0.xy = r0.zz ? r0.xy : v1.xy;
   float2 aoUv = r0.xy;
-  
-  // r0.x = PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, r0.xy, 0).x; //BRUH!!! Edges not even used...
+  #if HALO2_AO == 0
+    r0.x = PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, r0.xy, 0).x; // BRUH!!! Edges not even used...
+  #else
+    // sample AO with blur
+    r0.xy = PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0).xy;
+    if (r0.y > 0.6) { //edges
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 0)).xy;
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 0)).xy;
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, -1)).xy;
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, 1)).xy;
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, -1)).xy;
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, -1)).xy;
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 1)).xy;
+      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 1)).xy;
+      // r0.xy /= 9.0; // average
 
-  // sample AO with blur
-  r0.xy = PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0).xy;
-  if (r0.y > 0.6) { //edges
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 0)).xy;
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 0)).xy;
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, -1)).xy;
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, 1)).xy;
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, -1)).xy;
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, -1)).xy;
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 1)).xy;
-    // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 1)).xy;
-    // r0.xy /= 9.0; // average the 9 samples
-
-    // only 4 additional
-    r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 0)).xy;
-    r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 0)).xy;
-    r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, -1)).xy;
-    r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, 1)).xy;
-    r0.xy /= 5.0; // average the 5 samples (original + 4 additional)
-  }
-
-  r0.x = saturate(r0.x); //not possible, but just in case
-  r0.x = pow(r0.x, PS_REG_SSAO_PARAMS.x /* * DVS8 */); //strength
+      // only 4 additional
+      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 0)).xy;
+      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 0)).xy;
+      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, -1)).xy;
+      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, 1)).xy;
+      r0.xy /= 5.0; // average
+    }
+  #endif
+  // r0.x = saturate(r0.x);
+  r0.x = pow(r0.x, PS_REG_SSAO_PARAMS.x); //strength
   r0.x = max(PS_REG_SSAO_PARAMS.y, r0.x);
   o0.xy = r0.xx;
   return;

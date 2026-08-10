@@ -12,6 +12,7 @@ namespace ShaderDefines
    constexpr uint32_t ALLOW_AA = char_ptr_crc32("ALLOW_AA");
    constexpr uint32_t ALLOW_COLORGRADE = char_ptr_crc32("ALLOW_COLORGRADE");
    constexpr uint32_t HALO3_BLOOM = char_ptr_crc32("HALO3_BLOOM");
+   constexpr uint32_t HALO2_AO = char_ptr_crc32("HALO2_AO");
    constexpr uint32_t SWAPCHAIN_TEST_PEAK = char_ptr_crc32("SWAPCHAIN_TEST_PEAK");
 
    void OnInitAddNewDefines()
@@ -21,6 +22,7 @@ namespace ShaderDefines
          {"ALLOW_AA", '1', true, false, "Allow original anti-alias.", 1},
          {"ALLOW_COLORGRADE", '1', true, false, "Allow original color grading.", 1},
          {"HALO3_BLOOM", '1', true, false, "Halo 3 bloom mode.", 1},
+         {"HALO2_AO", '2', true, false, "Halo 2 bloom quality.", 3},
          {"SWAPCHAIN_TEST_PEAK", '0', true, false, "Test pattern", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -211,17 +213,17 @@ namespace
    {
       switch (state)
       {
-      case Unknown: return "Unknown";
-      case Halo1Classic: return is_space ? "Halo 1 Classic" : "Halo1Classic";
-      case Halo1Anniversary: return is_space ? "Halo 1 Anniversary" : "Halo1Anniversary";
-      case Halo2Classic: return is_space ? "Halo 2 Classic" : "Halo2Classic";
-      case Halo2Anniversary: return is_space ? "Halo 2 Anniversary" : "Halo2Anniversary";
-      case Halo2AnniversaryMP: return is_space ? "Halo 2 Anniversary Multiplayer" : "Halo2AnniversaryMP";
-      case Halo3: return is_space ? "Halo 3" : "Halo3";
-      case Halo3ODST: return is_space ? "Halo 3 ODST" : "Halo3ODST";
-      case HaloReach: return is_space ? "Halo Reach" : "HaloReach";
-      case Halo4: return is_space ? "Halo 4" : "Halo4";
-      default: return "Unknown";
+         case Unknown: return "Unknown";
+         case Halo1Classic: return is_space ? "Halo 1 Classic" : "Halo1Classic";
+         case Halo1Anniversary: return is_space ? "Halo 1 Anniversary" : "Halo1Anniversary";
+         case Halo2Classic: return is_space ? "Halo 2 Classic" : "Halo2Classic";
+         case Halo2Anniversary: return is_space ? "Halo 2 Anniversary" : "Halo2Anniversary";
+         case Halo2AnniversaryMP: return is_space ? "Halo 2 Anniversary Multiplayer" : "Halo2AnniversaryMP";
+         case Halo3: return is_space ? "Halo 3" : "Halo3";
+         case Halo3ODST: return is_space ? "Halo 3 ODST" : "Halo3ODST";
+         case HaloReach: return is_space ? "Halo Reach" : "HaloReach";
+         case Halo4: return is_space ? "Halo 4" : "Halo4";
+         default: return "Unknown";
       }
    }
    
@@ -381,7 +383,7 @@ namespace
             {
                auto [compatibility_text, compatibility_color] = sg.GetCompatibility();
                ImGui::PushStyleColor(ImGuiCol_Text, compatibility_color);
-               ImGui::TextWrapped("Compatibility: %s", compatibility_text);
+               ImGui::TextWrapped("HDR Compatibility: %s", compatibility_text);
                ImGui::PopStyleColor();
                
                auto* s = GetSettings(sg.subgame);
@@ -485,6 +487,7 @@ namespace
             
          // set new Indirect Upgrades hashes
          auto_texture_format_upgrade_shader_hashes[0x5B190892] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00
+         auto_texture_format_upgrade_shader_hashes[0x3CC502A9] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00 subsequent downsamples
          switch (curr)
          {
             case Halo1Classic:
@@ -615,6 +618,7 @@ public:
       default_luma_global_game_settings.Bloom = cb_luma_global_settings.GameSettings.Bloom = 1.f;
       default_luma_global_game_settings.FilmGrain = cb_luma_global_settings.GameSettings.FilmGrain = 1.f;
       default_luma_global_game_settings.WhiteClip = cb_luma_global_settings.GameSettings.WhiteClip = 1.f;
+      default_luma_global_game_settings.AmbientOcclusion = cb_luma_global_settings.GameSettings.AmbientOcclusion = 1.f;
 
       // Shader Defines
       ShaderDefines::OnInitAddNewDefines();
@@ -662,7 +666,53 @@ public:
       }
       
       // Halo2Anniversary: AO
-      // TODO: XeGTAO by stealing non-downsampled depth and normals
+      static com_ptr<ID3D11ShaderResourceView> h2a_buffer_depth;
+      static com_ptr<ID3D11ShaderResourceView> h2a_buffer_normals;
+      if (!device_data.has_drawn_main_post_processing && SubGameHandler::curr == Halo2Anniversary)
+      {
+         if (ps == 0x65E212E2)
+         {
+            // // array DX11 SRVs size 3
+            // std::array<ID3D11ShaderResourceView*, 3> srvs;
+            // native_device_context->PSGetShaderResources(0, srvs.size(), srvs.data());
+            //
+            // // get SRV 0: normals
+            // h2a_buffer_normals.srv.attach(srvs[0]);
+            //
+            // // get SRV 2: depth
+            // h2a_buffer_depth.srv.attach(srvs[2]);
+            // 
+            // // release
+            // ResetCOMArray(srvs);
+      
+            // get SRV 0: normals
+            ID3D11ShaderResourceView* p0;
+            native_device_context->PSGetShaderResources(0, 1, &p0);
+            h2a_buffer_depth.reset(p0);
+            
+            // get SRV 2: depth
+            ID3D11ShaderResourceView* p1;
+            native_device_context->PSGetShaderResources(2, 1, &p1);
+            h2a_buffer_normals.reset(p1);
+      
+            return DrawOrDispatchOverrideType::None;
+         }
+      
+         if (ps == 0x5ED3BA5A)
+         {
+            // set SRV 0: normals
+            auto p0 = h2a_buffer_normals.get();
+            native_device_context->PSSetShaderResources(0, 1, &p0);
+            
+            // set SRV 3: depth
+            auto p1 = h2a_buffer_depth.get();
+            native_device_context->PSSetShaderResources(3, 1, &p1);
+
+            // SetViewportFullscreen(native_device_context, uint2(cb_luma_global_settings.SwapchainSize.x * 0.5f, cb_luma_global_settings.SwapchainSize.y * 0.5f));
+      
+            return DrawOrDispatchOverrideType::None;
+         }
+      }
       
       // Halo2Anniversary: blit
       if (!device_data.has_drawn_main_post_processing && ps == 0x9275F36F)
@@ -759,6 +809,7 @@ public:
       reshade::get_config_value(nullptr, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
       reshade::get_config_value(nullptr, NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
       reshade::get_config_value(nullptr, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
+      reshade::get_config_value(nullptr, NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
 
 #if HALO_UPGRADE_SAMPLERS
       // mip_lod_bias_offset
@@ -887,7 +938,7 @@ public:
          if (ImGui::SliderFloat("Bloom", &cb_luma_global_settings.GameSettings.Bloom, 0.f, GetMaxBloomBySubGame(SubGameHandler::curr), "%.2f"))
             reshade::set_config_value(nullptr, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Multiplier on Bloom strength.");
+            ImGui::SetTooltip("Multiplier on Bloom strength when applicable.");
          DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, 1.f, "Bloom", nullptr);
 
          ShaderDefines::UIDropDown(ShaderDefines::HALO3_BLOOM, "Halo 3 Bloom Mode", { "Saturation Preserved", "Blown Out (Vanilla)" }, "How should bloom be processed in Halo 3?\nSince bloom bathes the screen, this can the change the hues of the whole image.");
@@ -895,7 +946,7 @@ public:
          if (ImGui::SliderFloat("Film Grain", &cb_luma_global_settings.GameSettings.FilmGrain, 0.f, 1.f, "%.2f"))
             reshade::set_config_value(nullptr, NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Multiplier on Film Grain strength.");
+            ImGui::SetTooltip("Multiplier on Film Grain strength when applicable.");
          DrawResetButton(cb_luma_global_settings.GameSettings.FilmGrain, 1.f, "FilmGrain", nullptr);
 
          // WhiteClip
@@ -903,9 +954,19 @@ public:
          if (ImGui::SliderFloat("White Clip", &cb_luma_global_settings.GameSettings.WhiteClip, 0.f, 2.f, "%.2f"))
             reshade::set_config_value(nullptr, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Increase to straighten tonemap rolloff,\nmaking highlights more aggressive/clipped.");
+            ImGui::SetTooltip("Increase to straighten tonemap rolloff,\nmaking highlights more aggressive/clipped.\n\nNot available for Halo 4.");
          DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, 1.f, "WhiteClip", nullptr);
          if (SubGameHandler::curr == Halo4) ImGui::EndDisabled();
+
+         // AmbientOcclusion
+         if (ImGui::SliderFloat("Ambient Occlusion", &cb_luma_global_settings.GameSettings.AmbientOcclusion, 0.f, 2.f, "%.2f"))
+            reshade::set_config_value(nullptr, NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Multiplier on AO strength when applicable.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.AmbientOcclusion, 1.f, "AmbientOcclusion", nullptr);
+
+         // HALO2_AO
+         ShaderDefines::UIDropDown(ShaderDefines::HALO2_AO, "Halo 2 AO Quality", { "Easy (Vanilla)", "Normal", "Heroic", "Legendary" }, "The quality of the Halo 2 AO pass.");
 
          //ALLOW_COLORGRADE
          ShaderDefines::UIToggleCheckmark(ShaderDefines::ALLOW_COLORGRADE, "Color Grading (Debug)", "Disable to skip color grading,\nexposing the raw HDR input after rolloff.");
@@ -920,7 +981,7 @@ public:
 
          auto compat = SubGameUserSettingsHandler::GetSettings(SubGameHandler::curr)->GetCompatibility();
          ImGui::PushStyleColor(ImGuiCol_Text, compat.second);
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Compatibility: %s", compat.first);
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("HDR Compatibility: %s", compat.first);
          ImGui::PopStyleColor();
 
          //drop down list to override

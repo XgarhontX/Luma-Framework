@@ -64,7 +64,7 @@ void Rolloff() {
 
   // in BT2020 to generate more blowout naturally
   ext = BT709_To_BT2020(ext); 
-  ext = NeupowHQ(ext, tmi.p, 1.26 * GS.WhiteClip);
+  ext = NeupowHQ(ext, tmi.p, 1.46 * GS.WhiteClip);
   ext = BT2020_To_BT709(ext);
 
   // blend HDR and SDR

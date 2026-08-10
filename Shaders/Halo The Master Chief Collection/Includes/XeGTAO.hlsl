@@ -4,68 +4,18 @@
 #ifndef __XE_GTAO_HLSLI__
 #define __XE_GTAO_HLSLI__
 
-//
-
-// User configurable
-//
-
-#ifndef EFFECT_RADIUS
-#define EFFECT_RADIUS DVS2 // Default 0.5
-#endif
-
-#ifndef RADIUS_MULTIPLIER
-#define RADIUS_MULTIPLIER DVS3 // Default 1.457
-#endif
-
-#ifndef EFFECT_FALLOFF_RANGE
-#define EFFECT_FALLOFF_RANGE 0.005 // Default 0.615
-#endif
-
-#ifndef SAMPLE_DISTRIBUTION_POWER
-#define SAMPLE_DISTRIBUTION_POWER 2.0 // Default 2.0
-#endif
-
-#ifndef THIN_OCCLUDER_COMPENSATION
-#define THIN_OCCLUDER_COMPENSATION 0.0 // Default 0.0 
-#endif
-
-#ifndef FINAL_VALUE_POWER
-#define FINAL_VALUE_POWER 2.0 // Default 2.2
-#endif
-
-#ifndef DEPTH_MIP_SAMPLING_OFFSET
-#define DEPTH_MIP_SAMPLING_OFFSET 3.3 // Default 3.3
-#endif
-
 #ifndef SLICE_COUNT
-#define SLICE_COUNT 8.0 // Default 3.0
+#define SLICE_COUNT 6.0 // Default 3.0
 #endif
 
 #ifndef STEPS_PER_SLICE
-#define STEPS_PER_SLICE 8.0 // Default 3.0
+#define STEPS_PER_SLICE 6.0 // Default 3.0
 #endif
-
-#ifndef DENOISE_BLUR_BETA
-#define DENOISE_BLUR_BETA 1.2 // Default 1.2
-#endif
-
-#ifndef CAMERA_CLIP_NEAR
-#define CAMERA_CLIP_NEAR 0.1 // Default 0.1
-#endif
-
-#ifndef CAMERA_CLIP_FAR
-#define CAMERA_CLIP_FAR 10000.0 // Default 1000.0
-#endif
-
-//
 
 #define XE_GTAO_DEPTH_MIP_LEVELS 0
 
-// Halo2Anniversary's depth buffer stores raw hardware depth, not linear view-space depth, and there's no prefilter/mip pass, so GTAO must decode it inline on every fetch.
-// #define XE_GTAO_DECODE_DEPTH(x) XeGTAO_ScreenSpaceToViewSpaceDepth((0.100000016 / (1.33333344e-007 + (x))))
-// #define XE_GTAO_DECODE_DEPTH(x) (0.100000016 / max(0.0000001, (x)))
-#define XE_GTAO_DECODE_DEPTH(x) (0.1 / x)
-// #define XE_GTAO_DECODE_DEPTH(x)  max(0, 500 - (0.100000016 / (1.33333344e-007 + (x))))
+#define XE_GTAO_DECODE_DEPTH(x) (0.100000016 / x - 1.33333344e-007) //TODO: same as SSAO?
+// #define XE_GTAO_DECODE_DEPTH(x) (0.1 / x)
 
 #define XE_GTAO_PI 3.1415926535897932384626433832795
 #define XE_GTAO_PI_HALF 1.5707963267948966192313216916398
@@ -87,12 +37,12 @@ struct GTAOConstants
     float SampleDistributionPower;
     float ThinOccluderCompensation;
     float FinalValuePower;
-    float DepthMIPSamplingOffset;
+    // float DepthMIPSamplingOffset;
     float2 SampleUVClamp;           // UV clamp for source textures
-    float2 WorkingUVClamp;          // UV clamp for working textures (no viewport offset)
+    // float2 WorkingUVClamp;          // UV clamp for working textures (no viewport offset)
     float OcclusionTermScale;
-    float2 DepthUnpackConsts;
-    float2 CameraTanHalfFOV;
+    // float2 DepthUnpackConsts;
+    // float2 CameraTanHalfFOV;
 };
 
 // Per-pixel/per-frame jitter for GTAO's slice and step sampling (interleaved gradient noise + a golden-ratio temporal offset).
@@ -119,13 +69,16 @@ float XeGTAO_ClampDepth(float depth)
 
 float XeGTAO_ScreenSpaceToViewSpaceDepth(const float screenDepth)
 {
+    #define CAMERA_CLIP_NEAR 1
+    #define CAMERA_CLIP_FAR 0.9
+
     float depthLinearizeMul = CAMERA_CLIP_FAR * CAMERA_CLIP_NEAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
     float depthLinearizeAdd = CAMERA_CLIP_FAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
 
-    // correct the handedness issue. need to make sure this below is correct, but I think it is.
-    if (depthLinearizeMul * depthLinearizeAdd < 0.0) {
-        depthLinearizeAdd = -depthLinearizeAdd;
-    }
+    // // correct the handedness issue. need to make sure this below is correct, but I think it is.
+    // if (depthLinearizeMul * depthLinearizeAdd < 0.0) {
+    //     depthLinearizeAdd = -depthLinearizeAdd;
+    // }
 
     // Optimised version of "-cameraClipNear / (cameraClipFar - projDepth * (cameraClipFar - cameraClipNear)) * cameraClipFar"
     return depthLinearizeMul / (depthLinearizeAdd - screenDepth);
@@ -169,6 +122,7 @@ float3 XeGTAO_ComputeViewspacePosition(float2 pixelPos, float viewspaceDepth, co
 float XeGTAO_FastSqrt(float x)
 {
 	return asfloat(0x1fbd1df5 + (asint(x) >> 1));
+	// return sqrt(x);
 }
 
 // input [-1, 1] and output [0, PI], from https://seblagarde.wordpress.com/2014/12/01/inverse-trigonometric-functions-gpu-optimization-for-amd-gcn-architecture/
@@ -178,6 +132,7 @@ float XeGTAO_FastACos(float inX)
 	float res = -0.156583 * x + XE_GTAO_PI_HALF;
 	res *= XeGTAO_FastSqrt(1.0 - x);
 	return inX >= 0 ? res : XE_GTAO_PI - res;
+    // return acos(inX); //TODO: after working, revert to faster
 }
 
 float3 XeGTAO_CalculateNormal( const float4 edgesLRTB, float3 pixCenterPos, float3 pixLPos, float3 pixRPos, float3 pixTPos, float3 pixBPos )
@@ -201,46 +156,72 @@ float3 XeGTAO_CalculateNormal( const float4 edgesLRTB, float3 pixCenterPos, floa
 
 float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, Texture2D sourceViewspaceDepth, SamplerState depthSampler, const GTAOConstants consts)
 {
-    // Working depth texture uses RenderPixelSize (it's sized to actualRenderSize)
-    float2 workingDepthUV = (pixCoord + 0.5) * consts.RenderPixelSize;
-    float2 normalizedScreenPos = workingDepthUV;
+    float2 normalizedScreenPos = (pixCoord + 0.5.xx) * consts.ViewportPixelSize;
 
-    // Sample from working depth texture (our buffer - no viewport offset)
-    float4 valuesUL = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.GatherRed(depthSampler, workingDepthUV));
-    float4 valuesBR = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.GatherRed(depthSampler, workingDepthUV, int2(1, 1)));
+//     // Sample from working depth texture (our buffer - no viewport offset)
+//     float4 valuesUL = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.GatherRed(depthSampler, workingDepthUV));
+//     float4 valuesBR = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.GatherRed(depthSampler, workingDepthUV, int2(1, 1)));
+// 
+//     // viewspace Z at the center
+//     float viewspaceZ = sourceViewspaceDepth.SampleLevel( depthSampler, normalizedScreenPos, 0 ).x; 
+// 
+//     // viewspace Zs left top right bottom
+//     const float pixLZ = valuesUL.x;
+//     const float pixTZ = valuesUL.z;
+//     const float pixRZ = valuesBR.z;
+//     const float pixBZ = valuesBR.x;
 
-    // viewspace Z at the center
-    float viewspaceZ = valuesUL.y; //sourceViewspaceDepth.SampleLevel( depthSampler, normalizedScreenPos, 0 ).x; 
+    // No pre pass, so get each viewspace depth manually
+    // float viewspaceZ  = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos, 0).x), consts);
+    // const float pixLZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(-1, 0) * consts.ViewportPixelSize, XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(-1, 0) * consts.ViewportPixelSize, 0).x), consts);
+    // const float pixRZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(1, 0)  * consts.ViewportPixelSize,  XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(1, 0) * consts.ViewportPixelSize, 0).x), consts);
+    // const float pixTZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(0, -1) * consts.ViewportPixelSize, XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(0, -1) * consts.ViewportPixelSize, 0).x), consts);
+    // const float pixBZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(0, 1)  * consts.ViewportPixelSize,  XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(0, 1) * consts.ViewportPixelSize, 0).x), consts);
+    // return viewspaceZ;
 
-    // viewspace Zs left top right bottom
-    const float pixLZ = valuesUL.x;
-    const float pixTZ = valuesUL.z;
-    const float pixRZ = valuesBR.z;
-    const float pixBZ = valuesBR.x;
+    float viewspaceZ  = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos                                            , 0).x;
+    float pixLZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, 0).x;
+    float pixRZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, 0).x;
+    float pixTZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, 0).x;
+    float pixBZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, 0).x;
 
-    float4 edgesLRTB = XeGTAO_CalculateEdges(viewspaceZ, pixLZ, pixRZ, pixTZ, pixBZ);
+    viewspaceZ = XE_GTAO_DECODE_DEPTH(viewspaceZ);
+    pixLZ      = XE_GTAO_DECODE_DEPTH(pixLZ);
+    pixRZ      = XE_GTAO_DECODE_DEPTH(pixRZ);
+    pixTZ      = XE_GTAO_DECODE_DEPTH(pixTZ);
+    pixBZ      = XE_GTAO_DECODE_DEPTH(pixBZ);
+
+    viewspaceZ = XeGTAO_ScreenSpaceToViewSpaceDepth(viewspaceZ);
+    pixLZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixLZ);
+    pixRZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixRZ);
+    pixTZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixTZ);
+    pixBZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixBZ);
+
+    // return viewspaceZ;
+
+    // Calculate edges
+    float4 edgesLRTB  = XeGTAO_CalculateEdges(viewspaceZ, pixLZ, pixRZ, pixTZ, pixBZ);
     const float edges = XeGTAO_PackEdges(edgesLRTB);
-
-// // #ifdef XE_GTAO_GENERATE_NORMALS_INPLACE
-//     float3 CENTER   = 500 - XeGTAO_ComputeViewspacePosition( normalizedScreenPos, viewspaceZ, consts );
-//     float3 LEFT     = 500 - XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, pixLZ, consts );
-//     float3 RIGHT    = 500 - XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, pixRZ, consts );
-//     float3 TOP      = 500 - XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, pixTZ, consts );
-//     float3 BOTTOM   = 500 - XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, pixBZ, consts );
-//     viewspaceNormal = XeGTAO_CalculateNormal( edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM );
-// // #endif
+    // return edges;
 
     // Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
     viewspaceZ *= 0.99999; // this is good for FP32 depth buffer
 
-    // Use pixel coordinates for viewspace position (NDCToViewMul includes 1/actualRenderSize)
-    const float2 pixelCenterPos2D = pixCoord + 0.5;
-    const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(pixelCenterPos2D, viewspaceZ, consts);
+// #ifdef XE_GTAO_GENERATE_NORMALS_INPLACE
+    float3 CENTER   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos, viewspaceZ, consts );
+    float3 LEFT     = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, pixLZ, consts );
+    float3 RIGHT    = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, pixRZ, consts );
+    float3 TOP      = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, pixTZ, consts );
+    float3 BOTTOM   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, pixBZ, consts );
+    viewspaceNormal = XeGTAO_CalculateNormal(edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM);
+    return viewspaceNormal.x * 0.5 + 0.5;
+// #endif
+
+    const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, viewspaceZ, consts);
     const float3 viewVec = normalize(-pixCenterPos);
 
     // prevents normals that are facing away from the view vector - xeGTAO struggles with extreme cases, but in Vanilla it seems rare so it's disabled by default
-    viewspaceNormal = normalize(viewspaceNormal + max(0, -dot(viewspaceNormal, viewVec)) * viewVec);
-    // return viewspaceNormal.x * 0.5 + 0.5;
+    viewspaceNormal = normalize( viewspaceNormal + max( 0, -dot( viewspaceNormal, viewVec ) ) * viewVec );
 
     const float effectRadius = consts.EffectRadius * consts.RadiusMultiplier;
     const float sampleDistributionPower = consts.SampleDistributionPower;
@@ -264,6 +245,7 @@ float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal
 
         // approx viewspace pixel size at pixCoord; approximation of NDCToViewspace( normalizedScreenPos.xy + consts.ViewportPixelSize.xy, pixCenterPos.z ).xy - pixCenterPos.xy;
         const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * consts.NDCToViewMul_x_PixelSize;
+        // return pixelDirRBViewspaceSizeAtCenterZ.xy * 0.5 + 0.5;
 
         float screenspaceRadius = effectRadius * rcp(pixelDirRBViewspaceSizeAtCenterZ.x);
 
@@ -340,25 +322,19 @@ float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal
                 float sampleOffsetLength = length(sampleOffset);
 
                 // note: when sampling, using point_point_point or point_point_linear sampler works, but linear_linear_linear will cause unwanted interpolation between neighbouring depth values on the same MIP level!
-                const float mipLevel = clamp(log2(sampleOffsetLength) - consts.DepthMIPSamplingOffset, 0.0, XE_GTAO_DEPTH_MIP_LEVELS);
+                const float mipLevel = 0/* clamp(log2(sampleOffsetLength) - consts.DepthMIPSamplingOffset, 0.0, XE_GTAO_DEPTH_MIP_LEVELS) */;
 
                 // Snap to pixel center (offset is in pixels)
-                sampleOffset = round(sampleOffset);
+                sampleOffset = round(sampleOffset) * consts.ViewportPixelSize;
                 
-                // Sample positions in pixel coordinates
-                float2 samplePixelPos0 = pixelCenterPos2D + sampleOffset;
-                float2 samplePixelPos1 = pixelCenterPos2D - sampleOffset;
-                
-                // Convert to UV for working depth sampling (uses RenderPixelSize)
-                float2 sampleUV0 = samplePixelPos0 * consts.RenderPixelSize;
-                float2 sampleUV1 = samplePixelPos1 * consts.RenderPixelSize;
+                float2 sampleScreenPos0 = normalizedScreenPos + sampleOffset;
+                float2 sampleScreenPos1 = normalizedScreenPos - sampleOffset;
 
-                // Sample from working depth texture
-                float SZ0 = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, sampleUV0, mipLevel).x);
-                float3 samplePos0 = XeGTAO_ComputeViewspacePosition(samplePixelPos0, SZ0, consts);
+                float SZ0 = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, sampleScreenPos0, mipLevel).x);
+                float3 samplePos0 = XeGTAO_ComputeViewspacePosition(sampleScreenPos0, SZ0, consts);
 
-                float SZ1 = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, sampleUV1, mipLevel).x);
-                float3 samplePos1 = XeGTAO_ComputeViewspacePosition(samplePixelPos1, SZ1, consts);
+                float SZ1 = XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, sampleScreenPos1, mipLevel).x);
+                float3 samplePos1 = XeGTAO_ComputeViewspacePosition(sampleScreenPos1, SZ1, consts);
 
                 float3 sampleDelta0 = samplePos0 - pixCenterPos; // using lpfloat for sampleDelta causes precision issues
                 float3 sampleDelta1 = samplePos1 - pixCenterPos; // using lpfloat for sampleDelta causes precision issues
