@@ -6,11 +6,13 @@
 
 #define HALO_UPGRADE_SAMPLERS 0 // On is volatile for H2C
 
+// ImGui util to edit Shader Defines
 namespace ShaderDefines
 {
    constexpr uint32_t ALLOW_AA = char_ptr_crc32("ALLOW_AA");
    constexpr uint32_t ALLOW_COLORGRADE = char_ptr_crc32("ALLOW_COLORGRADE");
    constexpr uint32_t HALO3_BLOOM = char_ptr_crc32("HALO3_BLOOM");
+   constexpr uint32_t SWAPCHAIN_TEST_PEAK = char_ptr_crc32("SWAPCHAIN_TEST_PEAK");
 
    void OnInitAddNewDefines()
    {
@@ -19,6 +21,7 @@ namespace ShaderDefines
          {"ALLOW_AA", '1', true, false, "Allow original anti-alias.", 1},
          {"ALLOW_COLORGRADE", '1', true, false, "Allow original color grading.", 1},
          {"HALO3_BLOOM", '1', true, false, "Halo 3 bloom mode.", 1},
+         {"SWAPCHAIN_TEST_PEAK", '0', true, false, "Test pattern", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       assert(shader_defines_data.size() < MAX_SHADER_DEFINES);
@@ -204,20 +207,20 @@ namespace
       HaloReach,
       Halo4,
    };
-   const char* SubGameToString(SubGame state)
+   const char* SubGameToString(SubGame state, bool is_space = true)
    {
       switch (state)
       {
       case Unknown: return "Unknown";
-      case Halo1Classic: return "Halo 1 Classic";
-      case Halo1Anniversary: return "Halo 1 Anniversary";
-      case Halo2Classic: return "Halo 2 Classic";
-      case Halo2Anniversary: return "Halo 2 Anniversary";
-      case Halo2AnniversaryMP: return "Halo 2 Anniversary Multiplayer";
-      case Halo3: return "Halo 3";
-      case Halo3ODST: return "Halo 3 ODST";
-      case HaloReach: return "Halo Reach";
-      case Halo4: return "Halo 4";
+      case Halo1Classic: return is_space ? "Halo 1 Classic" : "Halo1Classic";
+      case Halo1Anniversary: return is_space ? "Halo 1 Anniversary" : "Halo1Anniversary";
+      case Halo2Classic: return is_space ? "Halo 2 Classic" : "Halo2Classic";
+      case Halo2Anniversary: return is_space ? "Halo 2 Anniversary" : "Halo2Anniversary";
+      case Halo2AnniversaryMP: return is_space ? "Halo 2 Anniversary Multiplayer" : "Halo2AnniversaryMP";
+      case Halo3: return is_space ? "Halo 3" : "Halo3";
+      case Halo3ODST: return is_space ? "Halo 3 ODST" : "Halo3ODST";
+      case HaloReach: return is_space ? "Halo Reach" : "HaloReach";
+      case Halo4: return is_space ? "Halo 4" : "Halo4";
       default: return "Unknown";
       }
    }
@@ -288,6 +291,141 @@ namespace
    
    ///////////////////////////////////
 
+   namespace SubGameUserSettingsHandler
+   {
+      bool enabled = false;
+      
+      struct Settings
+      {
+         SubGame subgame;
+         int peak;
+         int paper_scene;
+         int paper_ui;
+
+         enum Compatibilty : uint8_t
+         {
+            NotSupported,
+            WIP,
+            Untested,
+            Working,
+         };
+         Compatibilty compatibility;
+
+         std::pair<const char*, ImVec4> GetCompatibility() const
+         {
+            switch (compatibility)
+            {
+               case NotSupported: return std::make_tuple("Not Supported", ImColor(255, 0, 0)); // Red
+               case WIP: return std::make_tuple("WIP", ImColor(255, 165, 0)); // Orange
+               case Untested: return std::make_tuple("Untested", ImColor(255, 255, 0)); // Yellow
+               case Working: return std::make_tuple("Working", ImColor(0, 255, 0)); // Green
+               default: return std::make_tuple("Unknown", ImColor(0, 0, 0));
+            }
+         }
+
+         // Default constructor taking in name and compatibility
+         Settings(SubGame subgame, Compatibilty compatibility)
+            : subgame(subgame), peak(0), paper_scene(0), paper_ui(0), compatibility(compatibility) {}
+      };
+
+      std::vector<Settings> settings = {
+         { Unknown, Settings::Working },
+         { Halo1Classic, Settings::Working },
+         { Halo1Anniversary, Settings::WIP },
+         { Halo2Classic, Settings::WIP },
+         { Halo2Anniversary,  Settings::Working },
+         { Halo2AnniversaryMP, Settings::NotSupported },
+         { Halo3,  Settings::Untested },
+         { Halo3ODST, Settings::Untested },
+         { HaloReach, Settings::Untested },
+         { Halo4, Settings::Untested },
+      };
+
+      Settings* GetSettings(SubGame subgame)
+      {
+         auto s = &settings[subgame];
+         ASSERT_MSG(s, "Settings for SubGame not found");
+         return s;
+      }
+
+      void OnSubGameChange(SubGame new_game)
+      {
+         if (!enabled) return;
+
+         auto sg = GetSettings(new_game);
+         if (!sg) return;
+
+         reshade::log::message(reshade::log::level::info, std::format("SubGameUserSettingsHandler Applying SubGame settings for {}: Peak={}, ScenePaperWhite={}, GamePaperWhite={}", SubGameToString(new_game), sg->peak, sg->paper_scene, sg->paper_ui).c_str());
+
+         if (sg->peak > 0) cb_luma_global_settings.ScenePeakWhite = sg->peak;
+         if (sg->paper_scene > 0) cb_luma_global_settings.ScenePaperWhite = sg->paper_scene;
+         if (sg->paper_ui > 0) cb_luma_global_settings.UIPaperWhite = sg->paper_ui;
+      }
+
+      const char* GetSubGameSaveKey(SubGame state, const char* setting_name)
+      {
+         return std::format("{}_{}", SubGameToString(state, false), setting_name).c_str();
+      }
+
+      constexpr const char* reshade_config_section = "SubGameUserSettingsHandler";
+      void OnImGui()
+      {
+         if (ImGui::Checkbox("Enable Per Game Settings", &enabled))
+            reshade::set_config_value(nullptr, reshade_config_section, "EnablePerGameSettings", enabled);
+
+         if (!enabled) ImGui::BeginDisabled();
+         for (const auto& sg : settings)
+         {
+            ImGui::PushID(("###SubGameUserSettingsHandler" + std::to_string(sg.subgame)).c_str());
+            if (ImGui::TreeNode(SubGameToString(sg.subgame)))
+            {
+               auto [compatibility_text, compatibility_color] = sg.GetCompatibility();
+               ImGui::PushStyleColor(ImGuiCol_Text, compatibility_color);
+               ImGui::TextWrapped("Compatibility: %s", compatibility_text);
+               ImGui::PopStyleColor();
+               
+               auto* s = GetSettings(sg.subgame);
+
+               int peak = s->peak;
+               int paper_scene = s->paper_scene;
+               int paper_ui = s->paper_ui;
+
+               /*ImGui::SameLine();*/ if (ImGui::Button("Set: Luma Defaults")) { s->peak = default_peak_white; s->paper_scene = default_paper_white; s->paper_ui = default_paper_white; }
+               ImGui::SameLine(); if (ImGui::Button("Set: Current Settings")) { s->peak = cb_luma_global_settings.ScenePeakWhite; s->paper_scene = cb_luma_global_settings.ScenePaperWhite; s->paper_ui = cb_luma_global_settings.UIPaperWhite; }
+               ImGui::SameLine(); if (ImGui::Button("Set: Disable")) { s->peak = 0; s->paper_scene = 0; s->paper_ui = 0; }
+
+               auto GetFormat = [](int v) { return v > 0 ? "%d" : "%d (Inactive)"; };
+               ImGui::SliderInt("Display Peak", &s->peak, 0, 4000, GetFormat(s->peak));
+               if (s->subgame != Unknown) ImGui::SliderInt("Scene Paper White", &s->paper_scene, 0, 400, GetFormat(s->paper_scene));
+               ImGui::SliderInt("UI Paper White", &s->paper_ui, 0, 400, GetFormat(s->paper_ui));
+               
+               if (peak != s->peak) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Peak"), s->peak);
+               if (paper_scene != s->paper_scene) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
+               if (paper_ui != s->paper_ui) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "UI"), s->paper_ui);
+
+               ImGui::TreePop();
+            }
+            ImGui::PopID();
+         }
+         if (!enabled) ImGui::EndDisabled();
+      }
+
+      void OnLoadConfigs()
+      {
+         reshade::get_config_value(nullptr, reshade_config_section, "EnablePerGameSettings", enabled);
+
+         for (auto& sg : settings)
+         {
+            auto* s = GetSettings(sg.subgame);
+            reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Peak"), s->peak);
+            reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
+            reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "UI"), s->paper_ui);
+         }
+      }
+   }
+   
+   ///////////////////////////////////
+
    // SubGame Handler
    namespace SubGameHandler
    {
@@ -328,72 +466,73 @@ namespace
          curr = new_game;
          cb_luma_global_settings.GameSettings.SubGame = static_cast<int>(curr);
 
-         // log
-         if (is_changed) reshade::log::message(reshade::log::level::info, std::format("SubGame changed from {} to {}", SubGameToString(prev_game), SubGameToString(curr)).c_str());
+         // not changed, so useless to continue ////////////////////////////////////////////////////////
+         if (!is_changed) return; 
          
-         // Indirect Upgrades clear
-         if (is_changed)
+         // log
+         reshade::log::message(reshade::log::level::info, std::format("SubGame changed from {} to {}", SubGameToString(prev_game), SubGameToString(curr)).c_str());
+            
+         // SubGameUserSettingsHandler
+         SubGameUserSettingsHandler::OnSubGameChange(curr);
+            
+         // reset upgrades params
+         enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
+         best_resource_unorm = false; //TODO: Luma needs this or something better for core.hpp!
+         ignore_upgraded_samplers = true;
+            
+         // clear old hashes
+         auto_texture_format_upgrade_shader_hashes.clear();
+            
+         // set new Indirect Upgrades hashes
+         auto_texture_format_upgrade_shader_hashes[0x5B190892] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00
+         switch (curr)
          {
-            // reset upgrades params
-            enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
-            best_resource_unorm = false; //TODO: Luma needs this or something better for core.hpp!
-            ignore_upgraded_samplers = true;
-            
-            // clear old hashes
-            auto_texture_format_upgrade_shader_hashes.clear();
-            
-            // set new hashes
-            auto_texture_format_upgrade_shader_hashes[0x5B190892] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00
-            switch (curr)
-            {
-               case Halo1Classic:
-                  auto_texture_format_upgrade_shader_hashes[0xB70CC18B] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
-                  if (!best_resource_unorm_disallow) best_resource_unorm = true;
-                  break;
-               case Halo1Anniversary:
-                  // auto_texture_format_upgrade_shader_hashes[0xDCC32775] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //transparency combine
-                  // auto_texture_format_upgrade_shader_hashes[0x700325CF] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //downsample (exposure)
-                  // auto_texture_format_upgrade_shader_hashes[0xB70CC18B] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
-                  best_resource_unorm = true;
-                  break;
-               case Halo2Classic:
-                  auto_texture_format_upgrade_shader_hashes[0xD39821CB] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //blit
-                  if (!best_resource_unorm_disallow) best_resource_unorm = true;
-                  break;
-               case Halo2Anniversary:
-                  // 0x65E212E2 normals downsample (orig: SRV0)
-                  auto_texture_format_upgrade_shader_hashes[0x8D11B112] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
-                  auto_texture_format_upgrade_shader_hashes[0xBDDD9A3C] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01
-                  auto_texture_format_upgrade_shader_hashes[0xE5A32080] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t02
-                  auto_texture_format_upgrade_shader_hashes[0xB5D334B0] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //aa
-                  auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //blit
-                  auto_texture_format_upgrade_shader_hashes[0xBF5A726E] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //after blit downsample blur (concussion)
-                  auto_texture_format_upgrade_shader_hashes[0x3D30DAB7] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //some generic copy that runs after CopyResource()
-                  ignore_upgraded_samplers = false;
-                  break;
-               case Halo3:
-                  auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
-                  auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
-                  WarmupDirectAndIndirectHandler::Start();
-                  break;
-               case Halo3ODST:
-                  auto_texture_format_upgrade_shader_hashes[0xADADBE3D] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
-                  auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
-                  auto_texture_format_upgrade_shader_hashes[0x03B68268] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //noise overlay
-                  WarmupDirectAndIndirectHandler::Start();
-                  break;
-               case HaloReach:
-                  auto_texture_format_upgrade_shader_hashes[0xC1FF277A] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
-                  auto_texture_format_upgrade_shader_hashes[0x0EFB2B17] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
-                  break;
-               case Halo4:
-                  auto_texture_format_upgrade_shader_hashes[0x3A2F6CF7] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
-                  auto_texture_format_upgrade_shader_hashes[0xB38416A2] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01
-                  auto_texture_format_upgrade_shader_hashes[0xCCC24837] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
-                  //TODO: fxaa?
-                  break;
-               default: ;
-            }
+            case Halo1Classic:
+               auto_texture_format_upgrade_shader_hashes[0xB70CC18B] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+               if (!best_resource_unorm_disallow) best_resource_unorm = true; //TODO: Luma needs this or something better for core.hpp!
+               break;
+            case Halo1Anniversary:
+               // auto_texture_format_upgrade_shader_hashes[0xDCC32775] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //transparency combine
+               // auto_texture_format_upgrade_shader_hashes[0x700325CF] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //downsample (exposure)
+               // auto_texture_format_upgrade_shader_hashes[0xB70CC18B] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+               best_resource_unorm = true;
+               break;
+            case Halo2Classic:
+               auto_texture_format_upgrade_shader_hashes[0xD39821CB] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //blit
+               if (!best_resource_unorm_disallow) best_resource_unorm = true; //TODO: Luma needs this or something better for core.hpp!
+               break;
+            case Halo2Anniversary:
+               // 0x65E212E2 normals downsample (orig: SRV0)
+               auto_texture_format_upgrade_shader_hashes[0x8D11B112] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
+               auto_texture_format_upgrade_shader_hashes[0xBDDD9A3C] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01
+               auto_texture_format_upgrade_shader_hashes[0xE5A32080] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t02
+               auto_texture_format_upgrade_shader_hashes[0xB5D334B0] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //aa
+               auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //blit
+               auto_texture_format_upgrade_shader_hashes[0xBF5A726E] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //after blit downsample blur (concussion)
+               auto_texture_format_upgrade_shader_hashes[0x3D30DAB7] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //some generic copy that runs after CopyResource()
+               ignore_upgraded_samplers = false;
+               break;
+            case Halo3:
+               auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 //TODO: more variants?
+               auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+               WarmupDirectAndIndirectHandler::Start();
+               break;
+            case Halo3ODST:
+               auto_texture_format_upgrade_shader_hashes[0xADADBE3D] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 //TODO: more variants?
+               auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+               auto_texture_format_upgrade_shader_hashes[0x03B68268] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //noise overlay
+               WarmupDirectAndIndirectHandler::Start();
+               break;
+            case HaloReach:
+               auto_texture_format_upgrade_shader_hashes[0xC1FF277A] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
+               auto_texture_format_upgrade_shader_hashes[0x0EFB2B17] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+               break;
+            case Halo4:
+               auto_texture_format_upgrade_shader_hashes[0x3A2F6CF7] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
+               auto_texture_format_upgrade_shader_hashes[0xB38416A2] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01
+               auto_texture_format_upgrade_shader_hashes[0xCCC24837] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+               break;
+            default: ;
          }
       }
       
@@ -523,7 +662,7 @@ public:
       }
       
       // Halo2Anniversary: AO
-      // TODO: replace with XeGTAO
+      // TODO: XeGTAO by stealing non-downsampled depth and normals
       
       // Halo2Anniversary: blit
       if (!device_data.has_drawn_main_post_processing && ps == 0x9275F36F)
@@ -638,6 +777,9 @@ public:
 
       //Reset ALLOW_COLORGRADE
       ShaderDefines::Set(ShaderDefines::ALLOW_COLORGRADE, true);
+
+      // SubGameUserSettingsHandler
+      SubGameUserSettingsHandler::OnLoadConfigs();
    }
    
    void PrintImGuiAbout() override
@@ -648,6 +790,11 @@ public:
    void DrawImGuiSettings(DeviceData& device_data) override
    {
       // GameDeviceDataHaloTMCC* game_device_data = static_cast<GameDeviceDataHaloTMCC*>(device_data.game);
+
+      // SWAPCHAIN_TEST_PEAK
+      ShaderDefines::UIToggleCheckmark(ShaderDefines::SWAPCHAIN_TEST_PEAK, "Display Peak Test Pattern", "3 rectangles within a bigger one.\n- Left: Invisible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak).\nSo whatever you do, don't let Middle disappear!");
+
+      ImGui::Separator();
       
       auto DrawColoredSubHeader = [](const char* label, const ImVec4& color = ImColor(128, 255, 255, 255))
       {
@@ -763,13 +910,18 @@ public:
          //ALLOW_COLORGRADE
          ShaderDefines::UIToggleCheckmark(ShaderDefines::ALLOW_COLORGRADE, "Color Grading (Debug)", "Disable to skip color grading,\nexposing the raw HDR input after rolloff.");
       }
-
+      
       // SubGame
-      if (ImGui::CollapsingHeader("Sub Game", ImGuiTreeNodeFlags_DefaultOpen))
+      if (ImGui::CollapsingHeader("Sub Game"))
       {
          DrawColoredSubHeader("Detects which Halo is actually running.");
-         
+
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Current: %s", SubGameToString(SubGameHandler::curr));
+
+         auto compat = SubGameUserSettingsHandler::GetSettings(SubGameHandler::curr)->GetCompatibility();
+         ImGui::PushStyleColor(ImGuiCol_Text, compat.second);
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Compatibility: %s", compat.first);
+         ImGui::PopStyleColor();
 
          //drop down list to override
          static std::vector<const char*> subgame_items = {
@@ -792,17 +944,23 @@ public:
          }
 
          // Reset button
-         if (ImGui::Button("Reinit SubGame")) SubGameHandler::Reinit();
+         if (ImGui::Button("Panic Reset")) SubGameHandler::Reinit();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Full reset SubGame detection, clearing all HDR upgraded resources.");
 
          // best_resource_unorm_disallow
          if (DEVELOPMENT)
          {
-            ImGui::Checkbox("(DEV) best_resource_unorm_disallow", &SubGameHandler::best_resource_unorm_disallow);
+            ImGui::Checkbox("(DEVELOPMENT) best_resource_unorm_disallow", &SubGameHandler::best_resource_unorm_disallow);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                ImGui::SetTooltip("Disable GetBestResourceUpgradeFormat() UNORM for all Sub Games.");
          }
+
+         ImGui::NewLine();
+         
+         // SubGameUserSettingsHandler
+         DrawColoredSubHeader("Settings Applying On Change");
+         SubGameUserSettingsHandler::OnImGui();
       }
 
       if (DEVELOPMENT) ImGui::Separator();
@@ -822,8 +980,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
 
          // resources
-         texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
-         enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::None; //also see SubGameHandler::SetSubGame() && SubGameHandler::warmup_frames
+         texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled; //see SubGameHandler::SetSubGame()
 
 #if HALO_UPGRADE_SAMPLERS
          // samplers

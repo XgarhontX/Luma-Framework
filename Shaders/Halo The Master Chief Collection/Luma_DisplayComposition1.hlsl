@@ -289,6 +289,12 @@ float3 ComposeUI(float3 pos, float3 linearSceneColor, float gamePaperWhite, floa
 	return linearComposedColor;
 }
 
+// rect is top left (x,y), bottom right (x,y)
+float3 DrawRect(float2 uv, float4 rect, float3 color, float3 rectColor) {
+	float r = step(rect.x, uv.x) * step(uv.x, rect.z) * step(rect.y, uv.y) * step(uv.y, rect.w);
+  return r == 0 ? color : rectColor;
+}
+
 // Custom Luma shader to apply the display (or output) transfer function from a linear input (or apply custom gamma correction)
 float4 main(float4 pos : SV_Position) : SV_Target0
 {
@@ -635,6 +641,15 @@ float4 main(float4 pos : SV_Position) : SV_Target0
 
 	// clamp scRGB
 	color.rgb = min(color.rgb, PeakWhiteNits / 80.f);
+
+#if SWAPCHAIN_TEST_PEAK
+	color.rgb = 0;
+	color.rgb = DrawRect(uv, float4(0.35,  0.47,  0.65,  0.53),  color.rgb, 10000.f          );
+	color.rgb = DrawRect(uv, float4(0.365, 0.483, 0.448, 0.517), color.rgb, PeakWhiteNits * 2);
+	color.rgb = DrawRect(uv, float4(0.458, 0.483, 0.542, 0.517), color.rgb, PeakWhiteNits    );
+	color.rgb = DrawRect(uv, float4(0.552, 0.483, 0.635, 0.517), color.rgb, PeakWhiteNits / 2);
+	color.rgb /= 80.f;
+#endif
 
 	return float4(color.rgb, color.a);
 }
