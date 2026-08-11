@@ -69,7 +69,7 @@ Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
 #include "./Includes/Common.hlsl"
 #include "./Includes/Math.hlsl"
 
-// #define USE_GTAO 1
+#define USE_GTAO 1
 
 #if USE_GTAO == 1
   #include "./Includes/XeGTAO.hlsl"
@@ -228,7 +228,16 @@ void main(
   out float2 o0 : SV_Target0)
 {
 #if USE_GTAO == 1
-  GTAOConstants c;
+  GTAOConstants c = (GTAOConstants)0;
+
+  // // TEST: Depth
+  // float d = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, v1.xy).x;
+  // d = 0.0001 / d; // now 0 - 1000
+  // d = saturate(d);
+  // // d = 1 - d;
+  // o0.x = d;
+  // o0.x = sRGB_Encode(o0.x);
+  // return;
 
   // world space
   float3 normal = PS_TEXTURES_2D_3_.Sample(PS_SAMPLERS_3__s, v1.xy).xyz * 2.0 - 1.0;
@@ -247,37 +256,49 @@ void main(
   // size
   float2 swapchainTexSize = LumaSettings.SwapchainSize;
   float2 swapchainTexSizeHalf = LumaSettings.SwapchainSize * 0.5;
-
-  // TODO: NOTHING WORKS!!!!!!!!!!!!
-  c.RenderPixelSize = 1.0 / swapchainTexSize; //input is full swapchain resolution
-  c.ViewportPixelSize = 1.0 / swapchainTexSizeHalf; //output halved
+  c.RenderPixelSize = rcp(swapchainTexSize); //input is full swapchain resolution
+  c.ViewportPixelSize = rcp(swapchainTexSizeHalf); //output halved
   c.ViewportSize = swapchainTexSizeHalf;
 
+  // NDC to View
   float2 frustumScale = PS_REG_SSAO_FRUSTUM_SCALE.xy;
   float2 frustumScaleInv = PS_REG_SSAO_FRUSTUM_SCALE.zw;
+  c.NDCToViewMul = float2(2.0, -2.0) * frustumScale;
+  c.NDCToViewAdd = float2(-1.0, 1.0) * frustumScale;
+  c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.ViewportPixelSize;
 
-  // c.NDCToViewMul = float2(2.0, 2.0) * swapchainTexSize * frustumScaleInv;
-  // c.NDCToViewAdd = float2(-1.0, -1.0) * frustumScaleInv;
-  // c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.RenderPixelSize;
-  
-  c.NDCToViewMul = frustumScale * swapchainTexSize;
-  c.NDCToViewAdd = 0.5 * frustumScale;
-  c.NDCToViewMul_x_PixelSize = c.NDCToViewMul/*  * c.RenderPixelSize */;
-
-  c.EffectRadius = 0.5;
-  c.RadiusMultiplier = 1.457;
-  c.EffectFalloffRange = 0.624;
-  c.SampleDistributionPower = 2.0;
-  c.ThinOccluderCompensation = 0.0;
-  c.FinalValuePower = 1.0;
+  // Params
+  c.EffectRadius = 1;
+  c.RadiusMultiplier = 1.25;
+  c.EffectFalloffRange = 0.01;
+  c.SampleDistributionPower = 1.;
+  c.ThinOccluderCompensation = 0;
+  c.FinalValuePower = 0.56 * GS.AmbientOcclusion;
   c.OcclusionTermScale = 1.0;
-  c.DenoiseBlurBeta = 1.26;
 
-  float2 localNoise = 0/* LumaSettings.FrameIndex */; 
+  // Do
   uint2 pixCoord = uint2(v1.xy * swapchainTexSizeHalf);
+  float2 localNoise = GTAO_TemporalNoise(pixCoord, LumaSettings.FrameIndex); 
   o0.xy = XeGTAO_MainPass(pixCoord, localNoise, viewspaceNormal, PS_TEXTURES_2D_0_, PS_SAMPLERS_3__s, c);
   return;
 #else
+  // TEST: Depth
+  // float d = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, v1.xy).x;
+  // d = 0.0001 / d; // now 0 - 1000
+  // d = saturate(d);
+  // // d = 1 - d;
+  // o0.x = d;
+  // o0.x = sRGB_Encode(o0.x);
+
+  // // linearDepth = (2.0f * Near * Far) / (Far + Near - depthSample * (Far - Near));
+  // // d = 0.0001 / d; // now 0 - 1000
+  // float near = 0.0001;
+  // float far = 1;
+  // d = 2.f * near * far / (far + near - d * (far - near));
+  // o0.x = d;
+  // return;
+
+  // World space normal
   const float3 normal = normalize(PS_TEXTURES_2D_3_.Sample(PS_SAMPLERS_3__s, v1.xy).xyz * 2.0 - 1.0);
  
   // Transform into the space used for the AO kernel, then bend it towards the view direction; this is
@@ -314,19 +335,19 @@ void main(
     o0.x = ao0;
   #elif HALO2_AO == 1
     float ao0 = CompletePass(8*2, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1);
-    float ao1 = CompletePassSimpler(4, 0.35, 0, 1, 0.475, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
+    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
     o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
   #elif HALO2_AO == 2
     float ao0 = CompletePass(8*3, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1);
-    float ao1 = CompletePassSimpler(4, 0.35, 0, 1, 0.475, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
+    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
     o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
   #elif HALO2_AO == 3
     float ao0 = CompletePass(8*4, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1);
-    float ao1 = CompletePassSimpler(4, 0.35, 0, 1, 0.475, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
+    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
     o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);

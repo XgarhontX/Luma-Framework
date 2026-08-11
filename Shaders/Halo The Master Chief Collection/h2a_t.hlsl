@@ -46,6 +46,7 @@ void Rolloff() {
   // SDR early out
   [branch]
   if (!HDR_ENABLED) {
+    tmi.x = tmi.sdr;
     tmi.x *= PS_REG_COMMON_HDR_PARAMS.z;
     tmi.x = min(tmi.x, 1.0);
     return;
@@ -56,7 +57,6 @@ void Rolloff() {
   tmi.p = GammaCorrectionPeak(HDR_PEAK * tmi.pDelta / max(PS_REG_COMMON_HDR_PARAMS.z, 1e-6));
   
   // ext *= 0.2f; // low slope of Hable https://www.desmos.com/calculator/7g0i1cnx5u
-// float3 LinearPiecewiseExtension(float3 sdr, float3 hdr, float thres, float slope, float output)
   ext = LinearPiecewiseExtension(sdr, ext, 0.13, 0.200400533755, 0.0295591208569);
 
   // in B709
@@ -67,11 +67,16 @@ void Rolloff() {
   ext = NeupowHQ(ext, tmi.p, 1.46 * GS.WhiteClip);
   ext = BT2020_To_BT709(ext);
 
-  // blend HDR and SDR
+  // Hmmmmm's luminance normalization
+  float extY = GetLuminance(ext);
+  // hdr709 *= extY / GetLuminance(hdr709); //useless, already pretty much normalized
+  /* if (DVS1)  */sdr *= safeDivision(extY / GetLuminance(sdr), 1.0); //since sdr can only desat "0.9", this isn't too noticeable?
+
+  // blend HDR and SDR (aka Hue Correction and Additional Blowout)
   sdr = UCS_Encode(sdr);
   ext = UCS_Encode(ext);
   hdr709 = UCS_Encode(hdr709);
-  ext = RestoreHueAndChrominanceUcs(ext, hdr709, 0.267, 0.32, 0);
+  ext = RestoreHueAndChrominanceUcs(ext, hdr709, 0.3, 0.36, 0);
   // ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.622, 0.622, 0.622);
   ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.826, 0.826, 0.9);
   ext = UCS_Decode(ext);

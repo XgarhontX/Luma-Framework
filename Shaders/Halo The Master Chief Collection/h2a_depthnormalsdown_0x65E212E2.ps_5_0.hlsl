@@ -28,20 +28,16 @@ void main(
   r2.yz = v1.xy;
 
   r3.xyzw = PS_TEXTURES_2D_2_.Gather(PS_SAMPLERS_3__s, float2(v1.x, v1.y)).wxyz; //depth
-  // r0.w = cmp(r3.z < r3.y);
-  // r1.x = r3.z;
-  // r2.x = r3.y;
-  // r1.xyz = r0.www ? r1.xyz : r2.xyz;
-  // r0.w = cmp(r3.w < r1.x);
-  // r0.x = r3.w;
-  // r0.xyz = r0.www ? r0.xyz : r1.xyz;
-  // r0.w = cmp(r3.x < r0.x);
-  // r3.yz = w2.xy;
-  // r0.xyz = r0.www ? r3.xyz : r0.xyz;
-
-  // r0.x = r3.x;
-  // if (r0.x == 0) r0.x = 1;
-  // r0.yz = v1.xy;
+  r0.w = cmp(r3.z < r3.y);
+  r1.x = r3.z;
+  r2.x = r3.y;
+  r1.xyz = r0.www ? r1.xyz : r2.xyz;
+  r0.w = cmp(r3.w < r1.x);
+  r0.x = r3.w;
+  r0.xyz = r0.www ? r0.xyz : r1.xyz;
+  r0.w = cmp(r3.x < r0.x);
+  r3.yz = w2.xy;
+  r0.xyz = r0.www ? r3.xyz : r0.xyz;
 
   o0.xyzw = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_4__s, r0.yz).xyzw; //normals
   

@@ -5,7 +5,7 @@
 #define __XE_GTAO_HLSLI__
 
 #ifndef SLICE_COUNT
-#define SLICE_COUNT 6.0 // Default 3.0
+#define SLICE_COUNT 4.0 // Default 3.0
 #endif
 
 #ifndef STEPS_PER_SLICE
@@ -14,10 +14,13 @@
 
 #define XE_GTAO_DEPTH_MIP_LEVELS 0
 
-#define XE_GTAO_DECODE_DEPTH(x) (0.100000016 / x - 1.33333344e-007) //TODO: same as SSAO?
-// #define XE_GTAO_DECODE_DEPTH(x) (0.1 / x)
+// #define XE_GTAO_DECODE_DEPTH(x) ((0.100000016 / x - 1.33333344e-007) / 1000) //TODO: same as SSAO?
+// #define XE_GTAO_DECODE_DEPTH(x) (0.0001 * DVS10 / x)
+// #define XE_GTAO_DECODE_DEPTH(x) saturate(0.1 / x - 1.33333344e-007)
+#define XE_GTAO_DECODE_DEPTH(x) XeGTAO_ScreenSpaceToViewSpaceDepth(x)
 
 #define XE_GTAO_PI 3.1415926535897932384626433832795
+#define XE_GTAO_PI_OVER_360 0.00872664625997
 #define XE_GTAO_PI_HALF 1.5707963267948966192313216916398
 
 
@@ -56,9 +59,9 @@ float2 GTAO_TemporalNoise(uint2 pixCoord, uint frameIndex)
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////
-// Visibility & Edges //
-////////////////////////
+///////////////////
+// Depth Prepass //
+///////////////////
 
 // This is also a good place to do non-linear depth conversion for cases where one wants the 'radius' (effectively the threshold between near-field and far-field GI), 
 // is required to be non-linear (i.e. very large outdoors environments).
@@ -67,22 +70,35 @@ float XeGTAO_ClampDepth(float depth)
     return clamp(depth, 0.0, 3.402823466e+38);
 }
 
-float XeGTAO_ScreenSpaceToViewSpaceDepth(const float screenDepth)
+float XeGTAO_ScreenSpaceToViewSpaceDepth(float screenDepth)
 {
-    #define CAMERA_CLIP_NEAR 1
-    #define CAMERA_CLIP_FAR 0.9
+    screenDepth = 0.1 / screenDepth - 1.33333344e-007;
+    screenDepth = XeGTAO_ClampDepth(screenDepth);
+    return screenDepth;
 
-    float depthLinearizeMul = CAMERA_CLIP_FAR * CAMERA_CLIP_NEAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
-    float depthLinearizeAdd = CAMERA_CLIP_FAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
-
-    // // correct the handedness issue. need to make sure this below is correct, but I think it is.
-    // if (depthLinearizeMul * depthLinearizeAdd < 0.0) {
-    //     depthLinearizeAdd = -depthLinearizeAdd;
-    // }
-
-    // Optimised version of "-cameraClipNear / (cameraClipFar - projDepth * (cameraClipFar - cameraClipNear)) * cameraClipFar"
-    return depthLinearizeMul / (depthLinearizeAdd - screenDepth);
+//     #define CAMERA_CLIP_NEAR 0.001
+//     #define CAMERA_CLIP_FAR 1000
+// 
+//     float depthLinearizeMul = CAMERA_CLIP_FAR * CAMERA_CLIP_NEAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
+//     float depthLinearizeAdd = CAMERA_CLIP_FAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
+// 
+//     // correct the handedness issue. need to make sure this below is correct, but I think it is.
+//     if (depthLinearizeMul * depthLinearizeAdd < 0.0) {
+//         depthLinearizeAdd = -depthLinearizeAdd;
+//     }
+// 
+//     // screenDepth = 0.0001 / screenDepth;
+//     // screenDepth = 1 - screenDepth;
+// 
+//     // Optimised version of "-cameraClipNear / (cameraClipFar - projDepth * (cameraClipFar - cameraClipNear)) * cameraClipFar"
+//     return depthLinearizeMul / (depthLinearizeAdd - screenDepth);
 }
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////
+// Visibility & Edges //
+////////////////////////
 
 float4 XeGTAO_CalculateEdges(float centerZ, float leftZ, float rightZ, float topZ, float bottomZ)
 {
@@ -92,7 +108,7 @@ float4 XeGTAO_CalculateEdges(float centerZ, float leftZ, float rightZ, float top
 	float slopeTB = (edgesLRTB.w - edgesLRTB.z) * 0.5;
 	float4 edgesLRTBSlopeAdjusted = edgesLRTB + float4(slopeLR, -slopeLR, slopeTB, -slopeTB);
 	edgesLRTB = min(abs(edgesLRTB), abs(edgesLRTBSlopeAdjusted));
-	return saturate(1.25 - edgesLRTB * rcp(centerZ * 0.011));
+	return XeGTAO_ClampDepth(saturate(1.25 - edgesLRTB * rcp(centerZ * 0.011)));
 }
 
 // packing/unpacking for edges; 2 bits per edge mean 4 gradient values (0, 0.33, 0.66, 1) for smoother transitions!
@@ -121,18 +137,18 @@ float3 XeGTAO_ComputeViewspacePosition(float2 pixelPos, float viewspaceDepth, co
 // http://h14s.p5r.org/2012/09/0x5f3759df.html, [Drobot2014a] Low Level Optimizations for GCN, https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf slide 63
 float XeGTAO_FastSqrt(float x)
 {
-	return asfloat(0x1fbd1df5 + (asint(x) >> 1));
-	// return sqrt(x);
+	// return asfloat(0x1fbd1df5 + (asint(x) >> 1));
+	return sqrt(x);
 }
 
 // input [-1, 1] and output [0, PI], from https://seblagarde.wordpress.com/2014/12/01/inverse-trigonometric-functions-gpu-optimization-for-amd-gcn-architecture/
 float XeGTAO_FastACos(float inX)
 { 
-	float x = abs(inX); 
-	float res = -0.156583 * x + XE_GTAO_PI_HALF;
-	res *= XeGTAO_FastSqrt(1.0 - x);
-	return inX >= 0 ? res : XE_GTAO_PI - res;
-    // return acos(inX); //TODO: after working, revert to faster
+	// float x = abs(inX); 
+	// float res = -0.156583 * x + XE_GTAO_PI_HALF;
+	// res *= XeGTAO_FastSqrt(1.0 - x);
+	// return inX >= 0 ? res : XE_GTAO_PI - res;
+    return acos(inX); //TODO: after working, revert to faster
 }
 
 float3 XeGTAO_CalculateNormal( const float4 edgesLRTB, float3 pixCenterPos, float3 pixLPos, float3 pixRPos, float3 pixTPos, float3 pixBPos )
@@ -172,13 +188,6 @@ float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal
 //     const float pixBZ = valuesBR.x;
 
     // No pre pass, so get each viewspace depth manually
-    // float viewspaceZ  = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos, 0).x), consts);
-    // const float pixLZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(-1, 0) * consts.ViewportPixelSize, XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(-1, 0) * consts.ViewportPixelSize, 0).x), consts);
-    // const float pixRZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(1, 0)  * consts.ViewportPixelSize,  XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(1, 0) * consts.ViewportPixelSize, 0).x), consts);
-    // const float pixTZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(0, -1) * consts.ViewportPixelSize, XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(0, -1) * consts.ViewportPixelSize, 0).x), consts);
-    // const float pixBZ = XeGTAO_ComputeViewspacePosition(normalizedScreenPos + float2(0, 1)  * consts.ViewportPixelSize,  XE_GTAO_DECODE_DEPTH(sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(0, 1) * consts.ViewportPixelSize, 0).x), consts);
-    // return viewspaceZ;
-
     float viewspaceZ  = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos                                            , 0).x;
     float pixLZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, 0).x;
     float pixRZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, 0).x;
@@ -191,11 +200,11 @@ float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal
     pixTZ      = XE_GTAO_DECODE_DEPTH(pixTZ);
     pixBZ      = XE_GTAO_DECODE_DEPTH(pixBZ);
 
-    viewspaceZ = XeGTAO_ScreenSpaceToViewSpaceDepth(viewspaceZ);
-    pixLZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixLZ);
-    pixRZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixRZ);
-    pixTZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixTZ);
-    pixBZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixBZ);
+    // viewspaceZ = XeGTAO_ScreenSpaceToViewSpaceDepth(viewspaceZ);
+    // pixLZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixLZ);
+    // pixRZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixRZ);
+    // pixTZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixTZ);
+    // pixBZ      = XeGTAO_ScreenSpaceToViewSpaceDepth(pixBZ);
 
     // return viewspaceZ;
 
@@ -208,22 +217,24 @@ float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal
     viewspaceZ *= 0.99999; // this is good for FP32 depth buffer
 
 // #ifdef XE_GTAO_GENERATE_NORMALS_INPLACE
-    float3 CENTER   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos, viewspaceZ, consts );
-    float3 LEFT     = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, pixLZ, consts );
-    float3 RIGHT    = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, pixRZ, consts );
-    float3 TOP      = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, pixTZ, consts );
-    float3 BOTTOM   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, pixBZ, consts );
-    viewspaceNormal = XeGTAO_CalculateNormal(edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM);
-    return viewspaceNormal.x * 0.5 + 0.5;
+    // float3 CENTER   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos, viewspaceZ, consts );
+    // float3 LEFT     = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, pixLZ, consts );
+    // float3 RIGHT    = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, pixRZ, consts );
+    // float3 TOP      = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, pixTZ, consts );
+    // float3 BOTTOM   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, pixBZ, consts );
+    // viewspaceNormal = XeGTAO_CalculateNormal(edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM);
+    // return viewspaceNormal.x * 0.5 + 0.5;
 // #endif
 
     const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, viewspaceZ, consts);
     const float3 viewVec = normalize(-pixCenterPos);
+    // return viewVec.z * 0.5 + 0.5;
 
     // prevents normals that are facing away from the view vector - xeGTAO struggles with extreme cases, but in Vanilla it seems rare so it's disabled by default
     viewspaceNormal = normalize( viewspaceNormal + max( 0, -dot( viewspaceNormal, viewVec ) ) * viewVec );
 
-    const float effectRadius = consts.EffectRadius * consts.RadiusMultiplier;
+    const float baseRadius = consts.EffectRadius + (viewspaceZ * 0.0367); //Distance scaled https://github.com/BarbatosBachiko/Reshade-Shaders/blob/main/Shaders/BaBa_XeGTAO.fx
+    const float effectRadius = baseRadius * consts.RadiusMultiplier; 
     const float sampleDistributionPower = consts.SampleDistributionPower;
     const float thinOccluderCompensation = consts.ThinOccluderCompensation;
     const float falloffRange = consts.EffectFalloffRange * effectRadius;
@@ -361,7 +372,7 @@ float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal
                 shc1 = lerp(lowHorizonCos1, shc1, weight1); // this would be more correct but too expensive: cos(lerp( acos(lowHorizonCos1), acos(shc1), weight1 ));
 
                 // thickness heuristic - see "4.3 Implementation details, Height-field assumption considerations"
-#if 0   // (disabled, not used) this should match the paper
+#if 1   // (disabled, not used) this should match the paper
 				float newhorizonCos0 = max(horizonCos0, shc0);
 				float newhorizonCos1 = max(horizonCos1, shc1);
 				horizonCos0 = horizonCos0 > shc0 ? lerp(newhorizonCos0, shc0, thinOccluderCompensation) : newhorizonCos0;
@@ -516,9 +527,7 @@ float XeGTAO_Denoise(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, Sampler
 		aoTerm[side] = sum * rcp(sumWeight);
 
 		aoTerm[side] *= finalApply ? consts.OcclusionTermScale : 1.0;
-        // return aoTerm[side];
 	}
-
 
 	return aoTerm[0]; // return the AO term for the first pixel as a representative value
 }
