@@ -15,6 +15,7 @@ namespace ShaderDefines
    constexpr uint32_t HALO2_AO = char_ptr_crc32("HALO2_AO");
    constexpr uint32_t HALO2_GTAO = char_ptr_crc32("HALO2_GTAO");
    constexpr uint32_t HALO2_GTAO_NOISE = char_ptr_crc32("HALO2_GTAO_NOISE");
+   constexpr uint32_t HALO2_GTAO_FULLRES = char_ptr_crc32("HALO2_GTAO_FULLRES");
    constexpr uint32_t SWAPCHAIN_TEST_PEAK = char_ptr_crc32("SWAPCHAIN_TEST_PEAK");
 
    void OnInitAddNewDefines()
@@ -27,6 +28,7 @@ namespace ShaderDefines
          {"HALO2_AO", '2', true, false, "Halo 2 Anniversary AO quality.", 4},
          {"HALO2_GTAO", '1', true, false, "Halo 2 Anniversary GTAO replacement.", 1},
          {"HALO2_GTAO_NOISE", '0', true, false, "Halo 2 Anniversary GTAO noise movement.", 1},
+         {"HALO2_GTAO_FULLRES", '0', true, false, "Halo 2 Anniversary GTAO do full resolution.", 1},
          {"SWAPCHAIN_TEST_PEAK", '0', true, false, "Test pattern", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -93,7 +95,8 @@ namespace ShaderDefines
       }
    }
 
-   static bool UIToggleCheckmark(uint32_t d, const char* label, const char* tooltip)
+   // out: def, changed
+   static std::pair<bool, bool> UIToggleCheckmark(uint32_t d, const char* label, const char* tooltip)
    {
       bool def = GetBool(d);
       
@@ -106,7 +109,7 @@ namespace ShaderDefines
       if (c) ToggleBool(d);
       
       UIResetButton(d);
-      return def;
+      return {def, c};
    }
       
    static int UIDropDown(uint32_t d, const char* label, const char* const items[], const char* tooltip)
@@ -135,67 +138,67 @@ namespace ShaderDefines
 
 namespace 
 {
-   // Buffer
-   struct Buffer
-   {
-      D3D11_TEXTURE2D_DESC desc;
-      ComPtr<ID3D11Texture2D> tex;
-      ComPtr<ID3D11Resource> res;
-      ComPtr<ID3D11ShaderResourceView> srv;
-      ComPtr<ID3D11RenderTargetView> rtv;
-      ComPtr<ID3D11UnorderedAccessView> uav;
-
-      uint2 GetDimensions() const
-      {
-         return { desc.Width, desc.Height };
-      }
-      
-      void Reset()
-      {
-         desc = {};
-         res.reset();
-         tex.reset();
-         srv.reset();
-         rtv.reset();
-         uav.reset();
-      }
-
-      void CreateWithCurrentDesc(ID3D11Device* device)
-      {
-         auto hr0 = device->CreateTexture2D(&desc, nullptr, tex.put());
-         if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr0));
-
-         auto hr1 = tex->QueryInterface(res.put());
-         if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr1));
-
-         auto hr2 = device->CreateRenderTargetView(tex.get(), nullptr, rtv.put());
-         if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr2));
-      
-         auto hr3 = device->CreateShaderResourceView(tex.get(), nullptr, srv.put());
-         if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr3));
-      }
-
-      static D3D11_TEXTURE2D_DESC GetDefaultDesc(uint2 output_resolution, DXGI_FORMAT format = DXGI_FORMAT_R16G16B16A16_FLOAT)
-      {
-         D3D11_TEXTURE2D_DESC desc = {};
-         desc.Width = output_resolution.x;
-         desc.Height = output_resolution.y;
-         desc.MipLevels = 1;
-         desc.ArraySize = 1;
-         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
-         desc.Usage = D3D11_USAGE_DEFAULT;
-         desc.Format = format;
-         desc.SampleDesc = {1, 0};
-         desc.CPUAccessFlags = 0;
-         desc.MiscFlags = 0;
-         return desc;
-      }
-
-      void SetDefaultDesc(uint2 output_resolution, DXGI_FORMAT format = DXGI_FORMAT_R16G16B16A16_FLOAT)
-      {
-         desc = GetDefaultDesc(output_resolution, format);
-      }
-   };
+   // // Buffer
+   // struct Buffer
+   // {
+   //    D3D11_TEXTURE2D_DESC desc;
+   //    ComPtr<ID3D11Texture2D> tex;
+   //    ComPtr<ID3D11Resource> res;
+   //    ComPtr<ID3D11ShaderResourceView> srv;
+   //    ComPtr<ID3D11RenderTargetView> rtv;
+   //    ComPtr<ID3D11UnorderedAccessView> uav;
+   //
+   //    uint2 GetDimensions() const
+   //    {
+   //       return { desc.Width, desc.Height };
+   //    }
+   //    
+   //    void Reset()
+   //    {
+   //       desc = {};
+   //       res.reset();
+   //       tex.reset();
+   //       srv.reset();
+   //       rtv.reset();
+   //       uav.reset();
+   //    }
+   //
+   //    void CreateWithCurrentDesc(ID3D11Device* device)
+   //    {
+   //       auto hr0 = device->CreateTexture2D(&desc, nullptr, tex.put());
+   //       if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr0));
+   //
+   //       auto hr1 = tex->QueryInterface(res.put());
+   //       if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr1));
+   //
+   //       auto hr2 = device->CreateRenderTargetView(tex.get(), nullptr, rtv.put());
+   //       if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr2));
+   //    
+   //       auto hr3 = device->CreateShaderResourceView(tex.get(), nullptr, srv.put());
+   //       if (DEVELOPMENT) ASSERT_ONCE(SUCCEEDED(hr3));
+   //    }
+   //
+   //    static D3D11_TEXTURE2D_DESC GetDefaultDesc(uint2 output_resolution, DXGI_FORMAT format = DXGI_FORMAT_R16G16B16A16_FLOAT)
+   //    {
+   //       D3D11_TEXTURE2D_DESC desc = {};
+   //       desc.Width = output_resolution.x;
+   //       desc.Height = output_resolution.y;
+   //       desc.MipLevels = 1;
+   //       desc.ArraySize = 1;
+   //       desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
+   //       desc.Usage = D3D11_USAGE_DEFAULT;
+   //       desc.Format = format;
+   //       desc.SampleDesc = {1, 0};
+   //       desc.CPUAccessFlags = 0;
+   //       desc.MiscFlags = 0;
+   //       return desc;
+   //    }
+   //
+   //    void SetDefaultDesc(uint2 output_resolution, DXGI_FORMAT format = DXGI_FORMAT_R16G16B16A16_FLOAT)
+   //    {
+   //       desc = GetDefaultDesc(output_resolution, format);
+   //    }
+   // };
    
    ///////////////////////////////////
    
@@ -270,16 +273,20 @@ namespace
 
          // Main Pass (Terms & Edges)
          D3D11_TEXTURE2D_DESC main_texdesc = {};
-         ComPtr<ID3D11Texture2D> main_tex;
+         ComPtr<ID3D11Texture2D> main0_tex;
+         ComPtr<ID3D11Texture2D> main1_tex;
 
          D3D11_UNORDERED_ACCESS_VIEW_DESC main_uavdesc = {};
-         ComPtr<ID3D11UnorderedAccessView> main_uav;
+         ComPtr<ID3D11UnorderedAccessView> main0_uav;
+         ComPtr<ID3D11UnorderedAccessView> main1_uav;
 
          D3D11_SHADER_RESOURCE_VIEW_DESC main_srvdesc = {};
-         ComPtr<ID3D11ShaderResourceView> main_srv;
+         ComPtr<ID3D11ShaderResourceView> main0_srv;
+         ComPtr<ID3D11ShaderResourceView> main1_srv;
 
          D3D11_RENDER_TARGET_VIEW_DESC main_rtvdesc = {};
-         ComPtr<ID3D11RenderTargetView> main_rtv;
+         ComPtr<ID3D11RenderTargetView> main0_rtv;
+         ComPtr<ID3D11RenderTargetView> main2_rtv;
 
          // // Denoise Pass 1
          // D3D11_TEXTURE2D_DESC denoise1_texdesc = {};
@@ -292,16 +299,22 @@ namespace
 
          void Reset()
          {
-            if (!initialized) return;
+            // gatekeep: state
+            if (!initialized) return; 
             initialized = false;
 
             depthpre_tex.reset();
             for (auto& uav : depthpre_uavs) uav = nullptr;
             depthpre_srv.reset();
 
-            main_tex.reset();
-            main_uav.reset();
-            main_srv.reset();
+            main0_tex.reset();
+            main1_tex.reset();
+            main0_uav.reset();
+            main1_uav.reset();
+            main0_srv.reset();
+            main1_srv.reset();
+            main0_rtv.reset();
+            main2_rtv.reset();
 
             // denoise1_tex.reset();
             // denoise1_uav.reset();
@@ -310,9 +323,21 @@ namespace
       }
       
       // For OnDrawOrDispatch
-      void DrawH2A_0(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context,
+      void DrawH2A_0(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data,
          ID3D11ShaderResourceView* srv_depth, ID3D11ShaderResourceView* srv_normals)
       {
+         // CB: cb7
+         ID3D11Buffer* cb7 = nullptr;
+         native_device_context->PSGetConstantBuffers(7, 1, &cb7);
+         native_device_context->CSSetConstantBuffers(0, 1, &cb7);
+
+         // CB: Luma
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+
+         // samplers
+         const std::array<ID3D11SamplerState*, 2> samplers = { device_data.sampler_state_point.get(), device_data.sampler_state_linear.get() };
+         native_device_context->CSSetSamplers(0, samplers.size(), samplers.data());
+         
          // Depth Prefilter: create tex, uavs, srv
          [[unlikely]]
          if (!H2A::initialized)
@@ -361,14 +386,6 @@ namespace
          // // set PS SRV orig depth, pre filter depth, normals (this overrides dither)
          // const std::array <ID3D11ShaderResourceView*, 4> srvs = { H2A::depthpre_srv.get(), srv_normals, nullptr, nullptr };
          // native_device_context->PSSetShaderResources(0, srvs.size(), srvs.data());
-
-         // CB: Set PS CB7 to CS CB0
-         ID3D11Buffer* cb7 = nullptr;
-         native_device_context->PSGetConstantBuffers(7, 1, &cb7);
-         native_device_context->CSSetConstantBuffers(0, 1, &cb7);
-
-         // sampler s0
-         native_device_context->CSSetSamplers(0, 1, &device_data.sampler_state_point);
          
          // Main Pass: create AO terms & edges buffer
          [[unlikely]]
@@ -376,8 +393,9 @@ namespace
          {
             // tex desc
             H2A::main_texdesc = {};
-            H2A::main_texdesc.Width = device_data.output_resolution.x * 0.5;
-            H2A::main_texdesc.Height = device_data.output_resolution.y * 0.5;
+            const float scale = ShaderDefines::GetBool(ShaderDefines::HALO2_GTAO_FULLRES) ? 1.0f : 0.5f;
+            H2A::main_texdesc.Width = device_data.output_resolution.x * scale;
+            H2A::main_texdesc.Height = device_data.output_resolution.y * scale;
             H2A::main_texdesc.MipLevels = 1;
             H2A::main_texdesc.ArraySize = 1;
             H2A::main_texdesc.Format = DXGI_FORMAT_R8G8_UNORM;
@@ -385,16 +403,20 @@ namespace
             H2A::main_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/;
          
             // tex
-            auto hr0 = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main_tex.put());
-            ASSERT_MSG(SUCCEEDED(hr0), "main hr0");
+            auto hr0a = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main0_tex.put());
+            ASSERT_MSG(SUCCEEDED(hr0a), "main hr0a");
+            auto hr0b = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main1_tex.put());
+            ASSERT_MSG(SUCCEEDED(hr0b), "main hr0b");
             
             // uav desc
             H2A::main_uavdesc.Format = DXGI_FORMAT_R8G8_UNORM;
             H2A::main_uavdesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
             
             // uav
-            auto hr1 = native_device->CreateUnorderedAccessView(H2A::main_tex.get(), &H2A::main_uavdesc, H2A::main_uav.put());
-            ASSERT_MSG(SUCCEEDED(hr1), "main hr1");
+            auto hr1a = native_device->CreateUnorderedAccessView(H2A::main0_tex.get(), &H2A::main_uavdesc, H2A::main0_uav.put());
+            ASSERT_MSG(SUCCEEDED(hr1a), "main hr1a");
+            auto hr1b = native_device->CreateUnorderedAccessView(H2A::main1_tex.get(), &H2A::main_uavdesc, H2A::main1_uav.put());
+            ASSERT_MSG(SUCCEEDED(hr1b), "main hr1b");
          
             // srv desc
             H2A::main_srvdesc = {};
@@ -404,8 +426,10 @@ namespace
             H2A::main_srvdesc.Texture2D.MipLevels = 1;
             
             // srv
-            auto hr2 = native_device->CreateShaderResourceView(H2A::main_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main_srv.put());
-            ASSERT_MSG(SUCCEEDED(hr2), "main hr2");
+            auto hr2a = native_device->CreateShaderResourceView(H2A::main0_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main0_srv.put());
+            ASSERT_MSG(SUCCEEDED(hr2a), "main hr2a");
+            auto hr2b = native_device->CreateShaderResourceView(H2A::main1_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main1_srv.put());
+            ASSERT_MSG(SUCCEEDED(hr2b), "main hr2b");
             
             // // rtv desc
             // H2A::main_rtvdesc = {};
@@ -419,26 +443,29 @@ namespace
          }
          
          // Main: Bindings & Draw
-         native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main_uav, nullptr); //out: AO term and Edges
+         native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main0_uav, nullptr); //out: AO term and Edges
          native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_MainPass)).get(), nullptr, 0);
          const std::array<ID3D11ShaderResourceView*, 2> srvs_main_pass = { H2A::depthpre_srv.get(), srv_normals }; //in: prefiltered depth mips & normals
          native_device_context->CSSetShaderResources(0, srvs_main_pass.size(), srvs_main_pass.data());
          native_device_context->Dispatch((H2A::main_texdesc.Width + NUMTHREADS_X - 1) / NUMTHREADS_X, (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y, 1);
 
+         // TODO: Denoise Passes 1 Pass
+
          // unbind all!
-         constexpr std::array<ID3D11UnorderedAccessView*, 1> null_1uavs = { nullptr };
+         constexpr std::array<ID3D11UnorderedAccessView*, 1> null_1uavs = { };
          native_device_context->CSSetUnorderedAccessViews(0, null_1uavs.size(), null_1uavs.data(), nullptr);
          
-         constexpr  std::array<ID3D11ShaderResourceView*, 2> null_2srvs = { nullptr, nullptr };
+         constexpr std::array<ID3D11ShaderResourceView*, 2> null_2srvs = { };
          native_device_context->CSSetShaderResources(0, null_2srvs.size(), null_2srvs.data());
 
-         constexpr std::array<ID3D11Buffer*, 1> null_1cb = { nullptr };
+         constexpr std::array<ID3D11Buffer*, 1> null_1cb = { };
          native_device_context->CSSetConstantBuffers(0, null_1cb.size(), null_1cb.data());
+         native_device_context->CSSetConstantBuffers(luma_data_cbuffer_index, null_1cb.size(), null_1cb.data());
 
          constexpr ID3D11ComputeShader* null_cs = nullptr;
          native_device_context->CSSetShader(null_cs, nullptr, 0);
 
-         constexpr std::array<ID3D11SamplerState*, 1> null_1samplers = { nullptr };
+         constexpr std::array<ID3D11SamplerState*, 2> null_1samplers = { };
          native_device_context->CSSetSamplers(0, null_1samplers.size(), null_1samplers.data());
 
          // // set RTV 0 to main rtv
@@ -448,11 +475,11 @@ namespace
          H2A::initialized = true;
       }
 
-      void DrawH2A_1(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context,
+      void DrawH2A_1(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data,
          ID3D11ShaderResourceView* srv_depth, ID3D11ShaderResourceView* srv_normals)
       {
          // ps: main bind t6 srv
-         native_device_context->PSSetShaderResources(6, 1, &H2A::main_srv);
+         native_device_context->PSSetShaderResources(6, 1, &H2A::main0_srv);
       }
       
       void OnSubGameChange(SubGame prev_game, SubGame new_game)
@@ -871,6 +898,15 @@ public:
       reshade::register_event<reshade::addon_event::reshade_present>(ClearIndirectUpgradesHandler::OnReShadePresent);
    }
 
+   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   {
+      // SubGame reset
+      SubGameHandler::Reinit();
+
+      // XeGTAOHandler
+      XeGTAOHandler::H2A::Reset();
+   }
+
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       // Setup
@@ -924,7 +960,7 @@ public:
          if (ps == 0x5ED3BA5A) // ao0: create Visibility and Edges
          {
             // GTAO override //TODO: currently used to prefilter depth only
-            XeGTAOHandler::DrawH2A_0(device_data, native_device, native_device_context, h2a_ao_depth.get(), h2a_ao_normals.get());
+            XeGTAOHandler::DrawH2A_0(device_data, native_device, native_device_context, cmd_list_data, h2a_ao_depth.get(), h2a_ao_normals.get());
             drawn_ao0 = true;
             
             return DrawOrDispatchOverrideType::Replaced;
@@ -933,7 +969,7 @@ public:
          if (ps == 0x4C2C530E && drawn_ao0) // ao1: resolve to AO
          {
             // GTAO override
-            XeGTAOHandler::DrawH2A_1(device_data, native_device, native_device_context, h2a_ao_depth.get(), h2a_ao_normals.get());
+            XeGTAOHandler::DrawH2A_1(device_data, native_device, native_device_context, cmd_list_data, h2a_ao_depth.get(), h2a_ao_normals.get());
             drawn_ao0 = false;
 
             return DrawOrDispatchOverrideType::None;
@@ -1191,9 +1227,15 @@ public:
          auto gtao_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO, "Halo 2 Anniversary: GTAO", "Highly recommended!\nReplaces Halo 2 Anniversary's SSAO for modern GTAO.\n\nThis will cost some performance to insert the higher quality FX.\nGrass will get slightly darker.");
 
          // HALO2_GTAO_NOISE
-         if (!gtao_enabled) ImGui::BeginDisabled();
-         ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_NOISE, "Halo 2 Anniversary: GTAO Noisy", "Let noise jitter randomly.\n(Supposed to be for TAA, but maybe it can look ok without.");
-         if (!gtao_enabled) ImGui::EndDisabled();
+         if (!gtao_enabled.first) ImGui::BeginDisabled();
+         ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_NOISE, "Halo 2 Anniversary: GTAO Dynamic Noise", "Let noise jitter randomly.\n(Supposed to be for TAA, but maybe it can look ok without.");
+         if (!gtao_enabled.first) ImGui::EndDisabled();
+
+         // HALO2_GTAO_FULLRES
+         if (!gtao_enabled.first) ImGui::BeginDisabled();
+         auto gtao_fullres_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_FULLRES, "Halo 2 Anniversary: GTAO Full Res", "Instead of original 0.5x, run GTAO at 1x resolution.\nThis will cost more performance, so consider lowering quality.");
+         if (gtao_fullres_enabled.second) XeGTAOHandler::H2A::Reset();
+         if (!gtao_enabled.first) ImGui::EndDisabled();
          
          ImGui::NewLine(); //////////////
 

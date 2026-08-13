@@ -19,20 +19,20 @@
   #define STEPS_PER_SLICE 3.0
 #elif HALO2_AO == 2
   #define SLICE_COUNT 16.0
-  #define STEPS_PER_SLICE 4.0
+  #define STEPS_PER_SLICE 3.0
 #elif HALO2_AO == 3
   #define SLICE_COUNT 24.0
-  #define STEPS_PER_SLICE 4.0
+  #define STEPS_PER_SLICE 3.0
 #elif HALO2_AO == 4
   #define SLICE_COUNT 32.0
-  #define STEPS_PER_SLICE 4.0
+  #define STEPS_PER_SLICE 3.0
 #endif
 
 #define EFFECT_RADIUS 0.967 // Default 0.5
 #define RADIUS_MULTIPLIER 1.457 // Default 1.457
 #define EFFECT_FALLOFF_RANGE 0.615 // Default 0.615
 #define EFFECT_RADIUS_DISTANCE_SCALE 0.031
-#define SAMPLE_DISTRIBUTION_POWER 2.2 // Default 2.0
+#define SAMPLE_DISTRIBUTION_POWER 2.1 // Default 2.0
 #define THIN_OCCLUDER_COMPENSATION 0.0 // Default 0.0 
 #define FINAL_VALUE_POWER 1.0 // Default 2.2
 #define DEPTH_MIP_SAMPLING_OFFSET 2 // Default 3.3
@@ -76,9 +76,10 @@ cbuffer CB_DYNAMIC_PASS_SSAO : register(b0)
   float4 PS_REG_SSAO_FRUSTUM_SCALE_ : packoffset(c7);
 }
 
-SamplerState s0 : register(s0);
-Texture2D<float4> t0 : register(t0);
-Texture2D<float4> t1 : register(t1);
+SamplerState s0 : register(s0); //point 
+SamplerState s1 : register(s1); //linear
+Texture2D<float4> t0 : register(t0); 
+Texture2D<float4> t1 : register(t1); 
 
 RWTexture2D<float> out_working_depth_mip0 : register(u0);
 RWTexture2D<float> out_working_depth_mip1 : register(u1);
@@ -130,13 +131,17 @@ float XeGTAO_DepthMIPFilter(float depth0, float depth1, float depth2, float dept
 }
 
 groupshared float g_scratchDepths[8][8];
-void XeGTAO_PrefilterDepths16x16CS(uint2 dispatchThreadID, uint2 groupThreadID, Texture2D sourceNDCDepth, SamplerState depthSampler, RWTexture2D<float> outDepth0, RWTexture2D<float> outDepth1, RWTexture2D<float> outDepth2, RWTexture2D<float> outDepth3, RWTexture2D<float> outDepth4)
+void XeGTAO_PrefilterDepths16x16CS(uint2 dispatchThreadID, uint2 groupThreadID, Texture2D sourceNDCDepth, RWTexture2D<float> outDepth0, RWTexture2D<float> outDepth1, RWTexture2D<float> outDepth2, RWTexture2D<float> outDepth3, RWTexture2D<float> outDepth4)
 {
     // MIP 0
     const uint2 baseCoord = dispatchThreadID;
     const uint2 pixCoord = baseCoord * 2;
-    // float4 depths4 = sourceNDCDepth.GatherRed(depthSampler, float2(pixCoord * VIEWPORT_PIXEL_SIZE), int2(1, 1));
-    float4 depths4 = sourceNDCDepth.Load(uint3(pixCoord.xy + 1, 0)).xxxx; 
+
+    #if HALO2_GTAO_FULLRES
+        float4 depths4 = sourceNDCDepth.GatherRed(s0, float2(pixCoord * rcp(SSAO_TEX_COORD_SCALE_.xy * 4)), int2(1, 1));
+    #else
+        float4 depths4 = sourceNDCDepth.Load(uint3(pixCoord.xy + 1, 0)).xxxx; 
+    #endif
     float depth0 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.w));
     float depth1 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.z));
     float depth2 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.x));
@@ -526,9 +531,11 @@ void XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal
     }
     
     // Sample from working depth texture (our buffer - no viewport offset)
-    float4 valuesUL = sourceViewspaceDepth.GatherRed(depthSampler, normalizedScreenPos);
-    float4 valuesBR = sourceViewspaceDepth.GatherRed(depthSampler, normalizedScreenPos, int2(1, 1));
-    
+    // float4 valuesUL = sourceViewspaceDepth.GatherRed(depthSampler, normalizedScreenPos);
+    // float4 valuesBR = sourceViewspaceDepth.GatherRed(depthSampler, normalizedScreenPos, int2(1, 1));
+    float4 valuesUL = sourceViewspaceDepth.Load(int3(pixCoord, 0)).xxxx;
+    float4 valuesBR = sourceViewspaceDepth.Load(int3(pixCoord + int2(1, 1), 0)).xxxx;
+
     // viewspace Zs left top right bottom
     const float pixLZ = valuesUL.x;
     const float pixTZ = valuesUL.z;
@@ -794,7 +801,11 @@ float2 XeGTAO_DenoisePS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, Samp
 //     XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, gatherCenter, int2(2, 2)), visQ3);
 
     // Gather edge and visibility quads from working AO texture
-    const int2 pixCoordScaled = pixCoordBase * 0.5;
+    #if HALO2_GTAO_FULLRES == 1
+        const int2 pixCoordScaled = pixCoordBase;
+    #else
+        const int2 pixCoordScaled = pixCoordBase * 0.5;
+    #endif
     float4 edgesQ0 = sourceAOTermAndEdges.Load(int3(pixCoordScaled + int2(0, 0), 0)).y;
     float4 edgesQ1 = sourceAOTermAndEdges.Load(int3(pixCoordScaled + int2(2, 0), 0)).y;
     float4 edgesQ2 = sourceAOTermAndEdges.Load(int3(pixCoordScaled + int2(1, 2), 0)).y;
@@ -867,9 +878,11 @@ float2 XeGTAO_DenoisePS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, Samp
 		aoTerm[side] *= finalApply ? XE_GTAO_OCCLUSION_TERM_SCALE : 1.0;
 	}
 
-	return float2(min(aoTerm[0], aoTerm[1]), 0.0);
+	// return float2(min(aoTerm[0], aoTerm[1]), 0.0);
+	return float2(max(aoTerm[0], aoTerm[1]), 0.0);
 	// return float2((aoTerm[0] + aoTerm[1]) * 0.5, 0.0);
 	// return float2((aoTerm[side]), 0.0);
+	// return float2((aoTerm[0]), 0.0);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -925,7 +938,7 @@ void prefilter_depths16x16_cs(uint2 dtid : SV_DispatchThreadID, uint2 gtid : SV_
 {
     // t0 = depth
     // s0 = point
-    XeGTAO_PrefilterDepths16x16CS(dtid, gtid, t0, s0, out_working_depth_mip0, out_working_depth_mip1, out_working_depth_mip2, out_working_depth_mip3, out_working_depth_mip4);
+    XeGTAO_PrefilterDepths16x16CS(dtid, gtid, t0, out_working_depth_mip0, out_working_depth_mip1, out_working_depth_mip2, out_working_depth_mip3, out_working_depth_mip4);
 }
 
 // See ao0 for main pass 
@@ -938,7 +951,11 @@ void main_pass_cs(uint2 dtid : SV_DispatchThreadID)
     uint2 pixCoord = uint2(dtid + 0.5);
 
     // size
-    c.ViewportSize = SSAO_TEX_COORD_SCALE_.xy * 2;
+    #if HALO2_GTAO_FULLRES == 1
+        c.ViewportSize = SSAO_TEX_COORD_SCALE_.xy * 4;
+    #else
+        c.ViewportSize = SSAO_TEX_COORD_SCALE_.xy * 2;
+    #endif
     c.ViewportPixelSize = rcp(c.ViewportSize);
 
     // NDC to View
@@ -947,7 +964,11 @@ void main_pass_cs(uint2 dtid : SV_DispatchThreadID)
     c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.ViewportPixelSize;
 
     // world space normal
-    float3 normal = t1.Load(uint3(pixCoord * 2, 0)).xyz;
+    #if HALO2_GTAO_FULLRES == 1
+        float3 normal = t1.Load(uint3(pixCoord * 1, 0)).xyz;
+    #else
+        float3 normal = t1.Load(uint3(pixCoord * 2, 0)).xyz;
+    #endif
     normal = mad(normal, 2.0, -1.0);
     normal = normalize(normal);
 
@@ -959,7 +980,15 @@ void main_pass_cs(uint2 dtid : SV_DispatchThreadID)
     );
     viewNormal = normalize(viewNormal);
 
-    XeGTAO_MainPassCS(dtid, SpatioTemporalNoise(dtid, 0), viewNormal, t0, s0, ao_term_and_edges, c);
+    // Noise
+    #if HALO2_GTAO_NOISE == 0
+        const float frameIndex = 0;
+    #else
+        const float frameIndex = LumaSettings.FrameIndex;
+    #endif
+    float2 localNoise = SpatioTemporalNoise(pixCoord, frameIndex); 
+
+    XeGTAO_MainPassCS(dtid, localNoise, viewNormal, t0, s0, ao_term_and_edges, c);
 }
 
 // // See ao1 for denoise pass

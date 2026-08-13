@@ -58,6 +58,12 @@ cbuffer CB_DYNAMIC_PASS_SSAO : register(b7)
   */
 }
 
+// Force off // TODO: clean up since CS is better
+#ifdef HALO2_GTAO
+#undef HALO2_GTAO
+#define HALO2_GTAO 0
+#endif
+
 SamplerState PS_SAMPLERS_0__s : register(s0);
 SamplerState PS_SAMPLERS_3__s : register(s3);
 #if HALO2_GTAO == 0

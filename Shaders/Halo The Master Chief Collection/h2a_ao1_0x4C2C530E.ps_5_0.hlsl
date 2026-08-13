@@ -44,7 +44,7 @@ void main(
   c.RenderPixelSize = rcp(swapchainTexSize); //output is full swapchain resolution
 
   // Do
-  uint2 pixCoord = uint2(v0.xy + int2(-2,0));
+  uint2 pixCoord = uint2(v0.xy + int2(-2,0)); //TODO: why -2?
   r0.x = XeGTAO_DenoisePS(pixCoord, PS_TEXTURES_2D_6_, PS_SAMPLERS_3__s, true, c).x;
 #else
   r0.xy = SSAO_TEX_COORD_SCALE.zw + -SSAO_TEX_COORD_SCALE.xy;
