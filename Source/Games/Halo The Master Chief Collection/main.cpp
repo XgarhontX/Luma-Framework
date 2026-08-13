@@ -243,7 +243,6 @@ namespace
       constexpr const char* Luma_XeGTAO_MainPass = "XeGTAO Main Pass CS";
       constexpr const char* Luma_XeGTAO_DenoisePass1 = "XeGTAO Denoise Pass 1 CS";
       constexpr const char* Luma_XeGTAO_DenoisePass2 = "XeGTAO Denoise Pass 2 CS";
-      constexpr const char* Luma_XeGTAO_Blit = "XeGTAO Blit Copy PS";
 
       constexpr size_t DEPTH_MIP_LEVELS = 5;
       constexpr UINT NUMTHREADS_X = 8;
@@ -253,9 +252,8 @@ namespace
       {
          native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter),    ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
          native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_MainPass),     ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-         // native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-         // native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
-         // native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_Blit),         ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "blit_pass_ps"});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
       }
 
       namespace H2A
@@ -442,14 +440,26 @@ namespace
             // ASSERT_MSG(SUCCEEDED(hr3), "main hr3");
          }
          
-         // Main: Bindings & Draw
+         // Main: bind and draw
          native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main0_uav, nullptr); //out: AO term and Edges
          native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_MainPass)).get(), nullptr, 0);
          const std::array<ID3D11ShaderResourceView*, 2> srvs_main_pass = { H2A::depthpre_srv.get(), srv_normals }; //in: prefiltered depth mips & normals
          native_device_context->CSSetShaderResources(0, srvs_main_pass.size(), srvs_main_pass.data());
          native_device_context->Dispatch((H2A::main_texdesc.Width + NUMTHREADS_X - 1) / NUMTHREADS_X, (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y, 1);
 
-         // TODO: Denoise Passes 1 Pass
+         // TODO: Denoise Passes 1 & 2 Pass
+
+         // Denoise 1:  bind and draw
+         native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main1_uav, nullptr); //out: AO term and Edges denoised 1
+         native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1)).get(), nullptr, 0);
+         native_device_context->CSSetShaderResources(0, 1, &H2A::main0_srv); //in: AO term and Edges
+         native_device_context->Dispatch((H2A::main_texdesc.Width + (NUMTHREADS_X * 2) - 1) / (NUMTHREADS_X * 2), (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y,1);
+
+         // Denoise 2: bind and draw
+         native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main0_uav, nullptr); //out: AO term and Edges denoised 2 (will be used in PS)
+         native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2)).get(), nullptr, 0);
+         native_device_context->CSSetShaderResources(0, 1, &H2A::main1_srv); //in: AO term and Edges denoised 1
+         native_device_context->Dispatch((H2A::main_texdesc.Width + (NUMTHREADS_X * 2) - 1) / (NUMTHREADS_X * 2), (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y,1);
 
          // unbind all!
          constexpr std::array<ID3D11UnorderedAccessView*, 1> null_1uavs = { };

@@ -275,246 +275,6 @@ float3 XeGTAO_CalculateNormal( const float4 edgesLRTB, float3 pixCenterPos, floa
     return pixelNormal;
 }
 
-// float2 XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, Texture2D sourceViewspaceDepth, SamplerState depthSampler, const GTAOConstants consts)
-// {
-//     float2 normalizedScreenPos = (pixCoord + 0.5.xx) * consts.ViewportPixelSize;
-//     
-//     // viewspace Z at the center
-//     float viewspaceZ = sourceViewspaceDepth.SampleLevel( depthSampler, normalizedScreenPos, 0 ).x;
-//     if (viewspaceZ >= 100000.0) return float2(1.0, 0.0); //Halo 2 Anniversary: sky ignore
-//     
-//     // Sample from working depth texture (our buffer - no viewport offset)
-//     float4 valuesUL = sourceViewspaceDepth.GatherRed(depthSampler, normalizedScreenPos);
-//     float4 valuesBR = sourceViewspaceDepth.GatherRed(depthSampler, normalizedScreenPos, int2(1, 1));
-//     
-//     // viewspace Zs left top right bottom
-//     const float pixLZ = valuesUL.x;
-//     const float pixTZ = valuesUL.z;
-//     const float pixRZ = valuesBR.z;
-//     const float pixBZ = valuesBR.x;
-//     
-//     // // No pre pass, so get each depth manually and linearize them to view
-//     // float viewspaceZ  = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos                                            , 0).x;
-//     // float pixLZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, 0).x;
-//     // float pixRZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, 0).x;
-//     // float pixTZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, 0).x;
-//     // float pixBZ       = sourceViewspaceDepth.SampleLevel(depthSampler, normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, 0).x;
-//     // 
-//     // viewspaceZ = XE_GTAO_DECODE_DEPTH(viewspaceZ); //SZ0 & SZ1 will also need this
-//     // pixLZ      = XE_GTAO_DECODE_DEPTH(pixLZ);
-//     // pixRZ      = XE_GTAO_DECODE_DEPTH(pixRZ);
-//     // pixTZ      = XE_GTAO_DECODE_DEPTH(pixTZ);
-//     // pixBZ      = XE_GTAO_DECODE_DEPTH(pixBZ);
-//     
-//     // return viewspaceZ; //debug depth
-// 
-//     // Halo 2 Anniversary: View Model strength mask
-//     const float viewmodelStrength = smoothstep(0.64, 0, viewspaceZ);
-// 
-//     // Calculate edges
-//     float4 edgesLRTB  = XeGTAO_CalculateEdges(viewspaceZ, pixLZ, pixRZ, pixTZ, pixBZ);
-//     const float edges = XeGTAO_PackEdges(edgesLRTB);
-//     // return edges;
-// 
-//     // Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
-//     viewspaceZ *= 0.99999; // this is good for FP32 depth buffer
-// 
-// // #ifdef XE_GTAO_GENERATE_NORMALS_INPLACE
-//     // float3 CENTER   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos, viewspaceZ, consts );
-//     // float3 LEFT     = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, pixLZ, consts );
-//     // float3 RIGHT    = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, pixRZ, consts );
-//     // float3 TOP      = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, pixTZ, consts );
-//     // float3 BOTTOM   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, pixBZ, consts );
-//     // viewspaceNormal = XeGTAO_CalculateNormal(edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM);
-//     // return viewspaceNormal.x * 0.5 + 0.5;
-// // #endif
-// 
-//     const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, viewspaceZ, consts);
-//     const float3 viewVec = normalize(-pixCenterPos);
-//     // return viewVec.z * 0.5 + 0.5;
-// 
-//     // prevents normals that are facing away from the view vector - xeGTAO struggles with extreme cases, but in Vanilla it seems rare so it's disabled by default
-//     viewspaceNormal = normalize( viewspaceNormal + max( 0, -dot( viewspaceNormal, viewVec ) ) * viewVec );
-// 
-//     const float baseRadius = EFFECT_RADIUS + (viewspaceZ * EFFECT_RADIUS_DISTANCE_SCALE); // Distance scaled https://github.com/BarbatosBachiko/Reshade-Shaders/blob/main/Shaders/BaBa_XeGTAO.fx
-//     const float viewmodelRadius = viewmodelStrength * 20 * EFFECT_RADIUS;
-//     const float effectRadius = max(0, baseRadius * (RADIUS_MULTIPLIER + viewmodelRadius)); 
-//     const float sampleDistributionPower = SAMPLE_DISTRIBUTION_POWER;
-//     const float thinOccluderCompensation = min(1, THIN_OCCLUDER_COMPENSATION + (viewspaceZ * 0.0067));
-//     const float falloffRange = EFFECT_FALLOFF_RANGE * effectRadius;
-//     const float falloffFrom = effectRadius * (1.0 - EFFECT_FALLOFF_RANGE);
-// 
-//     // fadeout precompute optimisation
-//     const float falloffMul = -1.0 / falloffRange;
-//     const float falloffAdd = falloffFrom / falloffRange + 1.0;
-// 
-//     float visibility = 0.0;
-// 
-//     // see "Algorithm 1" in https://www.activision.com/cdn/research/Practical_Real_Time_Strategies_for_Accurate_Indirect_Occlusion_NEW%20VERSION_COLOR.pdf
-//     {
-//         const float noiseSlice = localNoise.x;
-//         const float noiseSample = localNoise.y;
-// 
-//         // quality settings / tweaks / hacks
-//         const float pixelTooCloseThreshold = 1.3; // if the offset is under approx pixel size (pixelTooCloseThreshold), push it out to the minimum distance
-// 
-//         // approx viewspace pixel size at pixCoord; approximation of NDCToViewspace( normalizedScreenPos.xy + consts.ViewportPixelSize.xy, pixCenterPos.z ).xy - pixCenterPos.xy;
-//         const float2 pixelDirRBViewspaceSizeAtCenterZ = viewspaceZ.xx * consts.NDCToViewMul_x_PixelSize;
-//         // return pixelDirRBViewspaceSizeAtCenterZ.xy * 0.5 + 0.5;
-// 
-//         float screenspaceRadius = effectRadius * rcp(pixelDirRBViewspaceSizeAtCenterZ.x);
-// 
-//         // fade out for small screen radii 
-//         visibility += saturate((10.0 - screenspaceRadius) / 100.0) * 0.5;
-// 
-//         // this is the min distance to start sampling from to avoid sampling from the center pixel (no useful data obtained from sampling center pixel)
-//         const float minS = pixelTooCloseThreshold * rcp(screenspaceRadius);
-// 
-//         //[unroll]
-//         for (float slice = 0.0; slice < SLICE_COUNT; slice++) {
-//             float sliceK = (slice + noiseSlice) / SLICE_COUNT;
-//             // lines 5, 6 from the paper
-//             float phi = sliceK * XE_GTAO_PI;
-//             float cosPhi = cos(phi);
-//             float sinPhi = sin(phi);
-//             float2 omega = float2(cosPhi, -sinPhi); //lpfloat2 on omega causes issues with big radii
-// 
-//             // convert to screen units (pixels) for later use
-//             omega *= screenspaceRadius;
-// 
-//             // line 8 from the paper
-//             const float3 directionVec = float3(cosPhi, sinPhi, 0.0);
-// 
-//             // line 9 from the paper
-//             const float3 orthoDirectionVec = directionVec - (dot(directionVec, viewVec) * viewVec);
-// 
-//             // line 10 from the paper
-//             //axisVec is orthogonal to directionVec and viewVec, used to define projectedNormal
-//             const float3 axisVec = normalize(cross(orthoDirectionVec, viewVec));
-// 
-//             // alternative line 9 from the paper
-//             // float3 orthoDirectionVec = cross( viewVec, axisVec );
-// 
-//             // line 11 from the paper
-//             float3 projectedNormalVec = viewspaceNormal - axisVec * dot(viewspaceNormal, axisVec);
-// 
-//             // line 13 from the paper
-//             float signNorm = sign(dot(orthoDirectionVec, projectedNormalVec));
-// 
-//             // line 14 from the paper
-//             float projectedNormalVecLength = length(projectedNormalVec);
-//             float cosNorm = saturate(dot(projectedNormalVec, viewVec) * rcp(projectedNormalVecLength));
-// 
-//             // line 15 from the paper
-//             float n = signNorm * XeGTAO_FastACos(cosNorm);
-// 
-//             // this is a lower weight target; not using -1 as in the original paper because it is under horizon, so a 'weight' has different meaning based on the normal
-//             const float lowHorizonCos0 = cos(n + XE_GTAO_PI_HALF);
-//             const float lowHorizonCos1 = cos(n - XE_GTAO_PI_HALF);
-// 
-//             // lines 17, 18 from the paper, manually unrolled the 'side' loop
-//             float horizonCos0 = lowHorizonCos0; //-1;
-//             float horizonCos1 = lowHorizonCos1; //-1;
-// 
-//             [unroll]
-//             for (float step = 0.0; step < STEPS_PER_SLICE; step++) {
-//                 // R1 sequence (http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/)
-//                 const float stepBaseNoise = (slice + step * STEPS_PER_SLICE) * 0.6180339887498948482; // <- this should unroll
-//                 float stepNoise = frac(noiseSample + stepBaseNoise);
-// 
-//                 // approx line 20 from the paper, with added noise
-//                 float s = (step + stepNoise) / STEPS_PER_SLICE; // + (lpfloat2)1e-6f);
-// 
-//                 // additional distribution modifier
-//                 s = pow(s, sampleDistributionPower);
-// 
-//                 // avoid sampling center pixel
-//                 s += minS;
-// 
-//                 // approx lines 21-22 from the paper, unrolled
-//                 float2 sampleOffset = s * omega;
-// 
-//                 float sampleOffsetLength = length(sampleOffset);
-// 
-//                 // note: when sampling, using point_point_point or point_point_linear sampler works, but linear_linear_linear will cause unwanted interpolation between neighbouring depth values on the same MIP level!
-//                 const float mipLevel = clamp(log2(sampleOffsetLength) - DEPTH_MIP_SAMPLING_OFFSET, 0.0, XE_GTAO_DEPTH_MIP_LEVELS);
-// 
-//                 // Snap to pixel center (offset is in pixels)
-//                 sampleOffset = round(sampleOffset) * consts.ViewportPixelSize;
-//                 
-//                 float2 sampleScreenPos0 = normalizedScreenPos + sampleOffset;
-//                 float2 sampleScreenPos1 = normalizedScreenPos - sampleOffset;
-// 
-//                 float SZ0 = sourceViewspaceDepth.SampleLevel(depthSampler, sampleScreenPos0, mipLevel).x;
-//                 float3 samplePos0 = XeGTAO_ComputeViewspacePosition(sampleScreenPos0, SZ0, consts);
-// 
-//                 float SZ1 = sourceViewspaceDepth.SampleLevel(depthSampler, sampleScreenPos1, mipLevel).x;
-//                 float3 samplePos1 = XeGTAO_ComputeViewspacePosition(sampleScreenPos1, SZ1, consts);
-// 
-//                 float3 sampleDelta0 = samplePos0 - pixCenterPos; // using lpfloat for sampleDelta causes precision issues
-//                 float3 sampleDelta1 = samplePos1 - pixCenterPos; // using lpfloat for sampleDelta causes precision issues
-//                 float sampleDist0 = length(sampleDelta0);
-//                 float sampleDist1 = length(sampleDelta1);
-// 
-//                 // approx lines 23, 24 from the paper, unrolled
-//                 float3 sampleHorizonVec0 = sampleDelta0 * rcp(sampleDist0);
-//                 float3 sampleHorizonVec1 = sampleDelta1 * rcp(sampleDist1);
-// 
-//                 // any sample out of radius should be discarded - also use fallof range for smooth transitions; this is a modified idea from "4.3 Implementation details, Bounding the sampling area"
-//                 // this is our own thickness heuristic that relies on sooner discarding samples behind the center
-//                 float falloffBase0 = length(float3(sampleDelta0.x, sampleDelta0.y, sampleDelta0.z * (1.0 + thinOccluderCompensation)));
-//                 float falloffBase1 = length(float3(sampleDelta1.x, sampleDelta1.y, sampleDelta1.z * (1.0 + thinOccluderCompensation)));
-//                 float weight0 = saturate(falloffBase0 * falloffMul + falloffAdd);
-//                 float weight1 = saturate(falloffBase1 * falloffMul + falloffAdd);
-// 
-//                 // sample horizon cos
-//                 float shc0 = dot(sampleHorizonVec0, viewVec);
-//                 float shc1 = dot(sampleHorizonVec1, viewVec);
-// 
-//                 // discard unwanted samples
-//                 shc0 = lerp(lowHorizonCos0, shc0, weight0); // this would be more correct but too expensive: cos(lerp( acos(lowHorizonCos0), acos(shc0), weight0 ));
-//                 shc1 = lerp(lowHorizonCos1, shc1, weight1); // this would be more correct but too expensive: cos(lerp( acos(lowHorizonCos1), acos(shc1), weight1 ));
-// 
-//                 // thickness heuristic - see "4.3 Implementation details, Height-field assumption considerations"
-// #if 0   // (disabled, not used) this should match the paper
-// 				float newhorizonCos0 = max(horizonCos0, shc0);
-// 				float newhorizonCos1 = max(horizonCos1, shc1);
-// 				horizonCos0 = horizonCos0 > shc0 ? lerp(newhorizonCos0, shc0, thinOccluderCompensation) : newhorizonCos0;
-// 				horizonCos1 = horizonCos1 > shc1 ? lerp(newhorizonCos1, shc1, thinOccluderCompensation) : newhorizonCos1;
-// #elif 0 // (disabled, not used) this is slightly different from the paper but cheaper and provides very similar results
-// 				horizonCos0 = lerp(max(horizonCos0, shc0), shc0, thinOccluderCompensation);
-// 				horizonCos1 = lerp(max(horizonCos1, shc1), shc1, thinOccluderCompensation);
-// #else   // this is a version where thicknessHeuristic is completely disabled
-// 				horizonCos0 = max(horizonCos0, shc0);
-// 				horizonCos1 = max(horizonCos1, shc1);
-// #endif
-// 			}
-// 
-// #if 1       // I can't figure out the slight overdarkening on high slopes, so I'm adding this fudge - in the training set, 0.05 is close (PSNR 21.34) to disabled (PSNR 21.45)
-// 			projectedNormalVecLength = lerp(projectedNormalVecLength, 1.0, 0.05);
-// #endif
-// 
-// 			// line ~27, unrolled
-// 			float h0 = -XeGTAO_FastACos(horizonCos1);
-// 			float h1 = XeGTAO_FastACos(horizonCos0);
-// #if 0       // we can skip clamping for a tiny little bit more performance
-// 			h0 = n + clamp(h0 - n, -XE_GTAO_PI_HALF, XE_GTAO_PI_HALF);
-// 			h1 = n + clamp(h1 - n, -XE_GTAO_PI_HALF, XE_GTAO_PI_HALF);
-// #endif
-// 			float iarc0 = (cosNorm + 2.0 * h0 * sin(n) - cos(2.0 * h0 - n)) / 4.0;
-// 			float iarc1 = (cosNorm + 2.0 * h1 * sin(n) - cos(2.0 * h1 - n)) / 4.0;
-// 			float localVisibility = projectedNormalVecLength * (iarc0 + iarc1);
-// 			visibility += localVisibility;
-// 		}
-//         visibility /= SLICE_COUNT;
-//         float vmBoost = viewmodelStrength * FINAL_VALUE_POWER * VIEWMODEL_BOOST; //Halo 2 Anniversary: View Model boost
-// 		visibility = pow(visibility, FINAL_VALUE_POWER + vmBoost); 
-// 		visibility = max(0.03, visibility); // disallow total occlusion (which wouldn't make any sense anyhow since pixel is visible but also helps with packing bent normals)
-//     }
-// 
-//     visibility = saturate(visibility / XE_GTAO_OCCLUSION_TERM_SCALE);
-//     return float2(visibility, edges);
-// }
 void XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, Texture2D sourceViewspaceDepth, SamplerState depthSampler, RWTexture2D<unorm float2> outWorkingAOTermAndEdges, const GTAOConstants consts)
 {
     float2 normalizedScreenPos = (pixCoord + 0.5.xx) * consts.ViewportPixelSize;
@@ -772,9 +532,14 @@ void XeGTAO_AddSample(float ssaoValue, float edgeValue, inout float sum, inout f
 	sumWeight += weight;
 }
 
-float2 XeGTAO_DenoisePS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, SamplerState texSampler, const uniform bool finalApply, const GTAOConstants consts)
+void XeGTAO_DenoiseCS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, SamplerState texSampler, RWTexture2D<unorm float2> outputTexture, const GTAOConstants consts)
 {
-    const float blurAmount = finalApply ? DENOISE_BLUR_BETA : DENOISE_BLUR_BETA / 5.0;
+#if XE_GTAO_FINAL_APPLY
+    const float blurAmount = DENOISE_BLUR_BETA;
+#else
+    const float blurAmount = DENOISE_BLUR_BETA / 5.0;
+#endif
+
     const float diagWeight = 0.85 * 0.5;
 
     float aoTerm[2]; // pixel pixCoordBase and pixel pixCoordBase + int2( 1, 0 )
@@ -801,11 +566,11 @@ float2 XeGTAO_DenoisePS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, Samp
 //     XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, gatherCenter, int2(2, 2)), visQ3);
 
     // Gather edge and visibility quads from working AO texture
-    #if HALO2_GTAO_FULLRES == 1
+    // #if HALO2_GTAO_FULLRES == 1
         const int2 pixCoordScaled = pixCoordBase;
-    #else
-        const int2 pixCoordScaled = pixCoordBase * 0.5;
-    #endif
+    // #else
+    //     const int2 pixCoordScaled = pixCoordBase * 0.5;
+    // #endif
     float4 edgesQ0 = sourceAOTermAndEdges.Load(int3(pixCoordScaled + int2(0, 0), 0)).y;
     float4 edgesQ1 = sourceAOTermAndEdges.Load(int3(pixCoordScaled + int2(2, 0), 0)).y;
     float4 edgesQ2 = sourceAOTermAndEdges.Load(int3(pixCoordScaled + int2(1, 2), 0)).y;
@@ -821,7 +586,6 @@ float2 XeGTAO_DenoisePS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, Samp
 
     // [unroll]
     for (int side = 0; side < 2; side++)
-    // int side = !finalApply;
     {
         const int2 pixCoord = int2(pixCoordBase.x + side, pixCoordBase.y);
 
@@ -875,14 +639,12 @@ float2 XeGTAO_DenoisePS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, Samp
 
 		aoTerm[side] = sum * rcp(sumWeight);
 
-		aoTerm[side] *= finalApply ? XE_GTAO_OCCLUSION_TERM_SCALE : 1.0;
+#if XE_GTAO_FINAL_APPLY
+        outputTexture[pixCoord] = float2(saturate(aoTerm[side] * XE_GTAO_OCCLUSION_TERM_SCALE), 0);
+#else
+        outputTexture[pixCoord] = float2(aoTerm[side], side == 0 ? edgesQ0.y : edgesQ1.x);
+#endif
 	}
-
-	// return float2(min(aoTerm[0], aoTerm[1]), 0.0);
-	return float2(max(aoTerm[0], aoTerm[1]), 0.0);
-	// return float2((aoTerm[0] + aoTerm[1]) * 0.5, 0.0);
-	// return float2((aoTerm[side]), 0.0);
-	// return float2((aoTerm[0]), 0.0);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -991,14 +753,18 @@ void main_pass_cs(uint2 dtid : SV_DispatchThreadID)
     XeGTAO_MainPassCS(dtid, localNoise, viewNormal, t0, s0, ao_term_and_edges, c);
 }
 
-// // See ao1 for denoise pass
-// [numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
-// void denoise_pass_cs(uint2 dtid : SV_DispatchThreadID)
-// {
-//     // tex0 = g_srcWorkingAOTerm and g_srcWorkingEdges, packed
-//     // smp = g_samplerPointClamp
-//     const uint2 pix_coord_base = dtid * uint2(2, 1); // we're computing 2 horizontal pixels at a time (performance optimization)
-//     XeGTAO_DenoiseCS(pix_coord_base, tex0, smp, final_output);
-// }
+// See ao1 for denoise pass
+[numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
+void denoise_pass_cs(uint2 dtid : SV_DispatchThreadID)
+{
+    GTAOConstants c = (GTAOConstants)0;
+
+    // Size
+    float2 swapchainTexSize = LumaSettings.SwapchainSize;
+    c.RenderPixelSize = rcp(swapchainTexSize);
+
+    const uint2 pix_coord_base = dtid * uint2(2, 1); // we're computing 2 horizontal pixels at a time (performance optimization)
+    XeGTAO_DenoiseCS(pix_coord_base, t0, s1, final_output, c);
+}
 
 #endif // __XE_GTAO_HLSLI__

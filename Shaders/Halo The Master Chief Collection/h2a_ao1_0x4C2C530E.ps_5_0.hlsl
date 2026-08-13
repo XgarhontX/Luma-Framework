@@ -23,10 +23,6 @@ Texture2D<float4> PS_TEXTURES_2D_6_ : register(t6); //visiblity & edges
 #define cmp -
 #include "./Includes/Common.hlsl"
 
-#if HALO2_GTAO == 1
-  #include "./Luma_Halo2A_XeGTAO.hlsl"
-#endif
-
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -37,15 +33,8 @@ void main(
   float4 fDest;
 
 #if HALO2_GTAO == 1
-  GTAOConstants c = (GTAOConstants)0;
-
-  // Size
-  float2 swapchainTexSize = LumaSettings.SwapchainSize;
-  c.RenderPixelSize = rcp(swapchainTexSize); //output is full swapchain resolution
-
-  // Do
-  uint2 pixCoord = uint2(v0.xy + int2(-2,0)); //TODO: why -2?
-  r0.x = XeGTAO_DenoisePS(pixCoord, PS_TEXTURES_2D_6_, PS_SAMPLERS_3__s, true, c).x;
+  // use as copy & upscale
+  r0.x = PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_3__s, v1.xy, int2(0, 0)).x;
 #else
   r0.xy = SSAO_TEX_COORD_SCALE.zw + -SSAO_TEX_COORD_SCALE.xy;
   r0.zw = v1.xy + -r0.xy;
