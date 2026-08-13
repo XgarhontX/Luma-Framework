@@ -23,8 +23,8 @@ Texture2D<float4> PS_TEXTURES_2D_6_ : register(t6); //visiblity & edges
 #define cmp -
 #include "./Includes/Common.hlsl"
 
-#if USE_GTAO == 1
-#include "./Includes/XeGTAO.hlsl"
+#if HALO2_GTAO == 1
+  #include "./Luma_Halo2A_XeGTAO.hlsl"
 #endif
 
 void main(
@@ -36,24 +36,16 @@ void main(
   uint4 bitmask, uiDest;
   float4 fDest;
 
-#if USE_GTAO == 1
+#if HALO2_GTAO == 1
   GTAOConstants c = (GTAOConstants)0;
 
   // Size
   float2 swapchainTexSize = LumaSettings.SwapchainSize;
-  float2 swapchainTexSizeHalf = LumaSettings.SwapchainSize * 0.5;
-  c.RenderPixelSize = rcp(swapchainTexSizeHalf); //input is full swapchain resolution
-  c.ViewportPixelSize = rcp(swapchainTexSizeHalf); //output halved
-  c.ViewportSize = swapchainTexSizeHalf;
-
-  // Params
-  c.DenoiseBlurBeta = 0.1;
-  c.OcclusionTermScale = 1.0;
+  c.RenderPixelSize = rcp(swapchainTexSize); //output is full swapchain resolution
 
   // Do
-  uint2 pixCoord = uint2(v1.xy * swapchainTexSizeHalf);
-  r0.x = XeGTAO_Denoise(pixCoord, PS_TEXTURES_2D_6_, PS_SAMPLERS_3__s, true, c);
-
+  uint2 pixCoord = uint2(v0.xy + int2(-2,0));
+  r0.x = XeGTAO_Denoise(pixCoord, PS_TEXTURES_2D_6_, PS_SAMPLERS_3__s, true, c).x;
 #else
   r0.xy = SSAO_TEX_COORD_SCALE.zw + -SSAO_TEX_COORD_SCALE.xy;
   r0.zw = v1.xy + -r0.xy;
@@ -101,26 +93,32 @@ void main(
   float2 aoUv = r0.xy;
   #if HALO2_AO == 0
     r0.x = PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, r0.xy, 0).x; // BRUH!!! Edges not even used...
-  #else
+#else
+    #if HALO2_AO == 0
+      const float edgeThres = 0.6;
+    #else 
+      const float edgeThres = 0.935;
+    #endif
+
     // sample AO with blur
     r0.xy = PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0).xy;
-    if (r0.y > 0.6) { //edges
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 0)).xy;
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 0)).xy;
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, -1)).xy;
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, 1)).xy;
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, -1)).xy;
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, -1)).xy;
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 1)).xy;
-      // r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 1)).xy;
-      // r0.xy /= 9.0; // average
+    if (r0.y > edgeThres) { //edges
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(-1, 0));
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(1, 0));
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(0, -1));
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(0, 1));
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(-1, -1));
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(1, -1));
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(-1, 1));
+      // r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(1, 1));
+      // r0.x /= 9.0; // average
 
-      // only 4 additional
-      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(-1, 0)).xy;
-      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(1, 0)).xy;
-      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, -1)).xy;
-      r0.xy += PS_TEXTURES_2D_6_.SampleLevel(PS_SAMPLERS_4__s, aoUv, 0, int2(0, 1)).xy;
-      r0.xy /= 5.0; // average
+      // 4 additional
+      r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(-1, 0));
+      r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(1, 0));
+      r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(0, -1));
+      r0.x += PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_4__s, aoUv, int2(0, 1));
+      r0.x /= 5.0; // average
     }
   #endif
   // r0.x = saturate(r0.x);

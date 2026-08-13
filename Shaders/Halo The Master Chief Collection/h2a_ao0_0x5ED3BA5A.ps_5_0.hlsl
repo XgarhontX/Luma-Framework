@@ -36,21 +36,21 @@ cbuffer CB_DYNAMIC_PASS_SSAO : register(b7)
   float4 PS_REG_SSAO_MV_3 : packoffset(c4);
   float4 SSAO_FRUSTUM_SCALE : packoffset(c5);
   float4 SSAO_TEX_COORD_SCALE : packoffset(c6);
-  float4 PS_REG_SSAO_FRUSTUM_SCALE : packoffset(c7); //copy of SSAO_FRUSTUM_SCALE, but prefer this
+  float4 PS_REG_SSAO_FRUSTUM_SCALE : packoffset(c7); //copy of SSAO_FRUSTUM_SCALE
   /*
-    PS_REG_SSAO_FRUSTUM_SCALE example @ 78* FOV (unknown hor or vert)
+    PS_REG_SSAO_FRUSTUM_SCALE example @ 78* FOV
     1.623990
     0.913496
     0.615766 (rcp() of 1.623990)
     1.094700 (rcp() of 0.913496)
 
-    PS_REG_SSAO_FRUSTUM_SCALE example @ 90* FOV (unknown hor or vert)
+    PS_REG_SSAO_FRUSTUM_SCALE example @ 90* FOV
     1.966250
     1.106010
     0.508584 (rcp() of 1.966250)
     0.904149 (rcp() of 1.106010)
 
-    PS_REG_SSAO_FRUSTUM_SCALE example @ 120* FOV (unknown hor or vert)
+    PS_REG_SSAO_FRUSTUM_SCALE example @ 120* FOV
     3.10636
     1.74733
     0.32192
@@ -60,19 +60,22 @@ cbuffer CB_DYNAMIC_PASS_SSAO : register(b7)
 
 SamplerState PS_SAMPLERS_0__s : register(s0);
 SamplerState PS_SAMPLERS_3__s : register(s3);
-Texture2D<float4> PS_TEXTURES_2D_0_ : register(t0); //depth
-Texture2D<float4> PS_TEXTURES_2D_2_ : register(t2); //per-pixel rotation/dither (2x 2D vectors, [-1,1], used to jitter the AO kernel)
-Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
+#if HALO2_GTAO == 0
+  Texture2D<float4> PS_TEXTURES_2D_0_ : register(t0); //depth
+  Texture2D<float4> PS_TEXTURES_2D_2_ : register(t2); //per-pixel rotation/dither (2x 2D vectors, [-1,1], used to jitter the AO kernel)
+  Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
+#else
+  Texture2D<float4> GTAO_DepthPreFiltered : register(t0);
+  Texture2D<float4> GTAO_WorldNormals : register(t1);
+#endif
 
 // 3Dmigoto declarations
 #define cmp -
 #include "./Includes/Common.hlsl"
 #include "./Includes/Math.hlsl"
 
-#define USE_GTAO 1
-
-#if USE_GTAO == 1
-  #include "./Includes/XeGTAO.hlsl"
+#if HALO2_GTAO == 1
+  #include "./Luma_Halo2A_XeGTAO.hlsl"
 #else
   // Fixed 8-tap kernel (bit-exact to the original shader). Each tap is rotated per-pixel by the dither
   // vectors (ditherA/ditherB) via a dot product, i.e. tapDir = (dot(kernelDir, ditherA), dot(kernelDir, ditherB)).
@@ -125,14 +128,12 @@ Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
   // AI ahh:
   // Converts a raw depth delta into a smoothed occlusion factor and its blend weight (matches the original curve),
   // further shaped by a GTAO-style cosine-weighted horizon term (grazing/back-facing occluders contribute less,
-  // instead of every depth delta occluding equally) and a smooth radius falloff (fades taps out near the AO
-  // range edge instead of a hard cutoff, reducing banding).
-  float ShapeOcclusionTap(float strength, float delta, float normFactor1, float normFactor2, float horizonCos, float sampleDist, float falloffMul, float falloffAdd, out float weight)
+  // instead of every depth delta occluding equally).
+  float ShapeOcclusionTap(float strength, float delta, float normFactor1, float normFactor2, float horizonCos, float sampleDist, out float weight)
   {
     float scaledDelta = delta * normFactor1;
     float curved = 1.0 - 0.5 * (saturate(-scaledDelta) + min(1.0, abs(scaledDelta)));
-    float distFalloff = saturate(sampleDist * falloffMul + falloffAdd);
-    weight = max(0.5, curved) * distFalloff;
+    weight = max(0.5, curved);
     float edge = saturate(delta * normFactor2) - 1.0;
     float occlusion = min(1.0, curved + curved) * edge * strength + 1.0;
     return lerp(1.0, occlusion, saturate(horizonCos));
@@ -163,7 +164,7 @@ Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
     return min(1.0, curved + curved) * edge * strength + 1.0;
   }
 
-  float CompletePass(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float falloffMul, float falloffAdd, float4 v1) 
+  float CompletePass(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float4 v1) 
   {
     float numerator = 0.0;
     float denominator = 0.0;
@@ -186,7 +187,7 @@ Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
       float delta = SampleHorizonTapDelta(AO_KERNEL_DIR[slot] * ringScale * rightScale1, AO_KERNEL_DEPTH_BIAS[slot] * ringScale / rightScale1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, horizonCos, sampleDist);
 
       float weight;
-      float occlusion = ShapeOcclusionTap(strength, delta, normFactor1, normFactor2, horizonCos, sampleDist, falloffMul, falloffAdd, weight);
+      float occlusion = ShapeOcclusionTap(strength, delta, normFactor1, normFactor2, horizonCos, sampleDist, weight);
 
       numerator += occlusion * weight;
       denominator += weight;
@@ -195,7 +196,7 @@ Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
     return min(1.0, numerator / denominator);
   }
 
-  float CompletePassSimpler(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float falloffMul, float falloffAdd, float4 v1) 
+  float CompletePassSimpler(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float4 v1) 
   {
     float numerator = 0.0;
     float denominator = 0.0;
@@ -227,38 +228,13 @@ void main(
   float3 v3 : TEXCOORD1,
   out float2 o0 : SV_Target0)
 {
-#if USE_GTAO == 1
+#if HALO2_GTAO == 1
   GTAOConstants c = (GTAOConstants)0;
-
-  // // TEST: Depth
-  // float d = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, v1.xy).x;
-  // d = 0.0001 / d; // now 0 - 1000
-  // d = saturate(d);
-  // // d = 1 - d;
-  // o0.x = d;
-  // o0.x = sRGB_Encode(o0.x);
-  // return;
-
-  // world space
-  float3 normal = PS_TEXTURES_2D_3_.Sample(PS_SAMPLERS_3__s, v1.xy).xyz * 2.0 - 1.0;
-  normal = normalize(normal);
-
-  // view space
-  float3 viewspaceNormal;
-  viewspaceNormal = float3(
-      dot(normal, PS_REG_SSAO_MV_1.xyz), // 1: left, 0: right
-      -dot(normal, PS_REG_SSAO_MV_2.xyz), // 1: bottom, 0: top
-      dot(normal, PS_REG_SSAO_MV_3.xyz)  // 1: grazing, 0: facing/perpendicular
-  );
-  viewspaceNormal = normalize(viewspaceNormal);
-  // o0.x = viewspaceNormal.y * 0.5 + 0.5; return;
+  uint2 pixCoord = uint2(v0.xy);
 
   // size
-  float2 swapchainTexSize = LumaSettings.SwapchainSize;
-  float2 swapchainTexSizeHalf = LumaSettings.SwapchainSize * 0.5;
-  c.RenderPixelSize = rcp(swapchainTexSize); //input is full swapchain resolution
-  c.ViewportPixelSize = rcp(swapchainTexSizeHalf); //output halved
-  c.ViewportSize = swapchainTexSizeHalf;
+  c.ViewportSize = LumaSettings.SwapchainSize * 0.5;
+  c.ViewportPixelSize = rcp(c.ViewportSize);
 
   // NDC to View
   float2 frustumScale = PS_REG_SSAO_FRUSTUM_SCALE.xy;
@@ -267,37 +243,49 @@ void main(
   c.NDCToViewAdd = float2(-1.0, 1.0) * frustumScale;
   c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.ViewportPixelSize;
 
-  // Params
-  c.EffectRadius = 1;
-  c.RadiusMultiplier = 1.25;
-  c.EffectFalloffRange = 0.01;
-  c.SampleDistributionPower = 1.;
-  c.ThinOccluderCompensation = 0;
-  c.FinalValuePower = 0.56 * GS.AmbientOcclusion;
-  c.OcclusionTermScale = 1.0;
+  // world space normal
+  // float3 normal = GTAO_WorldNormals.Sample(PS_SAMPLERS_3__s, v1.xy).xyz;
+  float3 normal = GTAO_WorldNormals.Load(uint3(v0.xy * 2, 0)).xyz;
+  normal = mad(normal, 2.0, -1.0);
+  normal = normalize(normal);
+
+  // view space normal
+  float3 viewNormal;
+  viewNormal = float3(
+      dot(normal, PS_REG_SSAO_MV_1.xyz), // 1: left, 0: right
+      -dot(normal, PS_REG_SSAO_MV_2.xyz), // 1: bottom, 0: top
+      dot(normal, PS_REG_SSAO_MV_3.xyz)  // 1: grazing, 0: facing/perpendicular
+  );
+  viewNormal = normalize(viewNormal);
+  // o0.xy = viewNormal.x * 0.5 + 0.5; return; //debug viewNormal
+
+  // Noise
+  #if HALO2_GTAO_NOISE == 0
+    const float frameIndex = 0;
+  #else
+    const float frameIndex = LumaSettings.FrameIndex;
+  #endif
+  float2 localNoise = SpatioTemporalNoise(pixCoord, frameIndex); 
 
   // Do
-  uint2 pixCoord = uint2(v1.xy * swapchainTexSizeHalf);
-  float2 localNoise = GTAO_TemporalNoise(pixCoord, LumaSettings.FrameIndex); 
-  o0.xy = XeGTAO_MainPass(pixCoord, localNoise, viewspaceNormal, PS_TEXTURES_2D_0_, PS_SAMPLERS_3__s, c);
+  o0.xy = XeGTAO_MainPass(pixCoord, localNoise, viewNormal, GTAO_DepthPreFiltered, PS_SAMPLERS_3__s, c);
+
+//   // Depth curvature edge-stopping term, used by the blur pass to avoid bleeding AO across depth discontinuities.
+//   float centerLinearDepth = 0.100000016 / GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy) - 1.33333344e-007;
+//   float depthA0 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy - COMMON_VP_PARAMS[0].xy);
+//   float depthA1 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy + COMMON_VP_PARAMS[0].xy);
+//   float depthB0 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy - COMMON_VP_PARAMS[0].xy * float2(1, -1));
+//   float depthB1 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy + COMMON_VP_PARAMS[0].xy * float2(1, -1));
+// 
+//   float centerRemap = 0.100000016 / centerLinearDepth - 1.33333344e-007;
+//   float curvatureA = (depthA0 + depthA1) - 2.0 * centerRemap;
+//   float curvatureB = (depthB0 + depthB1) - 2.0 * centerRemap;
+// 
+//   float curvature = max(abs(curvatureA), abs(curvatureB)) * centerLinearDepth;
+//   o0.y = saturate(1.0 - curvature * 1024.0);
+
   return;
 #else
-  // TEST: Depth
-  // float d = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, v1.xy).x;
-  // d = 0.0001 / d; // now 0 - 1000
-  // d = saturate(d);
-  // // d = 1 - d;
-  // o0.x = d;
-  // o0.x = sRGB_Encode(o0.x);
-
-  // // linearDepth = (2.0f * Near * Far) / (Far + Near - depthSample * (Far - Near));
-  // // d = 0.0001 / d; // now 0 - 1000
-  // float near = 0.0001;
-  // float far = 1;
-  // d = 2.f * near * far / (far + near - d * (far - near));
-  // o0.x = d;
-  // return;
-
   // World space normal
   const float3 normal = normalize(PS_TEXTURES_2D_3_.Sample(PS_SAMPLERS_3__s, v1.xy).xyz * 2.0 - 1.0);
  
@@ -322,32 +310,31 @@ void main(
   const float normFactor1 = PS_REG_SSAO_PARAMS.z / aoRange;
   const float normFactor2 = 64.0 / aoRange;
 
-  // GTAO-style smooth radius falloff (fraction of aoRange over which taps fade out near the AO range edge).
-  const float AO_FALLOFF_RANGE = 0.8; //TODO: dumb, remove
-  const float falloffFrom = aoRange * (1.0 - AO_FALLOFF_RANGE);
-  const float falloffRange = AO_FALLOFF_RANGE * aoRange;
-  const float falloffMul = -1.0 / falloffRange;
-  const float falloffAdd = falloffFrom / falloffRange + 1.0;
-
   #if HALO2_AO == 0
-    float ao0 = CompletePassSimpler(8, 1, 0, 0.75, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1);
+    float ao0 = CompletePassSimpler(8, 1, 0, 0.75, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
     o0.x = pow(ao0, 1.5 * GS.AmbientOcclusion);
     o0.x = ao0;
   #elif HALO2_AO == 1
-    float ao0 = CompletePass(8*2, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1);
-    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
+    float ao0 = CompletePass(8*2, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
+    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
     o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
   #elif HALO2_AO == 2
-    float ao0 = CompletePass(8*3, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1);
-    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
+    float ao0 = CompletePass(8*3, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
+    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
     o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
   #elif HALO2_AO == 3
-    float ao0 = CompletePass(8*4, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1);
-    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, falloffMul, falloffAdd, v1); //support
+    float ao0 = CompletePass(8*4, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
+    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
+    o0.x = ao0;
+    o0.x = min(ao0, ao1);
+    o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
+  #elif HALO2_AO == 4
+    float ao0 = CompletePass(8*5, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
+    float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
     o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);

@@ -28,6 +28,32 @@ void CalcPeakDeltaByLut(TexTuple lut) {
   if (d > 0) tmi.pDelta /= d;
 }
 
+
+float3 CorrectPerChannelTonemapHiglightsDesaturationCurved(float3 color, float peakBrightness, float highlightsOnly, float desaturationExponent = 2.0, uint colorSpace = CS_DEFAULT)
+{
+    float sourceChrominance = GetChrominance(color);
+
+    float maxBrightness = max3(color); // Do it by rgb max as opposed to by luminance (or average), otherwise blue would get almost no influence, this is a mathematical formula, not strictly perceptual
+	float midBrightness = GetMidValue(color);
+	float minBrightness = min3(color);
+	float brightnessRatio = saturate(maxBrightness / peakBrightness);
+
+  brightnessRatio = lerp(brightnessRatio, sqrt(brightnessRatio), sqrt(saturate(InverseLerp(minBrightness, maxBrightness, midBrightness))));
+  brightnessRatio = pow(brightnessRatio, highlightsOnly); // skewed towards highlights only
+
+	float chrominancePow = lerp(1.0, 1.0 / desaturationExponent, brightnessRatio);
+    float targetChrominance = sourceChrominance > 1.0 ? pow(sourceChrominance, chrominancePow) : (1.0 - pow(1.0 - sourceChrominance, chrominancePow));
+    float chrominanceRatio = safeDivision(targetChrominance, sourceChrominance, 1);
+#if 1 // Keeping the original luminance just looks better compared to not doing it
+    return RestoreLuminance(SetChrominance(color, chrominanceRatio), color, true, colorSpace);
+#elif 1
+    return SetChrominance(color, chrominanceRatio);
+#else
+    // We can't simply change the min, max or mid colors independently to change chrominance, or we'd heavily shift the luminance, so we use the saturation formula.
+    return Saturation(color, chrominanceRatio, colorSpace);
+#endif
+}
+
 // x: linear HDR color
 // pDelta: scaler on peak
 void Rolloff() {
@@ -60,7 +86,7 @@ void Rolloff() {
   ext = LinearPiecewiseExtension(sdr, ext, 0.13, 0.200400533755, 0.0295591208569);
 
   // in B709
-  float3 hdr709 = Neupow(ext, tmi.p, GS.WhiteClip); 
+  float3 hdr709 = Neupow(ext, tmi.p * 0.8, GS.WhiteClip); 
 
   // in BT2020 to generate more blowout naturally
   ext = BT709_To_BT2020(ext); 
@@ -69,22 +95,26 @@ void Rolloff() {
 
   // Hmmmmm's luminance normalization
   float extY = GetLuminance(ext);
-  // hdr709 *= extY / GetLuminance(hdr709); //useless, already pretty much normalized
-  /* if (DVS1)  */sdr *= safeDivision(extY / GetLuminance(sdr), 1.0); //since sdr can only desat "0.9", this isn't too noticeable?
+  hdr709 *= extY / GetLuminance(hdr709);
+  sdr *= safeDivision(extY / GetLuminance(sdr), 1.0); 
 
   // blend HDR and SDR (aka Hue Correction and Additional Blowout)
   sdr = UCS_Encode(sdr);
   ext = UCS_Encode(ext);
   hdr709 = UCS_Encode(hdr709);
-  ext = RestoreHueAndChrominanceUcs(ext, hdr709, 0.3, 0.36, 0);
+  ext = RestoreHueAndChrominanceUcs(ext, hdr709, 0.33, 0.67, 0);
   // ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.622, 0.622, 0.622);
-  ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.826, 0.826, 0.9);
+  ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.8, 0.826, 0.9);
   ext = UCS_Decode(ext);
   ext = max(ext, 0); //clean
   tmi.x = ext;
 
   // exposure 2 (linear white to clip, but just treat as exposure for HDR)
   tmi.x *= PS_REG_COMMON_HDR_PARAMS.z;
+
+  // highlights sat boost
+  tmi.x = CorrectPerChannelTonemapHiglightsDesaturationCurved(tmi.x, tmi.p, 2., 0.867, CS_BT709);
+  tmi.x = max(tmi.x, 0); // clean
 }
 
 void LUT(TexTuple lut) {

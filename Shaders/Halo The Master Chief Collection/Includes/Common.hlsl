@@ -1,3 +1,8 @@
+#ifndef __COMMON_HLSLI__
+#define __COMMON_HLSLI__
+
+#define USE_GTAO 1
+
 #include "GameCBuffers.hlsl"
 #include "../../Includes/Common.hlsl"
 #include "Settings.hlsl"
@@ -250,3 +255,5 @@ float3 UIScaling(float3 x) {
 //   x = sRGB_Encode(x);
 //   return x;
 // }
+
+#endif // __COMMON_HLSLI__

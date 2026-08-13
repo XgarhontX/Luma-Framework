@@ -13,6 +13,8 @@ namespace ShaderDefines
    constexpr uint32_t ALLOW_COLORGRADE = char_ptr_crc32("ALLOW_COLORGRADE");
    constexpr uint32_t HALO3_BLOOM = char_ptr_crc32("HALO3_BLOOM");
    constexpr uint32_t HALO2_AO = char_ptr_crc32("HALO2_AO");
+   constexpr uint32_t HALO2_GTAO = char_ptr_crc32("HALO2_GTAO");
+   constexpr uint32_t HALO2_GTAO_NOISE = char_ptr_crc32("HALO2_GTAO_NOISE");
    constexpr uint32_t SWAPCHAIN_TEST_PEAK = char_ptr_crc32("SWAPCHAIN_TEST_PEAK");
 
    void OnInitAddNewDefines()
@@ -22,7 +24,9 @@ namespace ShaderDefines
          {"ALLOW_AA", '1', true, false, "Allow original anti-alias.", 1},
          {"ALLOW_COLORGRADE", '1', true, false, "Allow original color grading.", 1},
          {"HALO3_BLOOM", '1', true, false, "Halo 3 bloom mode.", 1},
-         {"HALO2_AO", '2', true, false, "Halo 2 bloom quality.", 3},
+         {"HALO2_AO", '2', true, false, "Halo 2 Anniversary AO quality.", 4},
+         {"HALO2_GTAO", '1', true, false, "Halo 2 Anniversary GTAO replacement.", 1},
+         {"HALO2_GTAO_NOISE", '0', true, false, "Halo 2 Anniversary GTAO noise movement.", 1},
          {"SWAPCHAIN_TEST_PEAK", '0', true, false, "Test pattern", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -213,7 +217,7 @@ namespace
    {
       switch (state)
       {
-         case Unknown: return "Unknown";
+         case Unknown: return is_space ? "Menus (Unknown)" : "Unknown";
          case Halo1Classic: return is_space ? "Halo 1 Classic" : "Halo1Classic";
          case Halo1Anniversary: return is_space ? "Halo 1 Anniversary" : "Halo1Anniversary";
          case Halo2Classic: return is_space ? "Halo 2 Classic" : "Halo2Classic";
@@ -224,6 +228,219 @@ namespace
          case HaloReach: return is_space ? "Halo Reach" : "HaloReach";
          case Halo4: return is_space ? "Halo 4" : "Halo4";
          default: return "Unknown";
+      }
+   }
+   
+   ///////////////////////////////////////////////
+
+   namespace XeGTAOHandler //stolen from BioShock mod
+   {
+      constexpr const char* Luma_XeGTAO = "Luma_Halo2A_XeGTAO"; //file name
+      constexpr const char* Luma_H2A_XeGTAO_Prefilter = "H2A XeGTAO Prefilter Depths CS";
+      // constexpr const char* Luma_XeGTAO_MainPass = "XeGTAO Main Pass CS";
+      // constexpr const char* Luma_XeGTAO_DenoisePass1 = "XeGTAO Denoise Pass 1 CS";
+      // constexpr const char* Luma_XeGTAO_DenoisePass2 = "XeGTAO Denoise Pass 2 CS";
+      // constexpr const char* Luma_XeGTAO_Blit = "XeGTAO Blit Copy PS";
+
+      constexpr size_t DEPTH_MIP_LEVELS = 5;
+      constexpr UINT NUMTHREADS_X = 8;
+      constexpr UINT NUMTHREADS_Y = 8;
+      
+      void OnInit()
+      {
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter),    ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
+         // native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_MainPass),     ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
+         // native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+         // native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+         // native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_Blit),         ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "blit_pass_ps"});
+      }
+
+      namespace H2A
+      {
+         bool initialized = false;
+
+         // Depth Prefilter
+         D3D11_TEXTURE2D_DESC depthpre_texdesc = {};
+         ComPtr<ID3D11Texture2D> depthpre_tex;
+         
+         D3D11_UNORDERED_ACCESS_VIEW_DESC depthpre_uavdesc = {};
+         std::array<ID3D11UnorderedAccessView*, DEPTH_MIP_LEVELS> depthpre_uavs;
+         
+         ComPtr<ID3D11ShaderResourceView> depthpre_srv;
+
+         // Main Pass (Terms & Edges)
+         D3D11_TEXTURE2D_DESC main_texdesc = {};
+         ComPtr<ID3D11Texture2D> main_tex;
+
+         D3D11_UNORDERED_ACCESS_VIEW_DESC main_uavdesc = {};
+         ComPtr<ID3D11UnorderedAccessView> main_uav;
+
+         D3D11_SHADER_RESOURCE_VIEW_DESC main_srvdesc = {};
+         ComPtr<ID3D11ShaderResourceView> main_srv;
+
+         D3D11_RENDER_TARGET_VIEW_DESC main_rtvdesc = {};
+         ComPtr<ID3D11RenderTargetView> main_rtv;
+
+         // // Denoise Pass 1
+         // D3D11_TEXTURE2D_DESC denoise1_texdesc = {};
+         // ComPtr<ID3D11Texture2D> denoise1_tex;
+         //
+         // D3D11_UNORDERED_ACCESS_VIEW_DESC denoise1_uavdesc = {};
+         // ComPtr<ID3D11UnorderedAccessView> denoise1_uav;
+         //
+         // ComPtr<ID3D11ShaderResourceView> denoise1_srv;
+
+         void Reset()
+         {
+            if (!initialized) return;
+            initialized = false;
+
+            depthpre_tex.reset();
+            for (auto& uav : depthpre_uavs) uav = nullptr;
+            depthpre_srv.reset();
+
+            main_tex.reset();
+            // main_uav.reset();
+            main_srv.reset();
+
+            // denoise1_tex.reset();
+            // denoise1_uav.reset();
+            // denoise1_srv.reset();
+         }
+      }
+      
+      // For OnDrawOrDispatch
+      void DrawH2A_0(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context,
+         ID3D11ShaderResourceView* srv_depth, ID3D11ShaderResourceView* srv_normals)
+      {
+         // Depth Prefilter: create tex, uavs, srv
+         [[unlikely]]
+         if (!H2A::initialized)
+         {
+            // tex desc
+            H2A::depthpre_texdesc = {};
+            H2A::depthpre_texdesc.Width = device_data.output_resolution.x;
+            H2A::depthpre_texdesc.Height = device_data.output_resolution.y;
+            H2A::depthpre_texdesc.MipLevels = DEPTH_MIP_LEVELS; //pre pass mips!
+            H2A::depthpre_texdesc.ArraySize = 1;
+            H2A::depthpre_texdesc.Format = DXGI_FORMAT_R32_FLOAT;
+            H2A::depthpre_texdesc.SampleDesc.Count = 1;
+            H2A::depthpre_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+         
+            // tex
+            auto hr0 = native_device->CreateTexture2D(&H2A::depthpre_texdesc, nullptr, H2A::depthpre_tex.put());
+            ASSERT_MSG(SUCCEEDED(hr0), "depthpre hr0");
+
+            // uav desc
+            H2A::depthpre_uavdesc.Format = DXGI_FORMAT_R32_FLOAT;
+            H2A::depthpre_uavdesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+         
+            // uavs
+            for (int i = 0; i < H2A::depthpre_uavs.size(); ++i)
+            {
+               H2A::depthpre_uavdesc.Texture2D.MipSlice = i;
+               auto hr = native_device->CreateUnorderedAccessView(H2A::depthpre_tex.get(), &H2A::depthpre_uavdesc, &H2A::depthpre_uavs[i]);
+               ASSERT_MSGF(SUCCEEDED(hr), "depthpre loop hr {}", i);
+            }
+         
+            // srv
+            auto hr1 = native_device->CreateShaderResourceView(H2A::depthpre_tex.get(), nullptr, H2A::depthpre_srv.put());
+            ASSERT_MSG(SUCCEEDED(hr1), "depthpre hr1");
+         }
+         
+         // // CB: Set PS CB7 to CS CB0
+         // ID3D11Buffer* cb7 = nullptr;
+         // native_device_context->PSGetConstantBuffers(7, 1, &cb7);
+         // native_device_context->CSSetConstantBuffers(0, 1, &cb7);
+
+         // // sampler s0
+         // native_device_context->CSSetSamplers(0, 1, &device_data.sampler_state_point);
+         
+         // Depth Prefilter: bind & draw
+         native_device_context->CSSetUnorderedAccessViews(0, H2A::depthpre_uavs.size(), H2A::depthpre_uavs.data(), nullptr); //out: prefiltered depth mips
+         native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter)).get(), nullptr, 0);
+         native_device_context->CSSetShaderResources(0, 1, &srv_depth); //in: depth
+         native_device_context->Dispatch((H2A::depthpre_texdesc.Width + 16 - 1) / 16, (H2A::depthpre_texdesc.Height + 16 - 1) / 16, 1);
+         
+         // Depth Prefilter: unbind uavs
+         constexpr ID3D11UnorderedAccessView* null_uavs[DEPTH_MIP_LEVELS] = {};
+         native_device_context->CSSetUnorderedAccessViews(0,DEPTH_MIP_LEVELS, null_uavs, nullptr);
+
+         // set PS SRV orig depth, pre filter depth, normals (this overrides dither)
+         const std::array <ID3D11ShaderResourceView*, 4> srvs = { H2A::depthpre_srv.get(), srv_normals, nullptr, nullptr };
+         native_device_context->PSSetShaderResources(0, srvs.size(), srvs.data());
+         
+         // // Main Pass: create AO terms & edges buffer
+         // [[unlikely]]
+         // if (!H2A::initialized)
+         // {
+         //    // tex desc
+         //    H2A::main_texdesc = {};
+         //    H2A::main_texdesc.Width = device_data.output_resolution.x;
+         //    H2A::main_texdesc.Height = device_data.output_resolution.y;
+         //    H2A::main_texdesc.MipLevels = 1;
+         //    H2A::main_texdesc.ArraySize = 1;
+         //    H2A::main_texdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+         //    H2A::main_texdesc.SampleDesc.Count = 1;
+         //    H2A::main_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+         //
+         //    // tex
+         //    H2A::main_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+         //    auto hr0 = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main_tex.put());
+         //    ASSERT_MSG(SUCCEEDED(hr0), "main hr0");
+         //    
+         //    // uav desc
+         //    H2A::main_uavdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+         //    H2A::main_uavdesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+         //    
+         //    // uav
+         //    auto hr1 = native_device->CreateUnorderedAccessView(H2A::main_tex.get(), &H2A::main_uavdesc, H2A::main_uav.put());
+         //    ASSERT_MSG(SUCCEEDED(hr1), "main hr1");
+         //
+         //    // srv desc
+         //    // H2A::main_srvdesc = {};
+         //    // H2A::main_srvdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+         //    // H2A::main_srvdesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+         //    // H2A::main_srvdesc.Texture2D.MostDetailedMip = 0;
+         //    // H2A::main_srvdesc.Texture2D.MipLevels = 1;
+         //    
+         //    // srv
+         //    auto hr2 = native_device->CreateShaderResourceView(H2A::main_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main_srv.put());
+         //    ASSERT_MSG(SUCCEEDED(hr2), "main hr2");
+         //
+         //    // rtv desc
+         //    H2A::main_rtvdesc = {};
+         //    H2A::main_rtvdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+         //    H2A::main_rtvdesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+         //    H2A::main_rtvdesc.Texture2D.MipSlice = 0;
+         //    
+         //    // rtv
+         //    auto hr3 = native_device->CreateRenderTargetView(H2A::main_tex.get(), &H2A::main_rtvdesc, H2A::main_rtv.put()); //TOOD: keeps failing
+         //    ASSERT_MSG(SUCCEEDED(hr3), "main hr3");
+         // }
+         //
+         // // Main: Bindings & Draw
+         // native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main_uav, nullptr); //out: AO term and Edges
+         // native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_MainPass)).get(), nullptr, 0);
+         // // const std::array srvs_main_pass = { &H2A::depthpre_srv, &srv_normals }; //in: prefiltered depth mips & normals
+         // // native_device_context->CSSetShaderResources(0, srvs_main_pass.size(), srvs_main_pass.data());
+         // native_device_context->CSSetShaderResources(0, 1, &H2A::depthpre_srv);
+         // native_device_context->CSSetShaderResources(1, 1, &srv_normals);
+         // native_device_context->Dispatch((H2A::main_texdesc.Width + NUMTHREADS_X - 1) / NUMTHREADS_X, (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y, 1);
+         //
+         // // debug: set main as srv 0 so we can see it in the game
+         // native_device_context->PSSetShaderResources(0, 1, &H2A::main_srv); //TOOD: wont work
+
+         // // set RTV 0 to main rtv
+         // native_device_context->OMSetRenderTargets(1, &H2A::main_rtv, nullptr);
+
+         // state
+         H2A::initialized = true;
+      }
+      
+      void OnSubGameChange(SubGame prev_game, SubGame new_game)
+      {
+         if (/*prev_game == Halo2Anniversary &&*/ new_game != Halo2Anniversary) H2A::Reset();
       }
    }
    
@@ -437,18 +654,18 @@ namespace
       bool best_resource_unorm_disallow = false;
       void SetSubGame(SubGame new_game)
       {
-         // return when clean up is queued
+         // wait for clean up...
          if (ClearIndirectUpgradesHandler::is_queued) return;
          
          // resolve override
          if (over != Unknown) new_game = over;
          
          // prev
-         auto prev_game = curr;
-         bool is_changed = prev_game != new_game;
+         auto prev = curr;
+         bool is_changed = prev != new_game;
 
          // last
-         static auto last_game = Unknown; //last known successful
+         static auto last_game = Unknown; // never Unknown
          bool is_completely_changed = false;
          if (new_game != Unknown)
          {
@@ -472,10 +689,13 @@ namespace
          if (!is_changed) return; 
          
          // log
-         reshade::log::message(reshade::log::level::info, std::format("SubGame changed from {} to {}", SubGameToString(prev_game), SubGameToString(curr)).c_str());
+         reshade::log::message(reshade::log::level::info, std::format("SubGame changed from {} to {}", SubGameToString(prev), SubGameToString(curr)).c_str());
             
          // SubGameUserSettingsHandler
          SubGameUserSettingsHandler::OnSubGameChange(curr);
+
+         // XeGTAOHandler
+         XeGTAOHandler::OnSubGameChange(prev, curr);
             
          // reset upgrades params
          enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
@@ -505,10 +725,13 @@ namespace
                if (!best_resource_unorm_disallow) best_resource_unorm = true; //TODO: Luma needs this or something better for core.hpp!
                break;
             case Halo2Anniversary:
-               // 0x65E212E2 normals downsample (orig: SRV0)
+               auto_texture_format_upgrade_shader_hashes[0x87F940A3] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //dof down 0
+               auto_texture_format_upgrade_shader_hashes[0xBF5A726E] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //dof down 1
+               auto_texture_format_upgrade_shader_hashes[0xC5A027C1] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //dof final
                auto_texture_format_upgrade_shader_hashes[0x8D11B112] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
                auto_texture_format_upgrade_shader_hashes[0xBDDD9A3C] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01
                auto_texture_format_upgrade_shader_hashes[0xE5A32080] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t02
+               auto_texture_format_upgrade_shader_hashes[0x60449413] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t03
                auto_texture_format_upgrade_shader_hashes[0xB5D334B0] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //aa
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //blit
                auto_texture_format_upgrade_shader_hashes[0xBF5A726E] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //after blit downsample blur (concussion)
@@ -539,7 +762,7 @@ namespace
          }
       }
       
-      // Safer way to switch in OnDrawOrDispatch()
+      // Safe way to switch in OnDrawOrDispatch()
       SubGame queued = Unknown;
       void Enqueue(SubGame game, bool is_override = false)
       {
@@ -593,11 +816,6 @@ namespace
       color.Value.z *= m;
       return color;
    }
-
-   ///////////////////////////////////////////////
-
-   constexpr std::string_view Luma_sRGBEncode_PS = "Luma_sRGBEncode_PS";
-   constexpr std::string_view Luma_DisplayComposition1 = "Luma_DisplayComposition1";
 }
 
 // struct GameDeviceDataHaloTMCC : GameDeviceData
@@ -627,7 +845,10 @@ public:
 
       // Native Shaders: Display Composition replacement
       native_shaders_definitions.erase(CompileTimeStringHash("Display Composition"));
-      native_shaders_definitions.emplace(CompileTimeStringHash("Display Composition"), ShaderDefinition{Luma_DisplayComposition1.data(), reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Display Composition"), ShaderDefinition{"Luma_DisplayComposition1", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      // XeGTAOHandler
+      XeGTAOHandler::OnInit();
 
       // OnReShadePresent
       reshade::register_event<reshade::addon_event::reshade_present>(ClearIndirectUpgradesHandler::OnReShadePresent);
@@ -666,52 +887,34 @@ public:
       }
       
       // Halo2Anniversary: AO
-      static com_ptr<ID3D11ShaderResourceView> h2a_buffer_depth;
-      static com_ptr<ID3D11ShaderResourceView> h2a_buffer_normals;
-      if (!device_data.has_drawn_main_post_processing && SubGameHandler::curr == Halo2Anniversary)
+      static ComPtr<ID3D11ShaderResourceView> h2a_ao_depth;
+      static ComPtr<ID3D11ShaderResourceView> h2a_ao_normals;
+      if (!device_data.has_drawn_main_post_processing && SubGameHandler::curr == Halo2Anniversary && ShaderDefines::GetBool(ShaderDefines::HALO2_GTAO))
       {
          if (ps == 0x65E212E2)
          {
-            // // array DX11 SRVs size 3
-            // std::array<ID3D11ShaderResourceView*, 3> srvs;
-            // native_device_context->PSGetShaderResources(0, srvs.size(), srvs.data());
-            //
-            // // get SRV 0: normals
-            // h2a_buffer_normals.srv.attach(srvs[0]);
-            //
-            // // get SRV 2: depth
-            // h2a_buffer_depth.srv.attach(srvs[2]);
-            // 
-            // // release
-            // ResetCOMArray(srvs);
-      
-            // get SRV 0: normals
-            ID3D11ShaderResourceView* p0;
-            native_device_context->PSGetShaderResources(0, 1, &p0);
-            h2a_buffer_depth.reset(p0);
-            
-            // get SRV 2: depth
-            ID3D11ShaderResourceView* p1;
-            native_device_context->PSGetShaderResources(2, 1, &p1);
-            h2a_buffer_normals.reset(p1);
-      
-            return DrawOrDispatchOverrideType::None;
-         }
-      
-         if (ps == 0x5ED3BA5A)
-         {
-            // set SRV 0: normals
-            auto p0 = h2a_buffer_normals.get();
-            native_device_context->PSSetShaderResources(0, 1, &p0);
-            
-            // set SRV 3: depth
-            auto p1 = h2a_buffer_depth.get();
-            native_device_context->PSSetShaderResources(3, 1, &p1);
+            // fetch 3
+            std::array<ID3D11ShaderResourceView*, 3> tmp;
+            native_device_context->PSGetShaderResources(0, tmp.size(), tmp.data()); //get
+            h2a_ao_normals.attach(tmp[0]); //normals
+            h2a_ao_depth.attach(tmp[2]); //depth
+            if (tmp[1]) tmp[1]->Release(); //release unused
 
-            // SetViewportFullscreen(native_device_context, uint2(cb_luma_global_settings.SwapchainSize.x * 0.5f, cb_luma_global_settings.SwapchainSize.y * 0.5f));
-      
+            return DrawOrDispatchOverrideType::None; //let downsample continue
+         }
+         
+         if (ps == 0x5ED3BA5A) // ao0: create Visibility and Edges
+         {
+            // GTAO override //TODO: currently used to prefilter depth only
+            XeGTAOHandler::DrawH2A_0(device_data, native_device, native_device_context, h2a_ao_depth.get(), h2a_ao_normals.get());
+            
             return DrawOrDispatchOverrideType::None;
          }
+
+         // if (ps == 0x4C2C530E && drawn_ao0) // ao1: resolve to AO
+         // {         
+         //    return DrawOrDispatchOverrideType::None;
+         // }
       }
       
       // Halo2Anniversary: blit
@@ -796,7 +999,7 @@ public:
       // WarmupDirectAndIndirectHandler
       WarmupDirectAndIndirectHandler::OnPresent();
 
-      //reset cb_luma_global_settings.GameSettings.UIBlurDown0Count
+      // reset cb_luma_global_settings.GameSettings.UIBlurDown0Count
       cb_luma_global_settings.GameSettings.UIBlurDown0Count = 0; // will apply start of next frame
       
       // reset device_data.has_drawn_main_post_processing
@@ -821,12 +1024,11 @@ public:
       reshade::get_config_value(nullptr, NAME, "allow_gamma_slider", allow_gamma_slider);
 
       // custom_sdr_gamma
-      // custom_sdr_gamma
       reshade::get_config_value(nullptr, NAME, "custom_sdr_gamma", custom_sdr_gamma);
       ShaderDefines::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0);
       defines_need_recompilation = true;
 
-      //Reset ALLOW_COLORGRADE
+      // Reset ALLOW_COLORGRADE
       ShaderDefines::Set(ShaderDefines::ALLOW_COLORGRADE, true);
 
       // SubGameUserSettingsHandler
@@ -835,7 +1037,12 @@ public:
    
    void PrintImGuiAbout() override
    {
-      
+      ImGui::Text("Build Date:");
+      ImGui::Text(__DATE__);
+      ImGui::Text(__TIME__);
+      ImGui::NewLine();
+
+      ImGui::Text("wort wort wort");
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -924,7 +1131,7 @@ public:
       // Miscellaneous
       if (ImGui::CollapsingHeader("Miscellaneous"))
       {
-         DrawColoredSubHeader("Miscellaneous Post Processing");
+         DrawColoredSubHeader("Bloom");
 
          //Bloom
          auto GetMaxBloomBySubGame = [](SubGame state) -> float
@@ -943,11 +1150,31 @@ public:
 
          ShaderDefines::UIDropDown(ShaderDefines::HALO3_BLOOM, "Halo 3 Bloom Mode", { "Saturation Preserved", "Blown Out (Vanilla)" }, "How should bloom be processed in Halo 3?\nSince bloom bathes the screen, this can the change the hues of the whole image.");
 
-         if (ImGui::SliderFloat("Film Grain", &cb_luma_global_settings.GameSettings.FilmGrain, 0.f, 1.f, "%.2f"))
-            reshade::set_config_value(nullptr, NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
+         ImGui::NewLine(); //////////////
+         
+         DrawColoredSubHeader("Ambient Occlusion");
+
+         // AmbientOcclusion
+         if (ImGui::SliderFloat("Ambient Occlusion", &cb_luma_global_settings.GameSettings.AmbientOcclusion, 0.f, 2.f, "%.2f"))
+            reshade::set_config_value(nullptr, NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Multiplier on Film Grain strength when applicable.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.FilmGrain, 1.f, "FilmGrain", nullptr);
+            ImGui::SetTooltip("Multiplier on AO strength when applicable.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.AmbientOcclusion, 1.f, "AmbientOcclusion", nullptr);
+
+         // HALO2_AO
+         ShaderDefines::UIDropDown(ShaderDefines::HALO2_AO, "Halo 2 Anniversary: AO Quality", { "Easy (Vanilla if SSAO)", "Normal", "Heroic", "Legendary", "LASO" }, "The quality of Halo 2 Ambient Occlusion.");
+
+         // HALO2_GTAO
+         auto gtao_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO, "Halo 2 Anniversary: GTAO", "Highly recommended!\nReplaces Halo 2 Anniversary's SSAO for modern GTAO.\n\nThis will cost some performance to insert the higher quality FX.\nGrass will get slightly darker.");
+
+         // HALO2_GTAO_NOISE
+         if (!gtao_enabled) ImGui::BeginDisabled();
+         ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_NOISE, "Halo 2 Anniversary: GTAO Noisy", "Let noise jitter randomly.\n(Supposed to be for TAA, but maybe it can look ok without.");
+         if (!gtao_enabled) ImGui::EndDisabled();
+         
+         ImGui::NewLine(); //////////////
+
+         DrawColoredSubHeader("Miscellaneous");
 
          // WhiteClip
          if (SubGameHandler::curr == Halo4) ImGui::BeginDisabled();
@@ -958,18 +1185,15 @@ public:
          DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, 1.f, "WhiteClip", nullptr);
          if (SubGameHandler::curr == Halo4) ImGui::EndDisabled();
 
-         // AmbientOcclusion
-         if (ImGui::SliderFloat("Ambient Occlusion", &cb_luma_global_settings.GameSettings.AmbientOcclusion, 0.f, 2.f, "%.2f"))
-            reshade::set_config_value(nullptr, NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
+         // FilmGrain
+         if (ImGui::SliderFloat("Film Grain", &cb_luma_global_settings.GameSettings.FilmGrain, 0.f, 1.f, "%.2f"))
+            reshade::set_config_value(nullptr, NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Multiplier on AO strength when applicable.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.AmbientOcclusion, 1.f, "AmbientOcclusion", nullptr);
-
-         // HALO2_AO
-         ShaderDefines::UIDropDown(ShaderDefines::HALO2_AO, "Halo 2 AO Quality", { "Easy (Vanilla)", "Normal", "Heroic", "Legendary" }, "The quality of the Halo 2 AO pass.");
-
+            ImGui::SetTooltip("Multiplier on Film Grain strength when applicable.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.FilmGrain, 1.f, "FilmGrain", nullptr);
+         
          //ALLOW_COLORGRADE
-         ShaderDefines::UIToggleCheckmark(ShaderDefines::ALLOW_COLORGRADE, "Color Grading (Debug)", "Disable to skip color grading,\nexposing the raw HDR input after rolloff.");
+         ShaderDefines::UIToggleCheckmark(ShaderDefines::ALLOW_COLORGRADE, "Color Grading (Debug)", "Disable to skip color grading,\nexposing the raw HDR input.");
       }
       
       // SubGame
