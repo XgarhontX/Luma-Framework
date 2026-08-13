@@ -312,32 +312,32 @@ void main(
 
   #if HALO2_AO == 0
     float ao0 = CompletePassSimpler(8, 1, 0, 0.75, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
-    o0.x = pow(ao0, 1.5 * GS.AmbientOcclusion);
+    o0.x = pow(ao0, 1.5);
     o0.x = ao0;
   #elif HALO2_AO == 1
     float ao0 = CompletePass(8*2, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
     float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
-    o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
+    o0.x = pow(o0.x, 1.46);
   #elif HALO2_AO == 2
     float ao0 = CompletePass(8*3, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
     float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
-    o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
+    o0.x = pow(o0.x, 1.46);
   #elif HALO2_AO == 3
     float ao0 = CompletePass(8*4, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
     float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
-    o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
+    o0.x = pow(o0.x, 1.46);
   #elif HALO2_AO == 4
     float ao0 = CompletePass(8*5, 1, 0, 1.3, 1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1);
     float ao1 = CompletePassSimpler(8, 0.36, 0, 1, 0.6, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, normFactor1, normFactor2, v1); //support
     o0.x = ao0;
     o0.x = min(ao0, ao1);
-    o0.x = pow(o0.x, 1.46 * GS.AmbientOcclusion);
+    o0.x = pow(o0.x, 1.46);
   #endif
 
   /////////////////////////////

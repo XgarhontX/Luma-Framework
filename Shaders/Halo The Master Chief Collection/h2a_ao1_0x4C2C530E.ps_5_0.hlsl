@@ -45,7 +45,7 @@ void main(
 
   // Do
   uint2 pixCoord = uint2(v0.xy + int2(-2,0));
-  r0.x = XeGTAO_Denoise(pixCoord, PS_TEXTURES_2D_6_, PS_SAMPLERS_3__s, true, c).x;
+  r0.x = XeGTAO_DenoisePS(pixCoord, PS_TEXTURES_2D_6_, PS_SAMPLERS_3__s, true, c).x;
 #else
   r0.xy = SSAO_TEX_COORD_SCALE.zw + -SSAO_TEX_COORD_SCALE.xy;
   r0.zw = v1.xy + -r0.xy;
@@ -124,8 +124,8 @@ void main(
   // r0.x = saturate(r0.x);
 #endif
 
-  r0.x = pow(r0.x, PS_REG_SSAO_PARAMS.x); //strength
-  r0.x = max(PS_REG_SSAO_PARAMS.y, r0.x);
+  r0.x = pow(r0.x, PS_REG_SSAO_PARAMS.x * GS.AmbientOcclusion); // strength
+  r0.x = max(PS_REG_SSAO_PARAMS.y, r0.x); // minimum value
   o0.xy = r0.xx;
 
   return;
