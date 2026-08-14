@@ -91,12 +91,12 @@ void main(
   r0.xyzw = 0.25 * r0.xyzw;
 
   float y = GetLuminance(r0.xyz);
-  const float p = 1 / 0.25;
+  const float p = 0.3;
   #if HALO3_BLOOM == 0
-    r0.xyz *= safeDivision(Neutwo(r0.xyz, 1), y);
+    r0.xyz *= safeDivision(Neupow(r0.xyz, 1, 3), y);
     // r0.xyz = saturate(r0.xyz);
   #else
-    r0.xyz = Neutwo(r0.xyz, p);
+    r0.xyz = Neupow(r0.xyz, p, 3);
   #endif
   r0.w = Neutwo(r0.w, p);
 

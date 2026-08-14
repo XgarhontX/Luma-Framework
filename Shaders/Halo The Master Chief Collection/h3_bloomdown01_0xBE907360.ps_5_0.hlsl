@@ -118,7 +118,7 @@ void main(
   // o0.xyz = pow(o0.xyz, 2.6);
   // o0.xyz = sRGB_Decode(o0.xyz);
   o0.xyzw = r0.xyzw * float4(0.0625,0.0625,0.0625,0.0625) + r1.xyzw;
-  o0.xyz *= 1.126; // bloom only
+  o0.xyz *= 1.18; // bloom only
   // w (luma) is used by autoexposure
   o0 = max(o0, 0);
   return;
