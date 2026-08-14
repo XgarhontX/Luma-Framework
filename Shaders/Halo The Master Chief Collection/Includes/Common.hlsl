@@ -77,10 +77,16 @@ float Neupow(float x, float peak, float power) {
   return peak * rcp(exp2(log2(1.0f + p_over_x_pow_a) * rcp(power)));
 }
 float3 NeupowHQ(float3 x, float peak, float power) {
-  return (x * peak) / pow(pow(x, power) + pow(peak, power), rcp(power));
+  float3 m = max(x, peak); //normalization to avoid float
+  float3 xn = x / m;
+  float3 pn = peak / m;
+  return m * (xn * pn) / pow(pow(xn, power) + pow(pn, power), rcp(power));
 }
 float NeupowHQ(float x, float peak, float power) {
-  return (x * peak) / pow(pow(x, power) + pow(peak, power), rcp(power));
+  float m = max(x, peak); //normalization to avoid float
+  float xn = x / m;
+  float pn = peak / m;
+  return m * (xn * pn) / pow(pow(xn, power) + pow(pn, power), rcp(power));
 }
 
 float Neutwo(float x, float peak, float clip) {
