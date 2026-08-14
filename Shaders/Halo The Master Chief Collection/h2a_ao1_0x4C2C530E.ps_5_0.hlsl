@@ -34,7 +34,7 @@ void main(
 
 #if HALO2_GTAO == 1
   // use as copy & upscale
-  r0.x = PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_3__s, v1.xy, int2(0, 0)).x;
+  r0.x = PS_TEXTURES_2D_6_.GatherRed(PS_SAMPLERS_3__s, v1.xy, int2(-2, -2)).x;
 #else
   r0.xy = SSAO_TEX_COORD_SCALE.zw + -SSAO_TEX_COORD_SCALE.xy;
   r0.zw = v1.xy + -r0.xy;

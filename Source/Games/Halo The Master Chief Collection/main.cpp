@@ -25,10 +25,10 @@ namespace ShaderDefines
          {"ALLOW_AA", '1', true, false, "Allow original anti-alias.", 1},
          {"ALLOW_COLORGRADE", '1', true, false, "Allow original color grading.", 1},
          {"HALO3_BLOOM", '1', true, false, "Halo 3 bloom mode.", 1},
-         {"HALO2_AO", '2', true, false, "Halo 2 Anniversary AO quality.", 4},
+         {"HALO2_AO", '1', true, false, "Halo 2 Anniversary AO quality.", 4},
          {"HALO2_GTAO", '1', true, false, "Halo 2 Anniversary GTAO replacement.", 1},
-         {"HALO2_GTAO_NOISE", '0', true, false, "Halo 2 Anniversary GTAO noise movement.", 1},
-         {"HALO2_GTAO_FULLRES", '0', true, false, "Halo 2 Anniversary GTAO do full resolution.", 1},
+         {"HALO2_GTAO_NOISE", '1', true, false, "Halo 2 Anniversary GTAO noise movement.", 1},
+         {"HALO2_GTAO_FULLRES", '1', true, false, "Halo 2 Anniversary GTAO do full resolution.", 1},
          {"SWAPCHAIN_TEST_PEAK", '0', true, false, "Test pattern", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -285,15 +285,6 @@ namespace
          D3D11_RENDER_TARGET_VIEW_DESC main_rtvdesc = {};
          ComPtr<ID3D11RenderTargetView> main0_rtv;
          ComPtr<ID3D11RenderTargetView> main2_rtv;
-
-         // // Denoise Pass 1
-         // D3D11_TEXTURE2D_DESC denoise1_texdesc = {};
-         // ComPtr<ID3D11Texture2D> denoise1_tex;
-         //
-         // D3D11_UNORDERED_ACCESS_VIEW_DESC denoise1_uavdesc = {};
-         // ComPtr<ID3D11UnorderedAccessView> denoise1_uav;
-         //
-         // ComPtr<ID3D11ShaderResourceView> denoise1_srv;
 
          void Reset()
          {
@@ -762,6 +753,8 @@ namespace
          // set new Indirect Upgrades hashes
          auto_texture_format_upgrade_shader_hashes[0x5B190892] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00
          auto_texture_format_upgrade_shader_hashes[0x3CC502A9] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00 subsequent downsamples
+         auto_texture_format_upgrade_shader_hashes[0xF207E935] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blur settings 0
+         auto_texture_format_upgrade_shader_hashes[0xE45B4EB7] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blur settings subsequent downsample
          switch (curr)
          {
             case Halo1Classic:
@@ -1234,16 +1227,16 @@ public:
          ShaderDefines::UIDropDown(ShaderDefines::HALO2_AO, "Halo 2 Anniversary: AO Quality", { "Easy (Vanilla if SSAO)", "Normal", "Heroic", "Legendary", "LASO" }, "The quality of Halo 2 Ambient Occlusion.");
 
          // HALO2_GTAO
-         auto gtao_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO, "Halo 2 Anniversary: GTAO", "Highly recommended!\nReplaces Halo 2 Anniversary's SSAO for modern GTAO.\n\nThis will cost some performance to insert the higher quality FX.\nGrass will get slightly darker.");
+         auto gtao_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO, "Halo 2 Anniversary: GTAO", "Highly recommended!\nReplaces Halo 2 Anniversary's SSAO that darkens all edges for modern GTAO.\n\nThis may cost some performance to insert the higher quality FX.\nGrass will have more AO as GTAO is unintentionally too good.");
 
          // HALO2_GTAO_NOISE
          if (!gtao_enabled.first) ImGui::BeginDisabled();
-         ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_NOISE, "Halo 2 Anniversary: GTAO Dynamic Noise", "Let noise jitter randomly.\n(Supposed to be for TAA, but maybe it can look ok without.");
+         ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_NOISE, "Halo 2 Anniversary: GTAO Dynamic Noise", "Let noise jitter randomly.\nSupposed to be for TAA, but we are limited.\nMaybe it's unnoticable at higher FPS.");
          if (!gtao_enabled.first) ImGui::EndDisabled();
 
          // HALO2_GTAO_FULLRES
          if (!gtao_enabled.first) ImGui::BeginDisabled();
-         auto gtao_fullres_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_FULLRES, "Halo 2 Anniversary: GTAO Full Res", "Instead of original 0.5x, run GTAO at 1x resolution.\nThis will cost more performance, so consider lowering quality.");
+         auto gtao_fullres_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_FULLRES, "Halo 2 Anniversary: GTAO Full Res", "Instead of original 0.5x, run GTAO at 1x resolution for more precise edge detection.");
          if (gtao_fullres_enabled.second) XeGTAOHandler::H2A::Reset();
          if (!gtao_enabled.first) ImGui::EndDisabled();
          
