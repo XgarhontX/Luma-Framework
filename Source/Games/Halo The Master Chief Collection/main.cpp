@@ -548,8 +548,7 @@ namespace
       void OnPresent()
       {
          if (warmup_frames > -1) warmup_frames--;
-         if (warmup_frames == 0) enable_chain_indirect_texture_format_upgrades =
-            (ChainTextureFormatUpgradesType)(max((uint8_t)ChainTextureFormatUpgradesType::None, (uint8_t)ChainTextureFormatUpgradesType::DirectDependencies - 1));
+         if (warmup_frames == 0) enable_chain_indirect_texture_format_upgrades = warmup_end;
       }
    }
    
