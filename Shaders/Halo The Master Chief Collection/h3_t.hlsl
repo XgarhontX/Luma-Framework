@@ -16,6 +16,7 @@ struct TexTuple {
 
 void SetColor(float3 x) {
   tmi.x = x;
+  tmi.x = max(tmi.x, 0);
 }
 
 float Rolloff_Root(float4 c) {
@@ -51,6 +52,7 @@ float3 Rolloff_Pos(float3 x, float4 c) {
 void Rolloff(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor, float4 c) {
   // SDR
   tmi.sdr = Rolloff_Pos(min(c.x, tmi.x), c);
+  tmi.sdr = max(tmi.sdr, 0);
 
   // SDR early out
   if (!HDR_ENABLED) {
@@ -88,7 +90,18 @@ void Rolloff(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor, float4 c) {
 
   // HDR Rolloff
   tmi.p = GammaCorrectionPeak(HDR_PEAK * pDelta);
-  tmi.x = NeupowHQ(tmi.x, tmi.p, 8 * GS.WhiteClip); // TODO: user white clip
+  tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip); // TODO: user white clip
+
+  // Hue Correct
+  float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 2, 1));
+  sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1);
+  sdr = UCS_Encode(sdr);
+  tmi.x = UCS_Encode(tmi.x);
+  tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.3, 0.1, 0.89);
+  tmi.x = UCS_Decode(tmi.x);
+
+  tmi.x = max(tmi.x, 0);
+  tmi.x = min(tmi.x, tmi.p);
 }
 
 void LUT(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor) {
