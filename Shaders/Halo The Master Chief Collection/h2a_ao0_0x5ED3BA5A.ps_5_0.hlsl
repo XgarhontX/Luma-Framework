@@ -58,174 +58,159 @@ cbuffer CB_DYNAMIC_PASS_SSAO : register(b7)
   */
 }
 
-// Force off // TODO: clean up since CS is better
-#ifdef HALO2_GTAO
-#undef HALO2_GTAO
-#define HALO2_GTAO 0
-#endif
-
 SamplerState PS_SAMPLERS_0__s : register(s0);
 SamplerState PS_SAMPLERS_3__s : register(s3);
-#if HALO2_GTAO == 0
-  Texture2D<float4> PS_TEXTURES_2D_0_ : register(t0); //depth
-  Texture2D<float4> PS_TEXTURES_2D_2_ : register(t2); //per-pixel rotation/dither (2x 2D vectors, [-1,1], used to jitter the AO kernel)
-  Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
-#else
-  Texture2D<float4> GTAO_DepthPreFiltered : register(t0);
-  Texture2D<float4> GTAO_WorldNormals : register(t1);
-#endif
+Texture2D<float4> PS_TEXTURES_2D_0_ : register(t0); //depth
+Texture2D<float4> PS_TEXTURES_2D_2_ : register(t2); //per-pixel rotation/dither (2x 2D vectors, [-1,1], used to jitter the AO kernel)
+Texture2D<float4> PS_TEXTURES_2D_3_ : register(t3); //normal
 
 // 3Dmigoto declarations
 #define cmp -
 #include "./Includes/Common.hlsl"
 #include "./Includes/Math.hlsl"
 
-#if HALO2_GTAO == 1
-  #include "./Luma_Halo2A_XeGTAO.hlsl"
-#else
-  // Fixed 8-tap kernel (bit-exact to the original shader). Each tap is rotated per-pixel by the dither
-  // vectors (ditherA/ditherB) via a dot product, i.e. tapDir = (dot(kernelDir, ditherA), dot(kernelDir, ditherB)).
-  static const float2 AO_KERNEL_DIR[8] =
+// Fixed 8-tap kernel (bit-exact to the original shader). Each tap is rotated per-pixel by the dither
+// vectors (ditherA/ditherB) via a dot product, i.e. tapDir = (dot(kernelDir, ditherA), dot(kernelDir, ditherB)).
+static const float2 AO_KERNEL_DIR[8] =
+{
+  float2(0.0666666701, -0.0666666701),
+  float2(-0.0599999987, -0.0599999987),
+  float2(0.0533333346, 0.0533333346),
+  float2(-0.0466666669, 0.0466666669),
+
+  float2(-0.0424264073, 0),
+  float2(0.0353553407, 0),
+  float2(0, -0.0318198055),
+  float2(0, 0.0282842703),
+};
+static const float AO_KERNEL_DEPTH_BIAS[8] =
+{
+  0.0333333351, 0.0299999993, 0.0266666673, 0.0233333334,
+  0.0424264073, 0.0353553407, 0.0318198055, 0.0282842703,
+};
+
+// AI ahh:
+// One horizon-based occlusion tap: offsets the view-space position along a dithered kernel direction,
+// reflects it around the normal-bent view direction, reprojects it to screen space and diffs the depths.
+// Also recovers the *actual* view-space occluder position (GTAO-style) from the real sampled depth
+// (instead of trusting the assumed tap depth) to derive a horizon cosine and sample distance, used below
+// to weight taps the way GTAO's cosine-weighted horizon integration does, without needing a full
+// multi-step horizon march (this depth/view-space isn't reliable enough for that here).
+float SampleHorizonTapDelta(float2 kernelDir, float depthBias, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, out float horizonCos, out float sampleDist)
+{
+  float2 tapDir = float2(dot(kernelDir, ditherA), dot(kernelDir, ditherB));
+  float3 tapOffset = float3(tapDir, depthBias);
+  tapOffset = reflect(tapOffset, bendDir);
+  float3 samplePos = tapOffset * aoRange + centerViewPos;
+  float2 sampleScreenDir = samplePos.xy / samplePos.z;
+  float2 sampleUV = sampleScreenDir * frustumScale + 0.5;
+
+  float sampleDepth = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, sampleUV).x;
+  float sampleLinearDepth = 0.100000016 / (1.33333344e-007 + sampleDepth);
+
+  // Real occluder view-space position, reprojected using its own depth rather than the assumed tap depth.
+  float3 actualSamplePos = float3(sampleScreenDir * sampleLinearDepth, sampleLinearDepth);
+  float3 toSample = actualSamplePos - centerViewPos;
+  sampleDist = length(toSample);
+  horizonCos = dot(toSample, viewNormal) / max(sampleDist, 1e-5); // cosine between occluder direction and surface normal
+
+  return sampleLinearDepth - samplePos.z; // positive => occluder closer to camera than the sample point
+}
+
+// AI ahh:
+// Converts a raw depth delta into a smoothed occlusion factor and its blend weight (matches the original curve),
+// further shaped by a GTAO-style cosine-weighted horizon term (grazing/back-facing occluders contribute less,
+// instead of every depth delta occluding equally).
+float ShapeOcclusionTap(float strength, float delta, float normFactor1, float normFactor2, float horizonCos, float sampleDist, out float weight)
+{
+  float scaledDelta = delta * normFactor1;
+  float curved = 1.0 - 0.5 * (saturate(-scaledDelta) + min(1.0, abs(scaledDelta)));
+  weight = max(0.5, curved);
+  float edge = saturate(delta * normFactor2) - 1.0;
+  float occlusion = min(1.0, curved + curved) * edge * strength + 1.0;
+  return lerp(1.0, occlusion, saturate(horizonCos));
+}
+
+// One horizon-based occlusion tap: offsets the view-space position along a dithered kernel direction,
+// reflects it around the normal-bent view direction, reprojects it to screen space and diffs the depths.
+float SampleHorizonTapDeltaSimpler(float2 kernelDir, float depthBias, float2 ditherA, float2 ditherB, float3 bendDir, float3 centerViewPos, float aoRange, float2 frustumScale)
+{
+  float2 tapDir = float2(dot(kernelDir, ditherA), dot(kernelDir, ditherB));
+  float3 tapOffset = float3(tapDir, depthBias);
+  tapOffset = reflect(tapOffset, bendDir);
+  float3 samplePos = tapOffset * aoRange + centerViewPos;
+  float2 sampleUV = (samplePos.xy / samplePos.z) * frustumScale + 0.5;
+
+  float sampleDepth = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, sampleUV).x;
+  float sampleLinearDepth = 0.100000016 / (1.33333344e-007 + sampleDepth);
+  return sampleLinearDepth - samplePos.z; // positive => occluder closer to camera than the sample point
+}
+
+// Converts a raw depth delta into a smoothed occlusion factor and its blend weight (matches the original curve).
+float ShapeOcclusionTapSimpler(float strength, float delta, float normFactor1, float normFactor2, out float weight)
+{
+  float scaledDelta = delta * normFactor1;
+  float curved = 1.0 - 0.5 * (saturate(-scaledDelta) + min(1.0, abs(scaledDelta)));
+  weight = max(0.5, curved);
+  float edge = saturate(delta * normFactor2) - 1.0;
+  return min(1.0, curved + curved) * edge * strength + 1.0;
+}
+
+float CompletePass(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float4 v1) 
+{
+  float numerator = 0.0;
+  float denominator = 0.0;
+
+  [unroll]
+  for (int i = 0; i < sampleCount; i++)
   {
-    float2(0.0666666701, -0.0666666701),
-    float2(-0.0599999987, -0.0599999987),
-    float2(0.0533333346, 0.0533333346),
-    float2(-0.0466666669, 0.0466666669),
+    int slot = i % 8;
+    int ring = i / 8 + ringOffset;
+    float ringScale = pow(ringScale0, ring);
 
-    float2(-0.0424264073, 0),
-    float2(0.0353553407, 0),
-    float2(0, -0.0318198055),
-    float2(0, 0.0282842703),
-  };
-  static const float AO_KERNEL_DEPTH_BIAS[8] =
-  {
-    0.0333333351, 0.0299999993, 0.0266666673, 0.0233333334,
-    0.0424264073, 0.0353553407, 0.0318198055, 0.0282842703,
-  };
+    // ringScale by distance
+    float expansion = max((0.1 / PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, v1.xy).x), 1);
+    // if (expansion > DVS9) {
+      expansion = pow(expansion, 0.327) * 0.28;
+      ringScale *= expansion;
+    // }
 
-  // AI ahh:
-  // One horizon-based occlusion tap: offsets the view-space position along a dithered kernel direction,
-  // reflects it around the normal-bent view direction, reprojects it to screen space and diffs the depths.
-  // Also recovers the *actual* view-space occluder position (GTAO-style) from the real sampled depth
-  // (instead of trusting the assumed tap depth) to derive a horizon cosine and sample distance, used below
-  // to weight taps the way GTAO's cosine-weighted horizon integration does, without needing a full
-  // multi-step horizon march (this depth/view-space isn't reliable enough for that here).
-  float SampleHorizonTapDelta(float2 kernelDir, float depthBias, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, out float horizonCos, out float sampleDist)
-  {
-    float2 tapDir = float2(dot(kernelDir, ditherA), dot(kernelDir, ditherB));
-    float3 tapOffset = float3(tapDir, depthBias);
-    tapOffset = reflect(tapOffset, bendDir);
-    float3 samplePos = tapOffset * aoRange + centerViewPos;
-    float2 sampleScreenDir = samplePos.xy / samplePos.z;
-    float2 sampleUV = sampleScreenDir * frustumScale + 0.5;
+    float horizonCos, sampleDist;
+    float delta = SampleHorizonTapDelta(AO_KERNEL_DIR[slot] * ringScale * rightScale1, AO_KERNEL_DEPTH_BIAS[slot] * ringScale / rightScale1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, horizonCos, sampleDist);
 
-    float sampleDepth = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, sampleUV).x;
-    float sampleLinearDepth = 0.100000016 / (1.33333344e-007 + sampleDepth);
+    float weight;
+    float occlusion = ShapeOcclusionTap(strength, delta, normFactor1, normFactor2, horizonCos, sampleDist, weight);
 
-    // Real occluder view-space position, reprojected using its own depth rather than the assumed tap depth.
-    float3 actualSamplePos = float3(sampleScreenDir * sampleLinearDepth, sampleLinearDepth);
-    float3 toSample = actualSamplePos - centerViewPos;
-    sampleDist = length(toSample);
-    horizonCos = dot(toSample, viewNormal) / max(sampleDist, 1e-5); // cosine between occluder direction and surface normal
-
-    return sampleLinearDepth - samplePos.z; // positive => occluder closer to camera than the sample point
+    numerator += occlusion * weight;
+    denominator += weight;
   }
 
-  // AI ahh:
-  // Converts a raw depth delta into a smoothed occlusion factor and its blend weight (matches the original curve),
-  // further shaped by a GTAO-style cosine-weighted horizon term (grazing/back-facing occluders contribute less,
-  // instead of every depth delta occluding equally).
-  float ShapeOcclusionTap(float strength, float delta, float normFactor1, float normFactor2, float horizonCos, float sampleDist, out float weight)
+  return min(1.0, numerator / denominator);
+}
+
+float CompletePassSimpler(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float4 v1) 
+{
+  float numerator = 0.0;
+  float denominator = 0.0;
+
+  [unroll]
+  for (int i = 0; i < sampleCount; i++)
   {
-    float scaledDelta = delta * normFactor1;
-    float curved = 1.0 - 0.5 * (saturate(-scaledDelta) + min(1.0, abs(scaledDelta)));
-    weight = max(0.5, curved);
-    float edge = saturate(delta * normFactor2) - 1.0;
-    float occlusion = min(1.0, curved + curved) * edge * strength + 1.0;
-    return lerp(1.0, occlusion, saturate(horizonCos));
+    int slot = i % 8;
+    int ring = i / 8 + ringOffset;
+    float ringScale = pow(ringScale0, ring);
+  
+    float delta = SampleHorizonTapDeltaSimpler(AO_KERNEL_DIR[slot] * ringScale * rightScale1, AO_KERNEL_DEPTH_BIAS[slot] * ringScale / rightScale1, ditherA, ditherB, bendDir, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw);
+  
+    float weight;
+    float occlusion = ShapeOcclusionTapSimpler(strength, delta, normFactor1, normFactor2, weight);
+
+    numerator += occlusion * weight;
+    denominator += weight;
   }
 
-  // One horizon-based occlusion tap: offsets the view-space position along a dithered kernel direction,
-  // reflects it around the normal-bent view direction, reprojects it to screen space and diffs the depths.
-  float SampleHorizonTapDeltaSimpler(float2 kernelDir, float depthBias, float2 ditherA, float2 ditherB, float3 bendDir, float3 centerViewPos, float aoRange, float2 frustumScale)
-  {
-    float2 tapDir = float2(dot(kernelDir, ditherA), dot(kernelDir, ditherB));
-    float3 tapOffset = float3(tapDir, depthBias);
-    tapOffset = reflect(tapOffset, bendDir);
-    float3 samplePos = tapOffset * aoRange + centerViewPos;
-    float2 sampleUV = (samplePos.xy / samplePos.z) * frustumScale + 0.5;
-
-    float sampleDepth = PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, sampleUV).x;
-    float sampleLinearDepth = 0.100000016 / (1.33333344e-007 + sampleDepth);
-    return sampleLinearDepth - samplePos.z; // positive => occluder closer to camera than the sample point
-  }
-
-  // Converts a raw depth delta into a smoothed occlusion factor and its blend weight (matches the original curve).
-  float ShapeOcclusionTapSimpler(float strength, float delta, float normFactor1, float normFactor2, out float weight)
-  {
-    float scaledDelta = delta * normFactor1;
-    float curved = 1.0 - 0.5 * (saturate(-scaledDelta) + min(1.0, abs(scaledDelta)));
-    weight = max(0.5, curved);
-    float edge = saturate(delta * normFactor2) - 1.0;
-    return min(1.0, curved + curved) * edge * strength + 1.0;
-  }
-
-  float CompletePass(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float4 v1) 
-  {
-    float numerator = 0.0;
-    float denominator = 0.0;
-
-    [unroll]
-    for (int i = 0; i < sampleCount; i++)
-    {
-      int slot = i % 8;
-      int ring = i / 8 + ringOffset;
-      float ringScale = pow(ringScale0, ring);
-
-      // ringScale by distance
-      float expansion = max((0.1 / PS_TEXTURES_2D_0_.Sample(PS_SAMPLERS_3__s, v1.xy).x), 1);
-      // if (expansion > DVS9) {
-        expansion = pow(expansion, 0.327) * 0.28;
-        ringScale *= expansion;
-      // }
-
-      float horizonCos, sampleDist;
-      float delta = SampleHorizonTapDelta(AO_KERNEL_DIR[slot] * ringScale * rightScale1, AO_KERNEL_DEPTH_BIAS[slot] * ringScale / rightScale1, ditherA, ditherB, bendDir, viewNormal, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw, horizonCos, sampleDist);
-
-      float weight;
-      float occlusion = ShapeOcclusionTap(strength, delta, normFactor1, normFactor2, horizonCos, sampleDist, weight);
-
-      numerator += occlusion * weight;
-      denominator += weight;
-    }
-
-    return min(1.0, numerator / denominator);
-  }
-
-  float CompletePassSimpler(int sampleCount, float strength, int ringOffset, float ringScale0, float rightScale1, float2 ditherA, float2 ditherB, float3 bendDir, float3 viewNormal, float3 centerViewPos, float aoRange, float2 frustumScale, float normFactor1, float normFactor2, float4 v1) 
-  {
-    float numerator = 0.0;
-    float denominator = 0.0;
-
-    [unroll]
-    for (int i = 0; i < sampleCount; i++)
-    {
-      int slot = i % 8;
-      int ring = i / 8 + ringOffset;
-      float ringScale = pow(ringScale0, ring);
-    
-      float delta = SampleHorizonTapDeltaSimpler(AO_KERNEL_DIR[slot] * ringScale * rightScale1, AO_KERNEL_DEPTH_BIAS[slot] * ringScale / rightScale1, ditherA, ditherB, bendDir, centerViewPos, aoRange, PS_REG_SSAO_FRUSTUM_SCALE.zw);
-    
-      float weight;
-      float occlusion = ShapeOcclusionTapSimpler(strength, delta, normFactor1, normFactor2, weight);
-
-      numerator += occlusion * weight;
-      denominator += weight;
-    }
-
-    return min(1.0, numerator / denominator);
-  }
-#endif
+  return min(1.0, numerator / denominator);
+}
 
 void main(
   float4 v0 : SV_Position0,
@@ -234,64 +219,6 @@ void main(
   float3 v3 : TEXCOORD1,
   out float2 o0 : SV_Target0)
 {
-#if HALO2_GTAO == 1
-  GTAOConstants c = (GTAOConstants)0;
-  uint2 pixCoord = uint2(v0.xy);
-
-  // size
-  c.ViewportSize = LumaSettings.SwapchainSize * 0.5;
-  c.ViewportPixelSize = rcp(c.ViewportSize);
-
-  // NDC to View
-  float2 frustumScale = PS_REG_SSAO_FRUSTUM_SCALE.xy;
-  float2 frustumScaleInv = PS_REG_SSAO_FRUSTUM_SCALE.zw;
-  c.NDCToViewMul = float2(2.0, -2.0) * frustumScale;
-  c.NDCToViewAdd = float2(-1.0, 1.0) * frustumScale;
-  c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.ViewportPixelSize;
-
-  // world space normal
-  // float3 normal = GTAO_WorldNormals.Sample(PS_SAMPLERS_3__s, v1.xy).xyz;
-  float3 normal = GTAO_WorldNormals.Load(uint3(v0.xy * 2, 0)).xyz;
-  normal = mad(normal, 2.0, -1.0);
-  normal = normalize(normal);
-
-  // view space normal
-  float3 viewNormal;
-  viewNormal = float3(
-      dot(normal, PS_REG_SSAO_MV_1.xyz), // 1: left, 0: right
-      -dot(normal, PS_REG_SSAO_MV_2.xyz), // 1: bottom, 0: top
-      dot(normal, PS_REG_SSAO_MV_3.xyz)  // 1: grazing, 0: facing/perpendicular
-  );
-  viewNormal = normalize(viewNormal);
-  // o0.xy = viewNormal.x * 0.5 + 0.5; return; //debug viewNormal
-
-  // Noise
-  #if HALO2_GTAO_NOISE == 0
-    const float frameIndex = 0;
-  #else
-    const float frameIndex = LumaSettings.FrameIndex;
-  #endif
-  float2 localNoise = SpatioTemporalNoise(pixCoord, frameIndex); 
-
-  // Do
-  o0.xy = XeGTAO_MainPass(pixCoord, localNoise, viewNormal, GTAO_DepthPreFiltered, PS_SAMPLERS_3__s, c);
-
-//   // Depth curvature edge-stopping term, used by the blur pass to avoid bleeding AO across depth discontinuities.
-//   float centerLinearDepth = 0.100000016 / GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy) - 1.33333344e-007;
-//   float depthA0 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy - COMMON_VP_PARAMS[0].xy);
-//   float depthA1 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy + COMMON_VP_PARAMS[0].xy);
-//   float depthB0 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy - COMMON_VP_PARAMS[0].xy * float2(1, -1));
-//   float depthB1 = GTAO_Depth.GatherRed(PS_SAMPLERS_3__s, v1.xy + COMMON_VP_PARAMS[0].xy * float2(1, -1));
-// 
-//   float centerRemap = 0.100000016 / centerLinearDepth - 1.33333344e-007;
-//   float curvatureA = (depthA0 + depthA1) - 2.0 * centerRemap;
-//   float curvatureB = (depthB0 + depthB1) - 2.0 * centerRemap;
-// 
-//   float curvature = max(abs(curvatureA), abs(curvatureB)) * centerLinearDepth;
-//   o0.y = saturate(1.0 - curvature * 1024.0);
-
-  return;
-#else
   // World space normal
   const float3 normal = normalize(PS_TEXTURES_2D_3_.Sample(PS_SAMPLERS_3__s, v1.xy).xyz * 2.0 - 1.0);
  
@@ -363,7 +290,6 @@ void main(
     float curvature = max(abs(curvatureA), abs(curvatureB)) * centerLinearDepth;
     o0.y = saturate(1.0 - curvature * 1024.0);
   #endif
-#endif
 
   return;
 }

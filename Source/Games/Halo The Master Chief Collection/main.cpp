@@ -236,13 +236,14 @@ namespace
    
    ///////////////////////////////////////////////
 
+   // XeGTAO insertion
    namespace XeGTAOHandler //stolen from BioShock mod
    {
-      constexpr const char* Luma_XeGTAO = "Luma_Halo2A_XeGTAO"; //file name
-      constexpr const char* Luma_H2A_XeGTAO_Prefilter = "H2A XeGTAO Prefilter Depths CS";
-      constexpr const char* Luma_XeGTAO_MainPass = "XeGTAO Main Pass CS";
-      constexpr const char* Luma_XeGTAO_DenoisePass1 = "XeGTAO Denoise Pass 1 CS";
-      constexpr const char* Luma_XeGTAO_DenoisePass2 = "XeGTAO Denoise Pass 2 CS";
+      constexpr const char* Luma_H2A_XeGTAO = "Luma_H2A_XeGTAO"; //file name
+      constexpr const char* Luma_H2A_XeGTAO_Prefilter = "XeGTAO H2A Prefilter Depths CS";
+      constexpr const char* Luma_H2A_XeGTAO_MainPass = "XeGTAO H2A Main Pass CS";
+      constexpr const char* Luma_H2A_XeGTAO_DenoisePass1 = "XeGTAO HH2A Denoise Pass 1 CS";
+      constexpr const char* Luma_H2A_XeGTAO_DenoisePass2 = "XeGTAO H2A Denoise Pass 2 CS";
 
       constexpr size_t DEPTH_MIP_LEVELS = 5;
       constexpr UINT NUMTHREADS_X = 8;
@@ -250,10 +251,10 @@ namespace
       
       void OnInit()
       {
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_MainPass),      ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1),  ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2),  ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter), ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_MainPass),      ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass1),  ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass2),  ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
       }
 
       namespace H2A
@@ -309,178 +310,181 @@ namespace
             // denoise1_uav.reset();
             // denoise1_srv.reset();
          }
-      }
-      
-      // For OnDrawOrDispatch
-      void DrawH2A_0(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data,
-         ID3D11ShaderResourceView* srv_depth, ID3D11ShaderResourceView* srv_normals)
-      {
-         // CB: cb7
-         ID3D11Buffer* cb7 = nullptr;
-         native_device_context->PSGetConstantBuffers(7, 1, &cb7);
-         native_device_context->CSSetConstantBuffers(0, 1, &cb7);
 
-         // CB: Luma
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
-
-         // samplers
-         const std::array<ID3D11SamplerState*, 2> samplers = { device_data.sampler_state_point.get(), device_data.sampler_state_linear.get() };
-         native_device_context->CSSetSamplers(0, samplers.size(), samplers.data());
-         
-         // Depth Prefilter: create tex, uavs, srv
-         [[unlikely]]
-         if (!H2A::initialized)
+         DrawOrDispatchOverrideType Draw0(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data,
+            ID3D11ShaderResourceView* srv_depth, ID3D11ShaderResourceView* srv_normals)
          {
-            // tex desc
-            H2A::depthpre_texdesc = {};
-            H2A::depthpre_texdesc.Width = device_data.output_resolution.x;
-            H2A::depthpre_texdesc.Height = device_data.output_resolution.y;
-            H2A::depthpre_texdesc.MipLevels = DEPTH_MIP_LEVELS; //pre pass mips!
-            H2A::depthpre_texdesc.ArraySize = 1;
-            H2A::depthpre_texdesc.Format = DXGI_FORMAT_R32_FLOAT;
-            H2A::depthpre_texdesc.SampleDesc.Count = 1;
-            H2A::depthpre_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-         
-            // tex
-            auto hr0 = native_device->CreateTexture2D(&H2A::depthpre_texdesc, nullptr, H2A::depthpre_tex.put());
-            ASSERT_MSG(SUCCEEDED(hr0), "depthpre hr0");
+            // CB: cb7
+            ID3D11Buffer* cb7 = nullptr;
+            native_device_context->PSGetConstantBuffers(7, 1, &cb7);
+            native_device_context->CSSetConstantBuffers(0, 1, &cb7);
 
-            // uav desc
-            H2A::depthpre_uavdesc.Format = DXGI_FORMAT_R32_FLOAT;
-            H2A::depthpre_uavdesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-         
-            // uavs
-            for (int i = 0; i < H2A::depthpre_uavs.size(); ++i)
+            // CB: Luma
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+
+            // samplers
+            const std::array<ID3D11SamplerState*, 2> samplers = { device_data.sampler_state_point.get(), device_data.sampler_state_linear.get() };
+            native_device_context->CSSetSamplers(0, samplers.size(), samplers.data());
+            
+            // Depth Prefilter: create tex, uavs, srv
+            [[unlikely]]
+            if (!H2A::initialized)
             {
-               H2A::depthpre_uavdesc.Texture2D.MipSlice = i;
-               auto hr = native_device->CreateUnorderedAccessView(H2A::depthpre_tex.get(), &H2A::depthpre_uavdesc, &H2A::depthpre_uavs[i]);
-               ASSERT_MSGF(SUCCEEDED(hr), "depthpre loop hr {}", i);
+               // tex desc
+               H2A::depthpre_texdesc = {};
+               H2A::depthpre_texdesc.Width = device_data.output_resolution.x;
+               H2A::depthpre_texdesc.Height = device_data.output_resolution.y;
+               H2A::depthpre_texdesc.MipLevels = DEPTH_MIP_LEVELS; //pre pass mips!
+               H2A::depthpre_texdesc.ArraySize = 1;
+               H2A::depthpre_texdesc.Format = DXGI_FORMAT_R32_FLOAT;
+               H2A::depthpre_texdesc.SampleDesc.Count = 1;
+               H2A::depthpre_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+            
+               // tex
+               auto hr0 = native_device->CreateTexture2D(&H2A::depthpre_texdesc, nullptr, H2A::depthpre_tex.put());
+               ASSERT_MSG(SUCCEEDED(hr0), "depthpre hr0");
+
+               // uav desc
+               H2A::depthpre_uavdesc.Format = DXGI_FORMAT_R32_FLOAT;
+               H2A::depthpre_uavdesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            
+               // uavs
+               for (int i = 0; i < H2A::depthpre_uavs.size(); ++i)
+               {
+                  H2A::depthpre_uavdesc.Texture2D.MipSlice = i;
+                  auto hr = native_device->CreateUnorderedAccessView(H2A::depthpre_tex.get(), &H2A::depthpre_uavdesc, &H2A::depthpre_uavs[i]);
+                  ASSERT_MSGF(SUCCEEDED(hr), "depthpre loop hr {}", i);
+               }
+            
+               // srv
+               auto hr1 = native_device->CreateShaderResourceView(H2A::depthpre_tex.get(), nullptr, H2A::depthpre_srv.put());
+               ASSERT_MSG(SUCCEEDED(hr1), "depthpre hr1");
             }
-         
-            // srv
-            auto hr1 = native_device->CreateShaderResourceView(H2A::depthpre_tex.get(), nullptr, H2A::depthpre_srv.put());
-            ASSERT_MSG(SUCCEEDED(hr1), "depthpre hr1");
+            
+            // Depth Prefilter: bind & draw
+            native_device_context->CSSetUnorderedAccessViews(0, H2A::depthpre_uavs.size(), H2A::depthpre_uavs.data(), nullptr); //out: prefiltered depth mips
+            native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter)).get(), nullptr, 0);
+            native_device_context->CSSetShaderResources(0, 1, &srv_depth); //in: depth
+            native_device_context->Dispatch((H2A::depthpre_texdesc.Width + 16 - 1) / 16, (H2A::depthpre_texdesc.Height + 16 - 1) / 16, 1);
+            
+            // Depth Prefilter: unbind uavs
+            constexpr ID3D11UnorderedAccessView* null_uavs[DEPTH_MIP_LEVELS] = {};
+            native_device_context->CSSetUnorderedAccessViews(0,DEPTH_MIP_LEVELS, null_uavs, nullptr);
+            
+            // // set PS SRV orig depth, pre filter depth, normals (this overrides dither)
+            // const std::array <ID3D11ShaderResourceView*, 4> srvs = { H2A::depthpre_srv.get(), srv_normals, nullptr, nullptr };
+            // native_device_context->PSSetShaderResources(0, srvs.size(), srvs.data());
+            
+            // Main Pass: create AO terms & edges buffer
+            [[unlikely]]
+            if (!H2A::initialized)
+            {
+               // tex desc
+               H2A::main_texdesc = {};
+               const float scale = ShaderDefines::GetBool(ShaderDefines::HALO2_GTAO_FULLRES) ? 1.0f : 0.5f;
+               H2A::main_texdesc.Width = device_data.output_resolution.x * scale;
+               H2A::main_texdesc.Height = device_data.output_resolution.y * scale;
+               H2A::main_texdesc.MipLevels = 1;
+               H2A::main_texdesc.ArraySize = 1;
+               H2A::main_texdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+               H2A::main_texdesc.SampleDesc.Count = 1;
+               H2A::main_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/;
+            
+               // tex
+               auto hr0a = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main0_tex.put());
+               ASSERT_MSG(SUCCEEDED(hr0a), "main hr0a");
+               auto hr0b = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main1_tex.put());
+               ASSERT_MSG(SUCCEEDED(hr0b), "main hr0b");
+               
+               // uav desc
+               H2A::main_uavdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+               H2A::main_uavdesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+               
+               // uav
+               auto hr1a = native_device->CreateUnorderedAccessView(H2A::main0_tex.get(), &H2A::main_uavdesc, H2A::main0_uav.put());
+               ASSERT_MSG(SUCCEEDED(hr1a), "main hr1a");
+               auto hr1b = native_device->CreateUnorderedAccessView(H2A::main1_tex.get(), &H2A::main_uavdesc, H2A::main1_uav.put());
+               ASSERT_MSG(SUCCEEDED(hr1b), "main hr1b");
+            
+               // srv desc
+               H2A::main_srvdesc = {};
+               H2A::main_srvdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+               H2A::main_srvdesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+               H2A::main_srvdesc.Texture2D.MostDetailedMip = 0;
+               H2A::main_srvdesc.Texture2D.MipLevels = 1;
+               
+               // srv
+               auto hr2a = native_device->CreateShaderResourceView(H2A::main0_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main0_srv.put());
+               ASSERT_MSG(SUCCEEDED(hr2a), "main hr2a");
+               auto hr2b = native_device->CreateShaderResourceView(H2A::main1_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main1_srv.put());
+               ASSERT_MSG(SUCCEEDED(hr2b), "main hr2b");
+               
+               // // rtv desc
+               // H2A::main_rtvdesc = {};
+               // H2A::main_rtvdesc.Format = DXGI_FORMAT_R8G8_UNORM;
+               // H2A::main_rtvdesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+               // H2A::main_rtvdesc.Texture2D.MipSlice = 0;
+               //
+               // // rtv
+               // auto hr3 = native_device->CreateRenderTargetView(H2A::main_tex.get(), &H2A::main_rtvdesc, H2A::main_rtv.put());
+               // ASSERT_MSG(SUCCEEDED(hr3), "main hr3");
+            }
+            
+            // Main: bind and draw
+            native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main0_uav, nullptr); //out: AO term and Edges
+            native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_H2A_XeGTAO_MainPass)).get(), nullptr, 0);
+            const std::array<ID3D11ShaderResourceView*, 2> srvs_main_pass = { H2A::depthpre_srv.get(), srv_normals }; //in: prefiltered depth mips & normals
+            native_device_context->CSSetShaderResources(0, srvs_main_pass.size(), srvs_main_pass.data());
+            native_device_context->Dispatch((H2A::main_texdesc.Width + NUMTHREADS_X - 1) / NUMTHREADS_X, (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y, 1);
+            
+            // Denoise 1:  bind and draw
+            native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main1_uav, nullptr); //out: AO term and Edges denoised 1
+            native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass1)).get(), nullptr, 0);
+            native_device_context->CSSetShaderResources(0, 1, &H2A::main0_srv); //in: AO term and Edges
+            native_device_context->Dispatch((H2A::main_texdesc.Width + (NUMTHREADS_X * 2) - 1) / (NUMTHREADS_X * 2), (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y,1);
+
+            // Denoise 2: bind and draw
+            native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main0_uav, nullptr); //out: AO term and Edges denoised 2 (will be used in PS)
+            native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass2)).get(), nullptr, 0);
+            native_device_context->CSSetShaderResources(0, 1, &H2A::main1_srv); //in: AO term and Edges denoised 1
+            native_device_context->Dispatch((H2A::main_texdesc.Width + (NUMTHREADS_X * 2) - 1) / (NUMTHREADS_X * 2), (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y,1);
+
+            // unbind all!
+            constexpr std::array<ID3D11UnorderedAccessView*, 1> null_1uavs = { };
+            native_device_context->CSSetUnorderedAccessViews(0, null_1uavs.size(), null_1uavs.data(), nullptr);
+            
+            constexpr std::array<ID3D11ShaderResourceView*, 2> null_2srvs = { };
+            native_device_context->CSSetShaderResources(0, null_2srvs.size(), null_2srvs.data());
+
+            constexpr std::array<ID3D11Buffer*, 1> null_1cb = { };
+            native_device_context->CSSetConstantBuffers(0, null_1cb.size(), null_1cb.data());
+            native_device_context->CSSetConstantBuffers(luma_data_cbuffer_index, null_1cb.size(), null_1cb.data());
+
+            constexpr ID3D11ComputeShader* null_cs = nullptr;
+            native_device_context->CSSetShader(null_cs, nullptr, 0);
+
+            constexpr std::array<ID3D11SamplerState*, 2> null_1samplers = { };
+            native_device_context->CSSetSamplers(0, null_1samplers.size(), null_1samplers.data());
+
+            // // set RTV 0 to main rtv
+            // native_device_context->OMSetRenderTargets(1, &H2A::main_rtv, nullptr);
+
+            // state
+            H2A::initialized = true;
+
+            // skip orig since we did its job
+            return DrawOrDispatchOverrideType::Replaced;
          }
-         
-         // Depth Prefilter: bind & draw
-         native_device_context->CSSetUnorderedAccessViews(0, H2A::depthpre_uavs.size(), H2A::depthpre_uavs.data(), nullptr); //out: prefiltered depth mips
-         native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter)).get(), nullptr, 0);
-         native_device_context->CSSetShaderResources(0, 1, &srv_depth); //in: depth
-         native_device_context->Dispatch((H2A::depthpre_texdesc.Width + 16 - 1) / 16, (H2A::depthpre_texdesc.Height + 16 - 1) / 16, 1);
-         
-         // Depth Prefilter: unbind uavs
-         constexpr ID3D11UnorderedAccessView* null_uavs[DEPTH_MIP_LEVELS] = {};
-         native_device_context->CSSetUnorderedAccessViews(0,DEPTH_MIP_LEVELS, null_uavs, nullptr);
-         
-         // // set PS SRV orig depth, pre filter depth, normals (this overrides dither)
-         // const std::array <ID3D11ShaderResourceView*, 4> srvs = { H2A::depthpre_srv.get(), srv_normals, nullptr, nullptr };
-         // native_device_context->PSSetShaderResources(0, srvs.size(), srvs.data());
-         
-         // Main Pass: create AO terms & edges buffer
-         [[unlikely]]
-         if (!H2A::initialized)
+
+         DrawOrDispatchOverrideType Draw1(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data,
+            ID3D11ShaderResourceView* srv_depth, ID3D11ShaderResourceView* srv_normals)
          {
-            // tex desc
-            H2A::main_texdesc = {};
-            const float scale = ShaderDefines::GetBool(ShaderDefines::HALO2_GTAO_FULLRES) ? 1.0f : 0.5f;
-            H2A::main_texdesc.Width = device_data.output_resolution.x * scale;
-            H2A::main_texdesc.Height = device_data.output_resolution.y * scale;
-            H2A::main_texdesc.MipLevels = 1;
-            H2A::main_texdesc.ArraySize = 1;
-            H2A::main_texdesc.Format = DXGI_FORMAT_R8G8_UNORM;
-            H2A::main_texdesc.SampleDesc.Count = 1;
-            H2A::main_texdesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/;
-         
-            // tex
-            auto hr0a = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main0_tex.put());
-            ASSERT_MSG(SUCCEEDED(hr0a), "main hr0a");
-            auto hr0b = native_device->CreateTexture2D(&H2A::main_texdesc, nullptr, H2A::main1_tex.put());
-            ASSERT_MSG(SUCCEEDED(hr0b), "main hr0b");
-            
-            // uav desc
-            H2A::main_uavdesc.Format = DXGI_FORMAT_R8G8_UNORM;
-            H2A::main_uavdesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-            
-            // uav
-            auto hr1a = native_device->CreateUnorderedAccessView(H2A::main0_tex.get(), &H2A::main_uavdesc, H2A::main0_uav.put());
-            ASSERT_MSG(SUCCEEDED(hr1a), "main hr1a");
-            auto hr1b = native_device->CreateUnorderedAccessView(H2A::main1_tex.get(), &H2A::main_uavdesc, H2A::main1_uav.put());
-            ASSERT_MSG(SUCCEEDED(hr1b), "main hr1b");
-         
-            // srv desc
-            H2A::main_srvdesc = {};
-            H2A::main_srvdesc.Format = DXGI_FORMAT_R8G8_UNORM;
-            H2A::main_srvdesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            H2A::main_srvdesc.Texture2D.MostDetailedMip = 0;
-            H2A::main_srvdesc.Texture2D.MipLevels = 1;
-            
-            // srv
-            auto hr2a = native_device->CreateShaderResourceView(H2A::main0_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main0_srv.put());
-            ASSERT_MSG(SUCCEEDED(hr2a), "main hr2a");
-            auto hr2b = native_device->CreateShaderResourceView(H2A::main1_tex.get(), /*&H2A::main_srvdesc*/nullptr, H2A::main1_srv.put());
-            ASSERT_MSG(SUCCEEDED(hr2b), "main hr2b");
-            
-            // // rtv desc
-            // H2A::main_rtvdesc = {};
-            // H2A::main_rtvdesc.Format = DXGI_FORMAT_R8G8_UNORM;
-            // H2A::main_rtvdesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-            // H2A::main_rtvdesc.Texture2D.MipSlice = 0;
-            //
-            // // rtv
-            // auto hr3 = native_device->CreateRenderTargetView(H2A::main_tex.get(), &H2A::main_rtvdesc, H2A::main_rtv.put());
-            // ASSERT_MSG(SUCCEEDED(hr3), "main hr3");
+            // ps: main bind t6 srv
+            native_device_context->PSSetShaderResources(6, 1, &H2A::main0_srv);
+
+            // let ps act as copy
+            return DrawOrDispatchOverrideType::None;
          }
-         
-         // Main: bind and draw
-         native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main0_uav, nullptr); //out: AO term and Edges
-         native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_MainPass)).get(), nullptr, 0);
-         const std::array<ID3D11ShaderResourceView*, 2> srvs_main_pass = { H2A::depthpre_srv.get(), srv_normals }; //in: prefiltered depth mips & normals
-         native_device_context->CSSetShaderResources(0, srvs_main_pass.size(), srvs_main_pass.data());
-         native_device_context->Dispatch((H2A::main_texdesc.Width + NUMTHREADS_X - 1) / NUMTHREADS_X, (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y, 1);
-
-         // TODO: Denoise Passes 1 & 2 Pass
-
-         // Denoise 1:  bind and draw
-         native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main1_uav, nullptr); //out: AO term and Edges denoised 1
-         native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1)).get(), nullptr, 0);
-         native_device_context->CSSetShaderResources(0, 1, &H2A::main0_srv); //in: AO term and Edges
-         native_device_context->Dispatch((H2A::main_texdesc.Width + (NUMTHREADS_X * 2) - 1) / (NUMTHREADS_X * 2), (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y,1);
-
-         // Denoise 2: bind and draw
-         native_device_context->CSSetUnorderedAccessViews(0, 1, &H2A::main0_uav, nullptr); //out: AO term and Edges denoised 2 (will be used in PS)
-         native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2)).get(), nullptr, 0);
-         native_device_context->CSSetShaderResources(0, 1, &H2A::main1_srv); //in: AO term and Edges denoised 1
-         native_device_context->Dispatch((H2A::main_texdesc.Width + (NUMTHREADS_X * 2) - 1) / (NUMTHREADS_X * 2), (H2A::main_texdesc.Height + NUMTHREADS_Y - 1) / NUMTHREADS_Y,1);
-
-         // unbind all!
-         constexpr std::array<ID3D11UnorderedAccessView*, 1> null_1uavs = { };
-         native_device_context->CSSetUnorderedAccessViews(0, null_1uavs.size(), null_1uavs.data(), nullptr);
-         
-         constexpr std::array<ID3D11ShaderResourceView*, 2> null_2srvs = { };
-         native_device_context->CSSetShaderResources(0, null_2srvs.size(), null_2srvs.data());
-
-         constexpr std::array<ID3D11Buffer*, 1> null_1cb = { };
-         native_device_context->CSSetConstantBuffers(0, null_1cb.size(), null_1cb.data());
-         native_device_context->CSSetConstantBuffers(luma_data_cbuffer_index, null_1cb.size(), null_1cb.data());
-
-         constexpr ID3D11ComputeShader* null_cs = nullptr;
-         native_device_context->CSSetShader(null_cs, nullptr, 0);
-
-         constexpr std::array<ID3D11SamplerState*, 2> null_1samplers = { };
-         native_device_context->CSSetSamplers(0, null_1samplers.size(), null_1samplers.data());
-
-         // // set RTV 0 to main rtv
-         // native_device_context->OMSetRenderTargets(1, &H2A::main_rtv, nullptr);
-
-         // state
-         H2A::initialized = true;
-      }
-
-      void DrawH2A_1(DeviceData& device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data,
-         ID3D11ShaderResourceView* srv_depth, ID3D11ShaderResourceView* srv_normals)
-      {
-         // ps: main bind t6 srv
-         native_device_context->PSSetShaderResources(6, 1, &H2A::main0_srv);
       }
       
       void OnSubGameChange(SubGame prev_game, SubGame new_game)
@@ -513,7 +517,8 @@ namespace
          std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
          std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources;
          std::shared_lock lock_device_read(device_data.mutex);
-         
+
+         // clear in runtime device
          if (!device_data.original_resources_to_mirrored_upgraded_resources.empty())
          {
             lock_device_read.unlock();
@@ -533,10 +538,10 @@ namespace
    }
    
    ///////////////////////////////////
-   
+
+   // Optimization to avoid heavy indirect upgrades scanning
    namespace WarmupDirectAndIndirectHandler
    {
-      // Optimization to avoid heavy indirect upgrades scanning
       int warmup_frames = 0;
       ChainTextureFormatUpgradesType warmup_end = ChainTextureFormatUpgradesType::DirectDependencies;
       void Start(int frames = 4, ChainTextureFormatUpgradesType type = ChainTextureFormatUpgradesType::DirectAndIndirectDependencies, ChainTextureFormatUpgradesType end_type = ChainTextureFormatUpgradesType::DirectDependencies)
@@ -554,6 +559,7 @@ namespace
    
    ///////////////////////////////////
 
+   // user settings for each SubGame, applied on change, and saved to ini
    namespace SubGameUserSettingsHandler
    {
       bool enabled = false;
@@ -684,6 +690,9 @@ namespace
             reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
             reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "UI"), s->paper_ui);
          }
+
+         // try load Unknown settings
+         OnSubGameChange(Unknown);
       }
    }
    
@@ -740,15 +749,15 @@ namespace
 
          // XeGTAOHandler
          XeGTAOHandler::OnSubGameChange(prev, curr);
-            
+         
          // reset upgrades params
          enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
          best_resource_unorm = false; //TODO: Luma needs this or something better for core.hpp!
          ignore_upgraded_samplers = true;
-            
+         
          // clear old hashes
          auto_texture_format_upgrade_shader_hashes.clear();
-            
+         
          // set new Indirect Upgrades hashes
          auto_texture_format_upgrade_shader_hashes[0x5B190892] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00
          auto_texture_format_upgrade_shader_hashes[0x3CC502A9] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00 subsequent downsamples
@@ -963,20 +972,18 @@ public:
          static bool drawn_ao0 = false;
          if (ps == 0x5ED3BA5A) // ao0: create Visibility and Edges
          {
-            // GTAO override //TODO: currently used to prefilter depth only
-            XeGTAOHandler::DrawH2A_0(device_data, native_device, native_device_context, cmd_list_data, h2a_ao_depth.get(), h2a_ao_normals.get());
-            drawn_ao0 = true;
-            
-            return DrawOrDispatchOverrideType::Replaced;
+            drawn_ao0 = false;
+
+            // GTAO override 
+            return XeGTAOHandler::H2A::Draw0(device_data, native_device, native_device_context, cmd_list_data, h2a_ao_depth.get(), h2a_ao_normals.get());
          }
 
          if (ps == 0x4C2C530E && drawn_ao0) // ao1: resolve to AO
          {
-            // GTAO override
-            XeGTAOHandler::DrawH2A_1(device_data, native_device, native_device_context, cmd_list_data, h2a_ao_depth.get(), h2a_ao_normals.get());
             drawn_ao0 = false;
 
-            return DrawOrDispatchOverrideType::None;
+            // GTAO override
+            return XeGTAOHandler::H2A::Draw1(device_data, native_device, native_device_context, cmd_list_data, h2a_ao_depth.get(), h2a_ao_normals.get());
          }
       }
       
@@ -1305,11 +1312,6 @@ public:
             SubGameHandler::SetSubGame(static_cast<SubGame>(subgame_index));
          }
 
-         // Reset button
-         if (ImGui::Button("Panic Reset")) SubGameHandler::Reinit();
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Full reset SubGame detection, clearing all HDR upgraded resources.");
-
          // best_resource_unorm_disallow
          if (DEVELOPMENT)
          {
@@ -1324,6 +1326,11 @@ public:
          DrawColoredSubHeader("Settings Applying On Change");
          SubGameUserSettingsHandler::OnImGui();
       }
+
+      // Reset button
+      if (ImGui::Button("Panic Reset")) SubGameHandler::Reinit();
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("If anything is wonky (black screen, AO not same res, SDR clamping) click this!\n(Full reset SubGame detection, clearing all HDR upgraded resources.)");
 
       if (DEVELOPMENT) ImGui::Separator();
    }
@@ -1340,6 +1347,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          // swapchain
          swapchain_format_upgrade_type  = TextureFormatUpgradesType::AllowedEnabled;
          swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
+
+         prevent_fullscreen_state = false;
 
          // resources
          texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled; //see SubGameHandler::SetSubGame()
