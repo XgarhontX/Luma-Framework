@@ -77,9 +77,9 @@ void main(
   }
   r0.xyz = LocalTexture_bloom_sampler.Sample(LocalSampler_bloom_sampler_s, r2.xy).xyz * GS.Bloom;
   r0.xyz = r1.xyz + r0.xyz;
-  r0.w = 1;
-
+  
   // Hue and Saturation Matrix
+  r0.w = 1;
   r1.x = dot(r0.xyzw, ps_postprocess_hue_saturation_matrix._m00_m10_m20_m30);
   r1.y = dot(r0.xyzw, ps_postprocess_hue_saturation_matrix._m01_m11_m21_m31);
   r1.z = dot(r0.xyzw, ps_postprocess_hue_saturation_matrix._m02_m12_m22_m32);

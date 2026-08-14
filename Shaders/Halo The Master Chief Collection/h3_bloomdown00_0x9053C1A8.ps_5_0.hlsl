@@ -53,7 +53,8 @@ void main(
     r1.xy = min(ps_global_viewport_bounds_uv.zw, r1.zw);
   }
   r1.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r1.xy).xyzw; 
-  r1.xyzw = saturate(r1.xyzw);
+  // r1.xyzw = saturate(r1.xyzw);
+  r1 = max(r1, 0);
 
   r2.xyzw = ps_postprocess_pixel_size.xyxy * float4(1,-1,-1,1) + v1.xyxy;
   if (r0.x != 0) {
@@ -62,7 +63,8 @@ void main(
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r3.xy);
   }
   r3.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw;
-  r3.xyzw = saturate(r3.xyzw);
+  // r3.xyzw = saturate(r3.xyzw);
+  r3 = max(r3, 0);
   
   r1.xyzw = r3.xyzw + r1.xyzw;
   if (r0.x != 0) {
@@ -71,7 +73,8 @@ void main(
     r2.zw = min(ps_global_viewport_bounds_uv.zw, r2.xy);
   }
   r2.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.zw).xyzw;
-  r2.xyzw = saturate(r2.xyzw);
+  // r2.xyzw = saturate(r2.xyzw);
+  r2 = max(r2, 0);
 
   r1.xyzw = r2.xyzw + r1.xyzw;
   r2.xy = ps_postprocess_pixel_size.xy + v1.xy;
@@ -81,18 +84,22 @@ void main(
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r0.xy);
   }
   r0.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw;
-  r0.xyzw = saturate(r0.xyzw);
+  // r0.xyzw = saturate(r0.xyzw);
+  r0 = max(r0, 0);
 
   r0.xyzw = r1.xyzw + r0.xyzw;
-  o0.xyzw = float4(0.25,0.25,0.25,0.25) * r0.xyzw;
+  r0.xyzw = 0.25 * r0.xyzw;
 
-  float y = GetLuminance(o0.xyz);
+  float y = GetLuminance(r0.xyz);
+  const float p = 1 / 0.25;
   #if HALO3_BLOOM == 0
-    o0.xyz *= safeDivision(Neutwo(o0.xyz, 1), y);
-    o0.xyz = saturate(o0.xyz);
+    r0.xyz *= safeDivision(Neutwo(r0.xyz, 1), y);
+    // r0.xyz = saturate(r0.xyz);
   #else
-    o0.xyz = Neutwo(o0.xyz, 1);
+    r0.xyz = Neutwo(r0.xyz, p);
   #endif
-  o0.w = Neutwo(o0.w, 1);
+  r0.w = Neutwo(r0.w, p);
+
+  o0 = r0;
   return;
 }

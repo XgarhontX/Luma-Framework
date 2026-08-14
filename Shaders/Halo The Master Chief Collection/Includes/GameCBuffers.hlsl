@@ -16,6 +16,7 @@ namespace CB
       float FilmGrain;
       float WhiteClip;
       float AmbientOcclusion;
+      float MotionBlur;
    };
    
    struct LumaGameData

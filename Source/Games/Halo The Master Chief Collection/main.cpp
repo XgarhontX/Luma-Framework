@@ -250,10 +250,10 @@ namespace
       
       void OnInit()
       {
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter),    ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_MainPass),     ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter), ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_MainPass),      ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass1),  ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_DenoisePass2),  ShaderDefinition{ Luma_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
       }
 
       namespace H2A
@@ -786,7 +786,8 @@ namespace
                ignore_upgraded_samplers = false;
                break;
             case Halo3:
-               auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 //TODO: more variants?
+               auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
+               auto_texture_format_upgrade_shader_hashes[0x7D41B2E6] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 //TODO: more variants?
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
                WarmupDirectAndIndirectHandler::Start();
                break;
@@ -884,6 +885,7 @@ public:
       default_luma_global_game_settings.FilmGrain = cb_luma_global_settings.GameSettings.FilmGrain = 1.f;
       default_luma_global_game_settings.WhiteClip = cb_luma_global_settings.GameSettings.WhiteClip = 1.f;
       default_luma_global_game_settings.AmbientOcclusion = cb_luma_global_settings.GameSettings.AmbientOcclusion = 1.f;
+      default_luma_global_game_settings.MotionBlur = cb_luma_global_settings.GameSettings.MotionBlur = 1.f;
 
       // Shader Defines
       ShaderDefines::OnInitAddNewDefines();
@@ -996,7 +998,7 @@ public:
       }
 
       // Halo3
-      constexpr std::array<uint64_t, 1> halo3_ps_hashes = { 0xEEB815BC }; //TODO: more variants?
+      constexpr std::array<uint64_t, 2> halo3_ps_hashes = { 0xEEB815BC, 0x7D41B2E6 }; //TODO: more variants?
       if (std::ranges::contains(halo3_ps_hashes, ps))
       {
          SubGameHandler::Enqueue(Halo3);
@@ -1075,6 +1077,7 @@ public:
       reshade::get_config_value(nullptr, NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
       reshade::get_config_value(nullptr, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
       reshade::get_config_value(nullptr, NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
+      reshade::get_config_value(nullptr, NAME, "MotionBlur", cb_luma_global_settings.GameSettings.MotionBlur);
 
 #if HALO_UPGRADE_SAMPLERS
       // mip_lod_bias_offset
@@ -1259,6 +1262,13 @@ public:
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Multiplier on Film Grain strength when applicable.");
          DrawResetButton(cb_luma_global_settings.GameSettings.FilmGrain, 1.f, "FilmGrain", nullptr);
+
+         // MotionBlur
+         if (ImGui::SliderFloat("Motion Blur", &cb_luma_global_settings.GameSettings.MotionBlur, 0.f, 1.f, "%.2f"))
+            reshade::set_config_value(nullptr, NAME, "MotionBlur", cb_luma_global_settings.GameSettings.MotionBlur);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Multiplier on Motion Blur strength when applicable.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.MotionBlur, 1.f, "MotionBlur", nullptr);
          
          //ALLOW_COLORGRADE
          ShaderDefines::UIToggleCheckmark(ShaderDefines::ALLOW_COLORGRADE, "Color Grading (Debug)", "Disable to skip color grading,\nexposing the raw HDR input.");
