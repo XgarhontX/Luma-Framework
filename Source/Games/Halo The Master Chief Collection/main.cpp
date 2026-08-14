@@ -969,10 +969,11 @@ public:
             return DrawOrDispatchOverrideType::None; //let downsample continue
          }
 
-         static bool drawn_ao0 = false;
+         static bool drawn_ao0 = false; // token
          if (ps == 0x5ED3BA5A) // ao0: create Visibility and Edges
          {
-            drawn_ao0 = false;
+            // token give
+            drawn_ao0 = true;
 
             // GTAO override 
             return XeGTAOHandler::H2A::Draw0(device_data, native_device, native_device_context, cmd_list_data, h2a_ao_depth.get(), h2a_ao_normals.get());
@@ -980,6 +981,7 @@ public:
 
          if (ps == 0x4C2C530E && drawn_ao0) // ao1: resolve to AO
          {
+            // token consume
             drawn_ao0 = false;
 
             // GTAO override
