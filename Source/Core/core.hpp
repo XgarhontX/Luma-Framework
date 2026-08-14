@@ -7064,56 +7064,58 @@ namespace
    // Some other games pass in "0" as format, meaning the view should pick the most intuitive/basic format for it.
    reshade::api::format GetBestResourceViewUpgradeFormat(const reshade::api::resource_view_desc& original_view_desc, reshade::api::resource_usage usage_type, const reshade::api::resource_desc& original_desc, const reshade::api::resource_desc& upgraded_desc)
    {
-      // Straight forward upgrade (fast common path), couldn't really be otherwise
-      if (upgraded_desc.texture.format == reshade::api::format::r16g16b16a16_float)
-      {
-         return reshade::api::format::r16g16b16a16_float;
-      }
-      // Depth
-      else if (upgraded_desc.texture.format == reshade::api::format::r32_typeless || upgraded_desc.texture.format == reshade::api::format::r32_float || upgraded_desc.texture.format == reshade::api::format::d32_float)
-      {
-         if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
-         {
-            return reshade::api::format::d32_float;
-         }
-         else
-         {
-            ASSERT_ONCE(IsFloatFormat(DXGI_FORMAT(original_view_desc.format))); // We might not want to use a float view in this case? We probably do anyway!
-            return reshade::api::format::r32_float;
-         }
-      }
-      // Depth + Stencil
-      else if (upgraded_desc.texture.format == reshade::api::format::r32_g8_typeless || upgraded_desc.texture.format == reshade::api::format::d32_float_s8_uint)
-      {
-         if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
-         {
-            return reshade::api::format::d32_float_s8_uint;
-         }
-         else
-         {
-            // If we got here, the game would have originally been using a depth buffer with a stencil, so preserve the right stencil/depth view
-            return (original_view_desc.format == reshade::api::format::x24_unorm_g8_uint) ? reshade::api::format::x32_float_g8_uint : reshade::api::format::r32_float_x8_uint;
-         }
-      }
-      // All other
-      else
-      {
-         if (IsTypelessFormat(DXGI_FORMAT(original_desc.texture.format)))
-         {
-            ASSERT_ONCE(!IsTypelessFormat(DXGI_FORMAT(original_view_desc.format)));
-            ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == DXGI_FORMAT(original_desc.texture.format));
-            // TODO: return the format we upgraded the resource to, if it's not typeless, otherwise restore the most common one? FLOAT?
-         }
-         else
-         {
-            ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == GetTypelessFormat(DXGI_FORMAT(original_desc.texture.format))); // Just verify the game tried to create the resource view with the proper (upgraded) format already? This might trigger and we might need to remove it
-
-            // Return the raw texture format. "GetBestResourceUpgradeFormat()" never returns typeless formats for non depth/stencil textures, so they are generally directly usable.
-            return upgraded_desc.texture.format;
-         }
-      }
-
-      return original_view_desc.format; // Unchanged
+      return best_resource_unorm ? reshade::api::format::r16g16b16a16_unorm : reshade::api::format::r16g16b16a16_float; //TODO: Halo3 bloom indirect upgrades needs forced! See also "ASSERT_ONCE(rtvs[i].get() == nullptr || IsRTBlendDisabled(blend_desc.RenderTarget[i]));" which fails.
+      
+      // // Straight forward upgrade (fast common path), couldn't really be otherwise
+      // if (upgraded_desc.texture.format == reshade::api::format::r16g16b16a16_float)
+      // {
+      //    return reshade::api::format::r16g16b16a16_float;
+      // }
+      // // Depth
+      // else if (upgraded_desc.texture.format == reshade::api::format::r32_typeless || upgraded_desc.texture.format == reshade::api::format::r32_float || upgraded_desc.texture.format == reshade::api::format::d32_float)
+      // {
+      //    if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
+      //    {
+      //       return reshade::api::format::d32_float;
+      //    }
+      //    else
+      //    {
+      //       ASSERT_ONCE(IsFloatFormat(DXGI_FORMAT(original_view_desc.format))); // We might not want to use a float view in this case? We probably do anyway!
+      //       return reshade::api::format::r32_float;
+      //    }
+      // }
+      // // Depth + Stencil
+      // else if (upgraded_desc.texture.format == reshade::api::format::r32_g8_typeless || upgraded_desc.texture.format == reshade::api::format::d32_float_s8_uint)
+      // {
+      //    if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
+      //    {
+      //       return reshade::api::format::d32_float_s8_uint;
+      //    }
+      //    else
+      //    {
+      //       // If we got here, the game would have originally been using a depth buffer with a stencil, so preserve the right stencil/depth view
+      //       return (original_view_desc.format == reshade::api::format::x24_unorm_g8_uint) ? reshade::api::format::x32_float_g8_uint : reshade::api::format::r32_float_x8_uint;
+      //    }
+      // }
+      // // All other
+      // else
+      // {
+      //    if (IsTypelessFormat(DXGI_FORMAT(original_desc.texture.format)))
+      //    {
+      //       ASSERT_ONCE(!IsTypelessFormat(DXGI_FORMAT(original_view_desc.format)));
+      //       ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == DXGI_FORMAT(original_desc.texture.format));
+      //       // TODO: return the format we upgraded the resource to, if it's not typeless, otherwise restore the most common one? FLOAT?
+      //    }
+      //    else
+      //    {
+      //       ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == GetTypelessFormat(DXGI_FORMAT(original_desc.texture.format))); // Just verify the game tried to create the resource view with the proper (upgraded) format already? This might trigger and we might need to remove it
+      //
+      //       // Return the raw texture format. "GetBestResourceUpgradeFormat()" never returns typeless formats for non depth/stencil textures, so they are generally directly usable.
+      //       return upgraded_desc.texture.format;
+      //    }
+      // }
+      //
+      // return original_view_desc.format; // Unchanged
    }
 
    // TODO: if the source format was like R8G8_UNORM, only upgrade it to R16G16_FLOAT unless otherwise specified? Just expose the format! We could hardcode a list of in/out format upgrades here for example! Update "GetBestResourceViewUpgradeFormat()" accordingly!
