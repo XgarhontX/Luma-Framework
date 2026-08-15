@@ -799,13 +799,14 @@ namespace
                ignore_upgraded_samplers = false;
                break;
             case Halo3:
-               auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
-               auto_texture_format_upgrade_shader_hashes[0x7D41B2E6] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 //TODO: more variants?
+               auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 //TODO: more variants?
+               auto_texture_format_upgrade_shader_hashes[0x7D41B2E6] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
                WarmupDirectAndIndirectHandler::Start();
                break;
             case Halo3ODST:
                auto_texture_format_upgrade_shader_hashes[0xADADBE3D] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 //TODO: more variants?
+               auto_texture_format_upgrade_shader_hashes[0x2193CAB5] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
                auto_texture_format_upgrade_shader_hashes[0x03B68268] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //noise overlay
                WarmupDirectAndIndirectHandler::Start();
@@ -1018,7 +1019,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
       // Halo3ODST
-      constexpr std::array<uint64_t, 2> halo3odst_ps_hashes = { 0xADADBE3D, 0x03B68268 }; //TODO: more variants?
+      constexpr std::array<uint64_t, 3> halo3odst_ps_hashes = { 0xADADBE3D, 0x2193CAB5, 0x03B68268 }; //TODO: more variants?
       if (std::ranges::contains(halo3odst_ps_hashes, ps))
       {
          SubGameHandler::Enqueue(Halo3ODST);
