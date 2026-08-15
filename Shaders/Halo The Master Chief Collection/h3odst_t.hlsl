@@ -49,6 +49,7 @@ float3 Rolloff_Pos(float3 x, float4 c) {
 void Rolloff(float4 c) {
   // SDR
   tmi.sdr = Rolloff_Pos(min(c.x, tmi.x), c);
+  tmi.sdr = max(tmi.sdr, 0);
 
   // SDR early out
   if (!HDR_ENABLED) {
@@ -77,11 +78,22 @@ void Rolloff(float4 c) {
 
   // HDR Extended 
   tmi.x = LinearPiecewiseExtension(tmi.sdr, tmi.x, thres_at_piecewise, slope_at_piecewise, output_at_piecewise);
-  tmi.x = max(tmi.x, 0);
 
   // HDR Rolloff
   tmi.p = GammaCorrectionPeak(HDR_PEAK);
-  tmi.x = NeupowHQ(tmi.x, tmi.p, 8 * GS.WhiteClip); // TODO: user white clip
+  tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip);
+
+  // Hue Correct
+  float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 3, 1));
+  sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
+  sdr = UCS_Encode(sdr);
+  tmi.x = UCS_Encode(tmi.x);
+  tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.667, 0.226, 0.89);
+  tmi.x = UCS_Decode(tmi.x);
+
+  // Clean
+  tmi.x = max(tmi.x, 0);
+  tmi.x = min(tmi.x, tmi.p);
 }
 
 void GammaOut() {

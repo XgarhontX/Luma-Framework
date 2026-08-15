@@ -278,13 +278,29 @@ void frag_main()
     SV_Target.w = _101;
 }
 
+#if XBOX360_CURVE == 1
+#include "./Includes/Curve360.hlsl"
+#endif
+
 SPIRV_Cross_Output main(SPIRV_Cross_Input stage_input)
 {
     TEXCOORD = stage_input.v1.xy;
     frag_main();
 
+    SV_Target.xyz = max(SV_Target.xyz, 0);
     SV_Target.xyz = sRGB_Encode(SV_Target.xyz);
-    SV_Target.xyz = RenderIntermediatePass(SV_Target.xyz);
+    if (HDR_ENABLED) {
+        SV_Target.xyz = RenderIntermediatePass_Decode(SV_Target.xyz);
+    }
+
+    #if XBOX360_CURVE == 1
+        SV_Target.xyz = Curve360::FullCorrect(SV_Target.xyz);
+    #endif
+
+    if (HDR_ENABLED) {
+        SV_Target.xyz *= HDR_INTSCALING;
+        SV_Target.xyz = RenderIntermediatePass_Encode(SV_Target.xyz);
+    }
     SV_Target.xyz = sRGB_Decode(SV_Target.xyz);
 
     SPIRV_Cross_Output stage_output;

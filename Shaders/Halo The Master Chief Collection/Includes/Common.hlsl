@@ -9,20 +9,6 @@
 
 #define GS LumaSettings.GameSettings
 
-//  enum SubGame : uint8_t
-//  {
-//     Unknown,
-//     Halo1Classic,
-//     Halo1Anniversary,
-//     Halo2Classic,
-//     Halo2Anniversary,
-//     Halo2AnniversaryMP,
-//     Halo3,
-//     Halo3ODST,
-//     HaloReach,
-//     Halo4,
-//  };
-
 bool IsGame_Unknown() {return GS.SubGame == 1;}
 bool IsGame_Halo1Classic() {return GS.SubGame == 1;}
 bool IsGame_Halo1Anniversary() {return GS.SubGame == 2;}
@@ -77,13 +63,13 @@ float Neupow(float x, float peak, float power) {
   return peak * rcp(exp2(log2(1.0f + p_over_x_pow_a) * rcp(power)));
 }
 float3 NeupowHQ(float3 x, float peak, float power) {
-  float3 m = max(x, peak); //normalization to avoid float
+  float3 m = max(x, peak); //normalization to avoid float errors
   float3 xn = x / m;
   float3 pn = peak / m;
   return m * (xn * pn) / pow(pow(xn, power) + pow(pn, power), rcp(power));
 }
 float NeupowHQ(float x, float peak, float power) {
-  float m = max(x, peak); //normalization to avoid float
+  float m = max(x, peak); //normalization to avoid float errors
   float xn = x / m;
   float pn = peak / m;
   return m * (xn * pn) / pow(pow(xn, power) + pow(pn, power), rcp(power));
@@ -161,6 +147,7 @@ float3 UCS_Decode(float3 x) {
   // return JzAzBz::jzazbzToRgb(x, CS_BT709);
   return renodx::color::ictcp::Decode(x, CS_BT709);
 }
+
 float3 RestoreHueAndChrominanceUcsInternal(float3 targetUcs, float3 sourceUcs, float currentChrominance, float hueStrength, float chrominanceStrength, float minChromaRatio = 0.f)
 {
   if (targetUcs.x == 0) return targetUcs;
@@ -184,7 +171,6 @@ float3 RestoreHueAndChrominanceUcsInternal(float3 targetUcs, float3 sourceUcs, f
 
   return targetUcs;
 }
-
 float3 RestoreHueAndChrominanceUcs(float3 targetUcs, float3 sourceUcs, float hueStrength, float chrominanceStrength, float minChromaRatio = 0.f)
 {
   return RestoreHueAndChrominanceUcsInternal(targetUcs, sourceUcs, length(targetUcs.yz), hueStrength, chrominanceStrength, minChromaRatio);

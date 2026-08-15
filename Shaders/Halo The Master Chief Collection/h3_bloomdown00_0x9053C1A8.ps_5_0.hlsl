@@ -90,15 +90,17 @@ void main(
   r0.xyzw = r1.xyzw + r0.xyzw;
   r0.xyzw = 0.25 * r0.xyzw;
 
-  float y = GetLuminance(r0.xyz);
-  const float p = 0.3;
-  #if HALO3_BLOOM == 0
-    r0.xyz *= safeDivision(Neupow(r0.xyz, 1, 3), y);
-    // r0.xyz = saturate(r0.xyz);
-  #else
-    r0.xyz = Neupow(r0.xyz, p, 3);
-  #endif
-  r0.w = Neutwo(r0.w, p);
+  if (IsGame_Halo3()) { //TODO: detect if before tonemap, which is when this is useful
+    float y = GetLuminance(r0.xyz);
+    const float p = 0.3;
+    #if HALO3_BLOOM == 0
+      r0.xyz *= safeDivision(Neupow(r0.xyz, 1, 3), y);
+      // r0.xyz = saturate(r0.xyz);
+    #else
+      r0.xyz = Neupow(r0.xyz, p, 3);
+    #endif
+    r0.w = Neutwo(r0.w, p);
+  }
 
   o0 = r0;
   return;

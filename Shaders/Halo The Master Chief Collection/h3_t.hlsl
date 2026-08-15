@@ -90,16 +90,17 @@ void Rolloff(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor, float4 c) {
 
   // HDR Rolloff
   tmi.p = GammaCorrectionPeak(HDR_PEAK * pDelta);
-  tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip); // TODO: user white clip
+  tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip);
 
   // Hue Correct
-  float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 2, 1));
-  sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1);
+  float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 3, 1));
+  sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
   sdr = UCS_Encode(sdr);
   tmi.x = UCS_Encode(tmi.x);
-  tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.3, 0.1, 0.89);
+  tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.667, 0.226, 0.89);
   tmi.x = UCS_Decode(tmi.x);
 
+  // Clean
   tmi.x = max(tmi.x, 0);
   tmi.x = min(tmi.x, tmi.p);
 }

@@ -27,6 +27,7 @@ Texture2D<float4> GlobalTexture_noise_sampler : register(t7);
 // 3Dmigoto declarations
 #define cmp -
 #include "./Includes/Common.hlsl"
+//TODO: common for variants
 
 //https://github.com/halohlsl/HaloReach-Shader-Source/blob/pc/source/omaha/rasterizer/hlsl/postprocess/final_composite_base.fx
 void main(
@@ -65,7 +66,7 @@ void main(
 
   // HDR Tonemap
   r2.xyz = sRGB_Decode(r2.xyz);
-  r2.xyz = NeupowHQ(r2.xyz, GammaCorrectionPeak(HDR_PEAK), 4 * GS.WhiteClip);
+  r2.xyz = NeupowHQ(r2.xyz, GammaCorrectionPeak(HDR_PEAK), 9 * GS.WhiteClip);
   r2.xyz = sRGB_Encode(r2.xyz);
 
   // Noise apply
@@ -73,7 +74,8 @@ void main(
   r0.xyz = max(r0.xyz, 0);
 
   // Luma for AA
-  o0.w = dot(r0.xyz, float3(0.298999995,0.587000012,0.114)); //BT601
+  // o0.w = dot(r0.xyz, float3(0.298999995,0.587000012,0.114)); //BT601
+  o0.w = GetLuminance(r0.xyz, CS_BT709);
 
   o0.xyz = r0.xyz;
   return;

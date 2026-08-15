@@ -39,7 +39,7 @@ void main(
   r0.xyz = r2.xyz + r0.xyz;
   r0.xyz = r0.xyz + r1.xyz;
   o0.xyz = float3(0.25,0.25,0.25) * r0.xyz;
-  if (IsGame_Halo3() && GS.UIBlurDown0Count == 1) o0.xyz = sRGB_Encode(o0.xyz);
+  if ((IsGame_Halo3() || IsGame_Halo3ODST()) && GS.UIBlurDown0Count == 1) o0.xyz = sRGB_Encode(o0.xyz);
   
   return;
 }

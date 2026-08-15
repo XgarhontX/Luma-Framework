@@ -16,6 +16,7 @@ namespace ShaderDefines
    constexpr uint32_t HALO2_GTAO = char_ptr_crc32("HALO2_GTAO");
    constexpr uint32_t HALO2_GTAO_NOISE = char_ptr_crc32("HALO2_GTAO_NOISE");
    constexpr uint32_t HALO2_GTAO_FULLRES = char_ptr_crc32("HALO2_GTAO_FULLRES");
+   constexpr uint32_t XBOX360_CURVE = char_ptr_crc32("XBOX360_CURVE");
    constexpr uint32_t SWAPCHAIN_TEST_PEAK = char_ptr_crc32("SWAPCHAIN_TEST_PEAK");
 
    void OnInitAddNewDefines()
@@ -29,6 +30,7 @@ namespace ShaderDefines
          {"HALO2_GTAO", '1', true, false, "Halo 2 Anniversary GTAO replacement.", 1},
          {"HALO2_GTAO_NOISE", '1', true, false, "Halo 2 Anniversary GTAO noise movement.", 1},
          {"HALO2_GTAO_FULLRES", '1', true, false, "Halo 2 Anniversary GTAO do full resolution.", 1},
+         {"XBOX360_CURVE", '1', true, false, "Xbox 360 gamma perceptual correction.", 1},
          {"SWAPCHAIN_TEST_PEAK", '0', true, false, "Test pattern", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -637,10 +639,13 @@ namespace
       }
 
       constexpr const char* reshade_config_section = "SubGameUserSettingsHandler";
-      void OnImGui()
+      void OnImGui(SubGame curr_game)
       {
          if (ImGui::Checkbox("Enable Per Game Settings", &enabled))
+         {
             reshade::set_config_value(nullptr, reshade_config_section, "EnablePerGameSettings", enabled);
+            OnSubGameChange(curr_game);
+         }
 
          if (!enabled) ImGui::BeginDisabled();
          for (const auto& sg : settings)
@@ -743,7 +748,7 @@ namespace
          
          // log
          reshade::log::message(reshade::log::level::info, std::format("SubGame changed from {} to {}", SubGameToString(prev), SubGameToString(curr)).c_str());
-            
+         
          // SubGameUserSettingsHandler
          SubGameUserSettingsHandler::OnSubGameChange(curr);
 
@@ -1026,6 +1031,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
+      // TODO: HaloReach: GTAO (0x90E0D303) (VERY HARD! Req finding inconsistent use of normals, & get world --> view matrix)
       // HaloReach: fxaa
       if (!device_data.has_drawn_main_post_processing && ps == 0x0EFB2B17)
       {
@@ -1164,12 +1170,11 @@ public:
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Reintroduce SDR gamma mismatch to lower shadows, probably matching original intent.");
 
          // custom_sdr_gamma
-         const char* const items[] = { "Off (sRGB)", "Match SDR (2.2)", "Stronger (2.4)", "Xbox Like (2.6)" };
+         const char* const items[] = { "Off (sRGB)", "Match SDR (2.2)", "Stronger (2.4)" };
          int custom_sdr_gamma_index = 0;
          if (custom_sdr_gamma > 0) { //detect
             if (custom_sdr_gamma == 2.2f) custom_sdr_gamma_index = 1;
             else if (custom_sdr_gamma == 2.4f) custom_sdr_gamma_index = 2;
-            else if (custom_sdr_gamma == 2.6f) custom_sdr_gamma_index = 3;
          }
          ImGui::PushID("GammaCorrection custom_sdr_gamma");
          if (ImGui::Combo("Correction", &custom_sdr_gamma_index, items, IM_ARRAYSIZE(items))) //user set & save
@@ -1179,11 +1184,17 @@ public:
                default: custom_sdr_gamma = 0.f; break;
                case 1: custom_sdr_gamma = 2.2f; break;
                case 2: custom_sdr_gamma = 2.4f; break;
-               case 3: custom_sdr_gamma = 2.6f; break;
             }
             reshade::set_config_value(nullptr, NAME, "custom_sdr_gamma", custom_sdr_gamma);
          }
          ImGui::PopID();
+
+         ImGui::NewLine();
+
+         // XBOX360_CURVE
+         DrawColoredSubHeader("Xbox 360 Gamma Curve");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Emulate the Xbox 360's more aggressive gamma curve.");
+         ShaderDefines::UIDropDown(ShaderDefines::XBOX360_CURVE, "Perceptual Emulation", { "Off", "If Applicable" }, "This is emulation as the actual curve is a wonky \"jagged\" piecewise curve for performance reasons.\nThis emulation also keep dark colors from being overly saturated (hence why \"perceptual\").");
       }
       ShaderDefines::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0); // Forced
 
@@ -1325,8 +1336,8 @@ public:
          ImGui::NewLine();
          
          // SubGameUserSettingsHandler
-         DrawColoredSubHeader("Settings Applying On Change");
-         SubGameUserSettingsHandler::OnImGui();
+         DrawColoredSubHeader("Settings Override Upon Switch");
+         SubGameUserSettingsHandler::OnImGui(SubGameHandler::curr);
       }
 
       // Reset button

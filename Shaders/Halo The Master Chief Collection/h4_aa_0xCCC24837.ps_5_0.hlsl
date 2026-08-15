@@ -16,6 +16,9 @@ Texture2D<float4> sourceSampler_texture : register(t0);
 
 #include "./Includes/Common.hlsl"
 
+#if XBOX360_CURVE == 1
+#include "./Includes/Curve360.hlsl"
+#endif
 
 void main(
   float4 v0 : SV_Position0,
@@ -78,7 +81,21 @@ void main(
   }
 #endif
 
-  o0.xyz = RenderIntermediatePass(o0.xyz);
+    o0.xyz = max(o0.xyz, 0);
+    o0.xyz = sRGB_Encode(o0.xyz);
+    if (HDR_ENABLED) {
+        o0.xyz = RenderIntermediatePass_Decode(o0.xyz);
+    }
+    
+    #if XBOX360_CURVE == 1
+        o0.xyz = Curve360::FullCorrect(o0.xyz);
+    #endif
+
+    if (HDR_ENABLED) {
+        o0.xyz *= HDR_INTSCALING;
+        o0.xyz = RenderIntermediatePass_Encode(o0.xyz);
+    }
+    o0.xyz = sRGB_Decode(o0.xyz);
 
   return;
 }
