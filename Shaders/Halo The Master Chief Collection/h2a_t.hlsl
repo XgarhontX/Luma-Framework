@@ -1,5 +1,6 @@
 #define LUT_3D 1
 #include "./Includes/Common.hlsl"
+#include "./Includes/PragMap.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
 
 struct ToneMapInfo {
@@ -103,11 +104,11 @@ void Rolloff() {
   ext = UCS_Encode(ext);
   hdr709 = UCS_Encode(hdr709);
   ext = RestoreHueAndChrominanceUcs(ext, hdr709, 0.33, 0.67, 0);
-  // ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.622, 0.622, 0.622);
   ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.8, 0.826, 0.9);
   ext = UCS_Decode(ext);
   ext = max(ext, 0); //clean
   tmi.x = ext;
+  // tmi.x = PragMap::pragmap(ext, tmi.p, DVS1, DVS2, CS_BT709);
 
   // exposure 2 (linear white to clip, but just treat as exposure for HDR)
   tmi.x *= PS_REG_COMMON_HDR_PARAMS.z;

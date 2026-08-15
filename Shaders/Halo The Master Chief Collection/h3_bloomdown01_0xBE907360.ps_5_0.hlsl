@@ -82,7 +82,7 @@ void main(
   } else {
     r2.xy = v1.xy;
   }
-  r2.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r2.xyz = sRGB_Decode(r2.xyz); */
+  r2.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r2.xyz = sRGB_Encode(r2.xyz); */
   r1.xyzw = r2.xyzw * float4(0.25,0.25,0.25,0.25) + r1.xyzw;
   r2.xyzw = ps_postprocess_pixel_size.xyxy * float4(2,0,-2,2) + v1.xyxy;
   if (r0.x != 0) {
@@ -90,14 +90,14 @@ void main(
     r3.xy = max(ps_global_viewport_bounds_uv.xy, r3.xy);
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r3.xy);
   }
-  r3.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r3.xyz = sRGB_Decode(r3.xyz); */
+  r3.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r3.xyz = sRGB_Encode(r3.xyz); */
   r1.xyzw = r3.xyzw * float4(0.125,0.125,0.125,0.125) + r1.xyzw;
   if (r0.x != 0) {
     r2.xy = r2.zw * ps_global_viewport_res_multipliers.xy + r0.yz;
     r2.xy = max(ps_global_viewport_bounds_uv.xy, r2.xy);
     r2.zw = min(ps_global_viewport_bounds_uv.zw, r2.xy);
   }
-  r2.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.zw).xyzw; /* r2.xyz = sRGB_Decode(r2.xyz); */
+  r2.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.zw).xyzw; /* r2.xyz = sRGB_Encode(r2.xyz); */
   r1.xyzw = r2.xyzw * float4(0.0625,0.0625,0.0625,0.0625) + r1.xyzw;
   r2.xy = ps_postprocess_pixel_size.xy * float2(0,2) + v1.xy;
   if (r0.x != 0) {
@@ -105,7 +105,7 @@ void main(
     r2.zw = max(ps_global_viewport_bounds_uv.xy, r2.zw);
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r2.zw);
   }
-  r2.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r2.xyz = sRGB_Decode(r2.xyz); */
+  r2.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r2.xyz = sRGB_Encode(r2.xyz); */
   r1.xyzw = r2.xyzw * float4(0.125,0.125,0.125,0.125) + r1.xyzw;
   r2.xy = ps_postprocess_pixel_size.xy * float2(2,2) + v1.xy;
   if (r0.x != 0) {
@@ -113,13 +113,15 @@ void main(
     r0.xy = max(ps_global_viewport_bounds_uv.xy, r0.xy);
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r0.xy);
   }
-  r0.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r0.xyz = sRGB_Decode(r0.xyz); */
+  r0.xyzw = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyzw; /* r0.xyz = sRGB_Encode(r0.xyz); */
   // o0.xyz = sRGB_Encode(o0.xyz);
   // o0.xyz = pow(o0.xyz, 2.6);
   // o0.xyz = sRGB_Decode(o0.xyz);
-  o0.xyzw = r0.xyzw * float4(0.0625,0.0625,0.0625,0.0625) + r1.xyzw;
-  if (IsGame_Halo3()) o0.xyz *= 1.146; // bloom only
-  // w (luma) is used by autoexposure
-  o0 = max(o0, 0);
+  r0.xyzw = r0.xyzw * float4(0.0625,0.0625,0.0625,0.0625) + r1.xyzw;
+
+  if (IsGame_Halo3()) r0.xyz *= 1.146; // bloom only
+
+  // Halo3: w (luma) is used by autoexposure
+  o0 = max(r0, 0); 
   return;
 }

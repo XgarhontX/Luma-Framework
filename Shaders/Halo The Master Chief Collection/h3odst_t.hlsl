@@ -1,5 +1,6 @@
 #define LUT_3D 1
 #include "./Includes/Common.hlsl"
+#include "./Includes/PragMap.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
 
 struct ToneMapInfo {
@@ -81,15 +82,16 @@ void Rolloff(float4 c) {
 
   // HDR Rolloff
   tmi.p = GammaCorrectionPeak(HDR_PEAK);
-  tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip);
-
-  // Hue Correct
-  float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 3, 1));
-  sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
-  sdr = UCS_Encode(sdr);
-  tmi.x = UCS_Encode(tmi.x);
-  tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.667, 0.226, 0.89);
-  tmi.x = UCS_Decode(tmi.x);
+//   tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip);
+// 
+//   // Hue Correct
+//   float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 3, 1));
+//   sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
+//   sdr = UCS_Encode(sdr);
+//   tmi.x = UCS_Encode(tmi.x);
+//   tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.667, 0.226, 0.89);
+//   tmi.x = UCS_Decode(tmi.x);
+  tmi.x = PragMap::pragmap(tmi.x, tmi.p, 0.5, 0.09);
 
   // Clean
   tmi.x = max(tmi.x, 0);

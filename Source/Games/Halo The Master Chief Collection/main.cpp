@@ -1031,7 +1031,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
-      // TODO: HaloReach: GTAO (0x90E0D303) (VERY HARD! Req finding inconsistent use of normals, & get world --> view matrix)
+      // TODO: HaloReach: GTAO (0x90E0D303) (VERY HARD! Req finding inconsistent use of world normals to create SRV and save. Also req World --> View Matrix, which idk where it is located at. Else, live with depth generated normals.)
       // HaloReach: fxaa
       if (!device_data.has_drawn_main_post_processing && ps == 0x0EFB2B17)
       {
