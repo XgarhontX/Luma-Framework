@@ -71,7 +71,6 @@ void Rolloff() {
   tmi.sdr = sdr;
 
   // SDR early out
-  [branch]
   if (!HDR_ENABLED) {
     tmi.x = tmi.sdr;
     tmi.x *= PS_REG_COMMON_HDR_PARAMS.z;
@@ -86,6 +85,7 @@ void Rolloff() {
   // ext *= 0.2f; // low slope of Hable https://www.desmos.com/calculator/7g0i1cnx5u
   ext = LinearPiecewiseExtension(sdr, ext, 0.13, 0.200400533755, 0.0295591208569);
 
+#if 1
   // in B709
   float3 hdr709 = Neupow(ext, tmi.p * 0.8, GS.WhiteClip); 
 
@@ -96,8 +96,8 @@ void Rolloff() {
 
   // Hmmmmm's luminance normalization
   float extY = GetLuminance(ext);
-  hdr709 *= extY / GetLuminance(hdr709);
-  sdr *= safeDivision(extY / GetLuminance(sdr), 1.0); 
+  hdr709 *= safeDivision(extY / GetLuminance(hdr709), 1); // TODO: prob uneeded
+  sdr *= safeDivision(extY / GetLuminance(sdr), 1.0);
 
   // blend HDR and SDR (aka Hue Correction and Additional Blowout)
   sdr = UCS_Encode(sdr);
@@ -107,15 +107,19 @@ void Rolloff() {
   ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.8, 0.826, 0.9);
   ext = UCS_Decode(ext);
   ext = max(ext, 0); //clean
+
+  // highlights sat boost makeup
+  ext = CorrectPerChannelTonemapHiglightsDesaturationCurved(tmi.x, tmi.p, 2., 0.867, CS_BT709);
+  ext = max(ext, 0); // clean
+#else 
+  ext = PragMap::pragmap(ext, tmi.p, DVS1, DVS2, CS_BT709);
+#endif
+
+  // set output
   tmi.x = ext;
-  // tmi.x = PragMap::pragmap(ext, tmi.p, DVS1, DVS2, CS_BT709);
 
   // exposure 2 (linear white to clip, but just treat as exposure for HDR)
   tmi.x *= PS_REG_COMMON_HDR_PARAMS.z;
-
-  // highlights sat boost
-  tmi.x = CorrectPerChannelTonemapHiglightsDesaturationCurved(tmi.x, tmi.p, 2., 0.867, CS_BT709);
-  tmi.x = max(tmi.x, 0); // clean
 }
 
 void LUT(TexTuple lut) {
