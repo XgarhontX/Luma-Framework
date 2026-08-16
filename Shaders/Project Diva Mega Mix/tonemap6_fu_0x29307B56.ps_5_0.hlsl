@@ -56,7 +56,7 @@ void main(
 
   colorUntonemapped = r0.xyz;
 
-  //idk
+  //overlays
   r1.x = cmp(0 < g_texcoord_transforms[0].w);
   if (r1.x != 0) {
     r1.xyz = g_textures_4_.Sample(g_samplers_4__s, v2.xy).xyz;

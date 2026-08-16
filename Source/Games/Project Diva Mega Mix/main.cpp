@@ -1,9 +1,8 @@
 #define GAME_PROJECT_DIVA_MEGA_MIX 1
 
 #define ALLOW_SHADERS_DUMPING 0
+#define DISABLE_AUTO_DEBUGGER 1
 // #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 0
-
-#define SCENE_MAX_WHITE 4000.f
 
 #include "..\..\Core\core.hpp"
 
@@ -617,11 +616,6 @@ namespace IndividualPVTuning
 
    void OnUI(reshade::api::effect_runtime* runtime)
    {
-      ImGui::Bullet(); ImGui::SameLine();
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 0.7f, 1.f));
-      ImGui::TextWrapped("On a select few PVs, I decided to tune/nerf this mod to stay more faithful to the original.");
-      ImGui::PopStyleColor();
-      
       if (ImGui::Checkbox("Opt Into PV Tuning", &enabled)) reshade::set_config_value(runtime, NAME, "IndividualPVTuningEnabled", enabled);
       ImGui::NewLine();
 
@@ -882,6 +876,10 @@ public:
       //cb
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
+
+      // Native Shaders: Display Composition replacement
+      native_shaders_definitions.erase(CompileTimeStringHash("Display Composition"));
+      native_shaders_definitions.emplace(CompileTimeStringHash("Display Composition"), ShaderDefinition{"Luma_MegaMix_DisplayComposition", reshade::api::pipeline_subobject_type::pixel_shader});
 
       //Global default
       use_os_reference_white_level = false;
@@ -1375,6 +1373,13 @@ public:
    {
       reshade::api::effect_runtime* runtime = nullptr;
 
+      auto DrawColoredSubHeader = [](const char* label, const ImVec4& color = ImColor(128, 255, 255, 255))
+      {
+         ImGui::PushStyleColor(ImGuiCol_Text, color);
+         ImGui::Text("[%s]", label);
+         ImGui::PopStyleColor();
+      };
+
       auto& game_device_data = GetGameDeviceData(device_data);
       bool is_disabled; //for Begin/EndDisabled();
 
@@ -1395,35 +1400,35 @@ public:
       }
 
       //SWAPCHAIN_TEST_USER_PEAK
-      if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, "Test Display Peak", "Show a simple test pattern (2 Rectangles: 10000 nits outer VS user settings inner) to check if the display peak brightness is correctly set.\n\n- If display is set to HGiG, which hard clips, the technically best value is the lowest where the inner rectangle disappears.\n\n- If display is set to Static Tonemap, it will try to fit up to 10000 nits down, so you have to search up your model, or eye it by finding when the roll off starts.\n\nAlso consider other factors like chrominance loss at higher nits, Automatic Brightness Limiter (ABL), and personal preference.");
+      if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, "Test Display Peak", "3 rectangles.\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)");
 
       if (!Globals::UIIsReadmeDone)
       {
          ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-
-         ImGui::Text("README:");
-         ImGui::BulletText("UI elems of PV (e.g. lens flare) are done after HDR tonemap, affected by UI Brightness slider.");
-         ImGui::BulletText("Toon shading (Non-Physical Rendering) sucks, and are clamped SDR unless changed otherwise.");
-
-         ImGui::NewLine(); //////
-      
-         ImGui::BulletText("Recommended Mod (GameBanana):");
-         ImGui::SameLine();
-         if (ImGui::Button("Clean Interface: Remove all but the notes."))
-            Website::OpenWebsite("https://gamebanana.com/mods/524644");
-
-         ImGui::BulletText("Recommended Mod (GameBanana):");
-         ImGui::SameLine();
-         if (ImGui::Button("Remove Forced Toon Shader: Toon shading sucks!"))
-            Website::OpenWebsite("https://gamebanana.com/mods/578377");
          
-         ImGui::BulletText("Recommended Mod (GameBanana):");
-         ImGui::SameLine();
-         if (ImGui::Button("Future Tone Customization: Toon shading sucks!"))
-            Website::OpenWebsite("https://gamebanana.com/mods/386869");
+         DrawColoredSubHeader("README");
+         
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Unfortunately, UI elems of PV (e.g. lens flare) can be after HDR tonemap, affected by UI Brightness slider.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon shading (Non-Physical Rendering) doesn't have much HDR luminance, so are clamped SDR unless changed otherwise.");
 
-
-         ImGui::NewLine(); //////
+         // ImGui::NewLine(); //////
+         //
+         // ImGui::BulletText("Recommended Mod (GameBanana):");
+         // ImGui::SameLine();
+         // if (ImGui::Button("Clean Interface: Remove all but the notes."))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/524644");
+         //
+         // ImGui::BulletText("Recommended Mod (GameBanana):");
+         // ImGui::SameLine();
+         // if (ImGui::Button("Remove Forced Toon Shader: Toon shading sucks!"))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/578377");
+         //
+         // ImGui::BulletText("Recommended Mod (GameBanana):");
+         // ImGui::SameLine();
+         // if (ImGui::Button("Future Tone Customization: Toon shading sucks!"))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/386869");
+         //
+         // ImGui::NewLine(); //////
 
          //close readme
          if (ImGui::Button("Ok & Dismiss"))
@@ -1434,20 +1439,23 @@ public:
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      
+      //set CUSTOM_GAMMACORRECT22 define based on if paper white is above 0 or not
+      ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_GAMMACORRECT22, cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite > 0.f);
+      
       if (!is_sdr && ImGui::CollapsingHeader("Gamma"))
       {
-         //link test
-         if (ImGui::Button("Gamma Mismatch Explanation & Correction Test (Google Slides)"))
-            Website::OpenWebsite("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=true&loop=false&slide=id.g3e007eafba8_0_0");
+         DrawColoredSubHeader("Reintroduce SDR's gamma mismatch to lower shadows.");
          
          //paper white
-         if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"));
+         if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
             reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The threshold / paper white. Values lower are effected.\nUse if shadows are raised because OS (Windows) and display doesn't lower already.");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The threshold / paper white, so values lower are effected.\nUse if shadows are raised because OS (Windows) and display doesn't lower already.");
          DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
 
-         //set CUSTOM_GAMMACORRECT22 define based on if paper white is above 0 or not
-         ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_GAMMACORRECT22, cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite > 0.f);
+         //link test
+         if (ImGui::Button("Gamma Mismatch Explanation & Correction Test (Google Slides)"))
+            Website::OpenWebsite("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=false&loop=false&slide=id.g3e007eafba8_0_0");
 
          ImGui::NewLine();////////////////
          
@@ -1476,12 +1484,14 @@ public:
          if (is_disabled) ImGui::EndDisabled();
 
          ImGui::NewLine();////////////////
+         
+         DrawColoredSubHeader("PS4 Gamma");
 
          //CUSTOM_HDTVREC709_1
          {
             bool b = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_HDTVREC709_1) == 1;
-            if (ImGui::Checkbox("PS4 / Rec. 709 Gamma", &b)) ShaderDefineInfo::ToggleBool(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Do aggressive HDTV Rec. 709 gamma seen on PS4.\nWatch out for crushed shadows!");
+            if (ImGui::Checkbox("Rec. 709 Gamma", &b)) ShaderDefineInfo::ToggleBool(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Do aggressive HDTV Rec. 709 gamma seen on PS4.\n\nWatch out for crushed shadows!\nPerhaps disable Gamma Correction above.");
          }
       }
 
@@ -1490,17 +1500,22 @@ public:
       {
          if (SeparateUIBrightness::enabled) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.8f, 1.f));
          if (ImGui::CollapsingHeader("Separate UI Brightness"))
+         {
+            DrawColoredSubHeader("Detect when in gameplay and changes UI Brightness accordingly.");
             SeparateUIBrightness::OnUI(runtime);
+         }
          if (SeparateUIBrightness::enabled) ImGui::PopStyleColor();
       }
          
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (ImGui::CollapsingHeader("Individual UI Brightness"))
       {
+         DrawColoredSubHeader("Specifically target certain UI elements that are too bright when unclamped to HDR.");
+
          {
             int def = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_HUDBRIGHTNESS, "Custom HUD Brightness",
                { "Off", "Vanilla", "Simple UI (simple_ui_v115.zip)"/*, "Clean Interface ()" */},
-               "Specifically target certain UI elements that are too bright when unclamped to HDR.\nThese check for the specific vanilla textures, so mods that change UI textures will break these.");
+               "These samples for the specific vanilla textures for identification, so mods that change UI textures will make it miss.");
             is_disabled = def == 0;
          }
          if (is_disabled) ImGui::BeginDisabled(); 
@@ -1547,7 +1562,11 @@ public:
       {
          bool has_pv_tuning = IndividualPVTuning::current_pv.item != nullptr;
          if (has_pv_tuning) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.8f, 1.f));
-         if (!is_sdr && ImGui::CollapsingHeader("Individual PV Tuning")) IndividualPVTuning::OnUI(runtime);
+         if (!is_sdr && ImGui::CollapsingHeader("Individual PV Tuning"))
+         {
+            DrawColoredSubHeader("For some PVs, limit Peak Brightness to not ruin original composition.");
+            IndividualPVTuning::OnUI(runtime);
+         }
          if (has_pv_tuning) ImGui::PopStyleColor();
       }
 
@@ -1574,8 +1593,8 @@ public:
       //HDR Tonemapper Settings
       if (!is_sdr && ImGui::CollapsingHeader("HDR Tonemapper & Clamping"))
       {
-         // int tonemap_def = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_TONEMAP);
-         
+         DrawColoredSubHeader("HDR Tonemapping parameters.");
+
          is_disabled = false;
 
          // is_disabled = !(tonemap_def == 1 /*|| tonemap_index == 2*/ || tonemap_def == 3 /*|| tonemap_index == 4*/);
@@ -1611,6 +1630,8 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (ImGui::CollapsingHeader("Upgraded Vanilla Tonemap & Color Grading"))
       {
+         DrawColoredSubHeader("Miscellaneous Settings for Color Grading");
+         
          if (ImGui::SliderFloat("Bloom", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
             reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom strength.");
@@ -1794,6 +1815,8 @@ public:
       
       if (!is_sdr && ImGui::CollapsingHeader("Fake BT2020 (Gamut Expansion)"))
       {
+         DrawColoredSubHeader("Fake saturation to decrease BT.709 chrominance clipping.");
+         
          bool def = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_FAKEBT2020, "Fake BT2020", "A gamma utilizing gamut expansion.");
          
          is_disabled = !def;
@@ -1815,6 +1838,8 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (!is_sdr && ImGui::CollapsingHeader("HDR Color Grading"))
       {
+         DrawColoredSubHeader("RenoDX luminance color grading, kinda like an audio equalizer but for luminance.");
+
          bool def = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_COLORGRADE, "RenoDX Pre-UI Luminance Color Grading", "Custom color grading from RenoDX.\nKinda like an audio equalizer but for luminance.");
       
          is_disabled = !def;
@@ -1869,12 +1894,16 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (ImGui::CollapsingHeader("Simple PV Progress Bar"))
       {
+         DrawColoredSubHeader("Show a minimalistic progress bar for PV progress.");
+
          ProgressBar::OnUI(runtime);
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (ImGui::CollapsingHeader("FPS Limiter (Fallback)"))
       {
+         DrawColoredSubHeader("This game requires a limit, else pacing tends to get screwed.");
+         
          ImGui::BulletText("This is a fallback for when my DisplayCommander fork becomes outdated.");
          ImGui::BulletText("If 0 (unclamped), requires VSync off!");
          
@@ -1902,6 +1931,8 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (!is_sdr && ImGui::CollapsingHeader("Fake/Auto HDR (DEPRECATED)"))
       {
+         DrawColoredSubHeader("Now deprecated, this fakes HDR extension for some SDR content.");
+         
          {
             bool def = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_UPSCALE_MOV, "Upscale FMV", "Apply an inverse tonemapper to SDR movies.");
             is_disabled = !def;
@@ -1981,6 +2012,8 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (ImGui::CollapsingHeader("Miscellaneous Pipeline Options (Debug)"))
       {
+         DrawColoredSubHeader("Various debug views.");
+
          ImGui::Text("(FYI) Render Order: BG Sprites -> 3D -> Tonemap -> MLAA -> Final -> UI Sprites -> Swapchain");
          
          // if (ImGui::Checkbox("Fullscreen Overlay FX", &Globals::IsFullscreenOverlayFx))
@@ -2039,6 +2072,8 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       if (ImGui::CollapsingHeader("(Debug) Info"))
       {
+         DrawColoredSubHeader("Various debug values/stats.");
+         
          const int ti = TonemapInfo::GetIndexOnlyIfDrawn(Globals::TonemapInfoBackup);
          
          std::string s = "Tonemap Uber Variant: " + std::to_string(ti);

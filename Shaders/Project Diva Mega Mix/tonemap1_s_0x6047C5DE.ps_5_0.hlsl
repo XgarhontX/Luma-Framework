@@ -67,7 +67,7 @@ void main(
   r1.xyz = r1.xyz + r0.xyz; //bloom add
   r0.xyz = r1.www ? r1.xyz : r0.xyz; //dont draw if not surpasses threshold
 
-  //lensflare
+  //overlays
   r1.x = cmp(0 < g_texcoord_transforms[0].w);
   if (r1.x != 0) {
     r1.xyz = g_textures_4_.Sample(g_samplers_4__s, v2.xy).xyz;
@@ -80,8 +80,6 @@ void main(
     r1.xyz = r1.xyz * r1.xyz;
     r0.xyz = r1.xyz * g_texcoord_transforms[2].www + r0.xyz;
   }
-
-  //idk
   r1.x = cmp(0 < v4.z);
   if (r1.x != 0) {
     r1.xyz = g_textures_7_.Sample(g_samplers_7__s, v4.xy).xyz;

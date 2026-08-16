@@ -837,12 +837,7 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
       float3 color_scaled = colorT * ratio;
       float color_scaled_y = y_tonemapped_graded * ratio;
 
-      //hue correct //TODO: remove or fix. This causes rare issues when colors are max BT709 primaries.
-      // float3 color_scaled_ucs = UCSTo(color_scaled, CS_BT2020);
-      // float3 color_tonemapped_graded_ucs = UCSTo(colorT, CS_BT2020);
-      // color_scaled_ucs = RestoreHueAndChrominanceUcs(color_scaled_ucs, color_tonemapped_graded_ucs, 1.f, 0.f, 1.f);
-      // color_scaled = UCSFrom(color_scaled_ucs, CS_BT2020);
-
+      //backup
       float3 color_scaled_bak = color_scaled;
 
       //Per Channel Blowout (gradual pass)
