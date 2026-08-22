@@ -1,6 +1,6 @@
-#include "../Includes/Common.hlsl"
+#include "./Includes/Common.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl" // Use this as it has some gamma correction helpers
-#include "../Includes/Reinhard.hlsl"
+#include "./common1.hlsl"
 
 Texture2D<float4> sourceTexture : register(t0);
 Texture2D<float4> uiTexture : register(t1); // Optional: Pre-multiplied UI
@@ -289,45 +289,209 @@ float3 ComposeUI(float3 pos, float3 linearSceneColor, float gamePaperWhite, floa
 	return linearComposedColor;
 }
 
-#define cmp -
-
-//REC709
-#define DECODEREC709(T)\
-T DecodeRec709(T x) {\
-  T r0, r2, r3, r4;\
-  r0 = x;\
-  r2 = 0.0989999995 + r0; \
-  r2 = 0.909918129 * r2;\
-  r2 = pow(r2, 2.22222233);\
-  r3 = cmp(0.0810000002 >= r0);\
-  r4 = 0.222222224 * r0;\
-  r2 = r3 ? r4 : r2;\
-  return r2;\
-}
-DECODEREC709(float3)
-DECODEREC709(float4)
-#undef DECODEREC709
-
-#define ENCODEREC709(T)\
-T EncodeRec709(T x) {\
-  T r0, r1, r2;\
-  r1 = x;\
-  r0 = pow(r1, 0.449999988);\
-  r0 = r0 * 1.09899998 + -0.0989999995;\
-  r2 = cmp(0.0179999992 >= r1);\
-  r1 = 4.5 * r1;\
-  r0 = r2 ? r1 : r0;\
-  return r0;\
-}
-ENCODEREC709(float3)
-ENCODEREC709(float4)
-#undef ENCODEREC709
 
 // rect is top left (x,y), bottom right (x,y)
-float3 DrawRect(float2 uv, float4 rect, float3 color, float3 rectColor) {
+float3 DrawRect(float2 uv, float4 rect, float3 color, float3 rectColor) 
+{
 	float r = step(rect.x, uv.x) * step(uv.x, rect.z) * step(rect.y, uv.y) * step(uv.y, rect.w);
 	if (r == 0) return color;
 	return rectColor;
+}
+
+//CUSTOM_SDR defs
+#if CUSTOM_SDR == 1
+  #ifdef CUSTOM_GAMMACORRECT22
+    #undef CUSTOM_GAMMACORRECT22
+    #define CUSTOM_GAMMACORRECT22 0
+  #endif
+  #ifdef CUSTOM_FAKEBT2020
+    #undef CUSTOM_FAKEBT2020
+    #define CUSTOM_FAKEBT2020 0
+  #endif
+  #ifdef CUSTOM_COLORGRADE_SATORDER
+    #undef CUSTOM_COLORGRADE_SATORDER
+    #define CUSTOM_COLORGRADE_SATORDER 0
+  #endif
+#endif
+
+#ifdef POST_PROCESS_SPACE_TYPE
+#undef POST_PROCESS_SPACE_TYPE
+#define POST_PROCESS_SPACE_TYPE 1
+#endif
+float3 BRUHHHAll(float3 x, float2 v1) 
+{
+  x = max(0, x);
+
+  // #if CUSTOM_UITRANSPARENCY > 0
+  // {
+  //   float3 colorWithUi = UIOutputTex.SampleLevel(g_sampler_s, v1.xy, g_texture_lod.x).xyz;
+  //   colorWithUi = max(0, colorWithUi);
+  //   float3 uiOnly = colorWithUi - x;
+  //   x += uiOnly * GS.UITransparency;
+  // }
+  // #endif
+
+  #if CUSTOM_PROGRESSBAR > 0
+  {
+    const float3 c = 1/* float3(0/255.f, 255/255.f, 157/255.f) */;
+
+    #if CUSTOM_PROGRESSBAR == 1
+      const bool r = v1.y < 0.0035f;
+    #elif CUSTOM_PROGRESSBAR == 2
+      const bool r = 1-v1.y < 0.0035f;
+    #endif
+
+    if (GS.ProgressBarRatio >= 0 && r) {
+      if (v1.x <= GS.ProgressBarRatio) { //played
+        x = lerp(x, 0.8, 0.5f);
+      } else if (v1.x > GS.ProgressBarRatio && v1.x <= GS.ProgressBarRatio + 0.0025f) { //curr
+        x = lerp(x, 1, 0.9f);
+      } else { //future
+        x = lerp(x, 0, 0.5f);
+      }
+
+      // x = lerp(x, 0, 0.25f);
+      // const float t = 0.2f;
+      // if (v1.x <= GS.ProgressBarRatio) { //trail
+      //   x = lerp(x, c, InverseLerp(GS.ProgressBarRatio - t, GS.ProgressBarRatio, v1.x) * 0.2f);
+      // } else if (v1.x > GS.ProgressBarRatio && v1.x <= GS.ProgressBarRatio + 0.0025f) { //curr
+      //   x = lerp(x, 1, 0.99f);
+      // }
+    }
+  }
+  #endif
+
+  //legacy Tonemap Identify
+  #if CUSTOM_TONEMAP_IDENTIFY > 0
+    o0.xyz = DrawBinary(TonemapInfo::GetIndexOnlyIfDrawn(GS.TonemapInfo), o0.xyz, v1.xy);
+  #endif
+
+  //intermediate decode
+  x = gamma_sRGB_to_linear(x);
+  x /= HDR_INTSCALING;
+  
+  #if CUSTOM_HDTVREC709_1 == 0
+    //noop
+  #else
+    x = EncodeRec709(x);
+    x = gamma_sRGB_to_linear(x);
+  #endif
+
+  //Gamma Correction & Mode / Fake BT2020 / Saturation (bruh moment)
+  const float3 xBack = UCSTo(x, CS_BT709);
+  const float gcScale = GamePaperWhiteNits / GS.GammaCorrection22PaperWhite;
+  #if CUSTOM_GAMMACORRECT22 == 0 && CUSTOM_FAKEBT2020 == 0
+    #if CUSTOM_COLORGRADE_SATORDER == 2
+      x = UCSTo(x, CS_BT709);
+      x.yz *= GS.CGSaturation;
+      x = UCSFrom(x, CS_BT2020);
+    #else
+      x = BT709_To_BT2020(x);
+    #endif
+  #elif CUSTOM_GAMMACORRECT22 == 1 && CUSTOM_FAKEBT2020 == 0
+    x *= gcScale;
+
+    float3 x709 = x;
+    
+    bool3 below1 = x < 1;
+    x = linear_to_sRGB_gamma(x, GCT_NONE);
+    x = gamma_to_linear(x, GCT_NONE, 2.2);
+    x = below1 ? x : x709; //low pass piecewise
+
+    #if CUSTOM_GAMMA_CORRECTION_MODE == 0 && CUSTOM_COLORGRADE_SATORDER != 2
+      // x = BT709_To_BT2020(x);
+    #elif CUSTOM_GAMMA_CORRECTION_MODE == 0 && CUSTOM_COLORGRADE_SATORDER == 2
+      x = UCSTo(x, CS_BT709);
+      x.yz *= GS.CGSaturation;
+      x = UCSFrom(x, CS_BT2020);
+    #elif CUSTOM_GAMMA_CORRECTION_MODE == 1 && CUSTOM_COLORGRADE_SATORDER != 2
+      x = UCSTo(x, CS_BT709);
+      x = RestoreHueAndChrominanceUcs(x, xBack, 1, GS.GammaPerceptualChrominanceCorrect, 0);
+      x = UCSFrom(x, CS_BT2020);
+    #elif CUSTOM_GAMMA_CORRECTION_MODE == 1 && CUSTOM_COLORGRADE_SATORDER == 2
+      x = UCSTo(x, CS_BT709);
+      x = RestoreHueAndChrominanceUcs(x, xBack, 1, GS.GammaPerceptualChrominanceCorrect, 0);
+      x.yz *= GS.CGSaturation;
+      x = UCSFrom(x, CS_BT2020);
+    #else
+      #error Invalid CUSTOM_GAMMA_CORRECTION_MODE & CUSTOM_COLORGRADE_SATORDER configuration
+    #endif
+
+    x /= gcScale;
+  #elif CUSTOM_GAMMACORRECT22 == 0 && CUSTOM_FAKEBT2020 == 1
+    // x *= gcScale;
+
+    float3 x709 = x;
+    float3 x2020 = x;
+
+    x2020 = linear_to_sRGB_gamma(x2020, GCT_NONE);
+    x2020 = BT709_To_BT2020(x2020);
+    x2020 = gamma_sRGB_to_linear(x2020, GCT_NONE);
+
+    x709 = UCSTo(x709, CS_BT709);
+    x2020 = UCSTo(x2020, CS_BT2020);
+    x = RestoreHueAndChrominanceUcs(x709, x2020, 0, GS.FakeBT2020Chroma, 1);
+    float ls = saturate(sqrt(x709.x)); //low pass
+    ls = lerp(1, ls, GS.FakeBT2020Luma); //strength
+    x.x = lerp(x2020.x, x709.x, ls);
+    #if CUSTOM_COLORGRADE_SATORDER == 2
+      x.yz *= GS.CGSaturation;
+    #endif
+    x = UCSFrom(x, CS_BT2020);
+
+    // x /= gcScale;
+  #elif CUSTOM_GAMMACORRECT22 == 1 && CUSTOM_FAKEBT2020 == 1
+    x *= gcScale;
+
+    float3 x709 = x;
+    float3 x2020 = x;
+
+    bool3 below1 = x709 < 1;
+    x709 = linear_to_sRGB_gamma(x709, GCT_NONE);
+    x709 = gamma_to_linear(x709, GCT_NONE, 2.2);
+    x709 = below1 ? x709 : x; //low pass piecewise
+
+    x2020 = linear_to_sRGB_gamma(x2020, GCT_NONE);
+    x2020 = BT709_To_BT2020(x2020);
+    x2020 = gamma_to_linear(x2020, GCT_NONE, 2.2);
+
+    x709 = UCSTo(x709, CS_BT709);
+    x2020 = UCSTo(x2020, CS_BT2020);
+    x = RestoreHueAndChrominanceUcs(x709, x2020, 0, GS.FakeBT2020Chroma, 1);
+    float ls = saturate(sqrt(x709.x)); //low pass
+    ls = lerp(1, ls, GS.FakeBT2020Luma); //strength
+    x.x = lerp(x2020.x, x709.x, ls); //low pass
+    #if CUSTOM_GAMMA_CORRECTION_MODE == 1
+      float s = x.x; //low pass
+      // s *= 1.25;
+      s = 1 - s;
+      s = saturate(s);
+      s *= GS.GammaPerceptualChrominanceCorrect;
+
+      x = RestoreHueAndChrominanceUcs(x, xBack, 1, s, 0);
+    #endif
+    #if CUSTOM_COLORGRADE_SATORDER == 2
+      x.yz *= GS.CGSaturation;
+    #endif
+    x = UCSFrom(x, CS_BT2020);
+
+    x /= gcScale;
+  #else
+    #error Invalid CUSTOM_GAMMACORRECT22 & CUSTOM_FAKEBT2020 configuration
+  #endif
+
+  // x = UCSFrom(xBack, CS_BT2020);
+
+  //clamp BT2020
+  x = max(0, x);
+
+  // to DisplayComposition
+  x *= HDR_INTSCALING;
+	#if !(CUSTOM_GAMMA_CORRECTION_MODE == 0 && CUSTOM_COLORGRADE_SATORDER != 2)
+  	x = BT2020_To_BT709(x);
+	#endif
+
+	return x;
 }
 
 // Custom Luma shader to apply the display (or output) transfer function from a linear input (or apply custom gamma correction)
@@ -388,6 +552,9 @@ float4 main(float4 pos : SV_Position) : SV_Target0
 	mipColor2 /= 5.0;
 #endif
 	//return mipColor2; //TODOFT
+
+	// BRUHHHAll
+	color.xyz = BRUHHHAll(color.xyz, uv);
 
 #if SWAPCHAIN_SKIPALL > 0
     return color;
@@ -705,6 +872,23 @@ float4 main(float4 pos : SV_Position) : SV_Target0
 	// color.rgb = float3(1, 0, 0);
 	color.rgb = PeakWhiteNits / 80.;
 #endif
+
+  // clamp peak
+  {
+    #if CUSTOM_TESTSDR == 0
+      const float p = PeakWhiteNits / 80.f;
+    #else
+      const float p = 80;
+    #endif
+
+    #if CUSTOM_CLAMP_PEAK == 1
+      color.rgb  = min(color.rgb, p);
+    #elif CUSTOM_CLAMP_PEAK == 2
+      color.rgb  = ClampByMaxChannel(color.rgb , p);
+    #elif CUSTOM_CLAMP_PEAK == 3
+      color.rgb  = ExponentialRollOff(color.rgb , p, p * 1.1f);
+    #endif
+  }
 
 #if SWAPCHAIN_TEST_USER_PEAK > 0
 	//black

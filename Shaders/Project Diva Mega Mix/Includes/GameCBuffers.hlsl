@@ -48,9 +48,9 @@ namespace CB
    {
       int TonemapInfo;
       
-      // float TonemapperRolloffStart;
       float TonemapperPeakCached;
       float TonemapperMaxExpectedCached;
+      float TonemapHDRStops;
       float BloomStrength;
       float AAMultiplier;
       float PerChannelLuminanceReductionEmulateStrength;
@@ -58,28 +58,20 @@ namespace CB
       float GammaCorrection22PaperWhite;
       float GammaPerceptualChrominanceCorrect;
 
-      float UITransparency;
+      // float UITransparency;
 
       // float SDRTonemapToeStrength;
       // float SDRTonemapToeLowPass;
-      
-      // float LUTNeutralize;
-      // float LUTBlowoutReduction;
-      // float LUTBlowoutReductionLookBack;
+
       float LUTScalingAndMakeUp;
       float LUTGaussianBlurStep;
       float LUTGaussianBlurBias;
-
-      // float PCBlowoutHue;
-      // float PCBlowoutChrom;
-      // float PCBlowoutStart;
-      // float PCBlowoutEnd;
-      // float PCBlowoutLumaClip;
-      float PCBlowoutLumaEnd;
-      float PCBlowoutPerChannelClip;
-      float PCBlowoutPerChannelEnd;
-      float PCBlowoutPerChannel2ndStartRatio;
-      float PCBlowoutPerChannel2ndEnd;
+      
+      // float PCBlowoutLumaEnd;
+      // float PCBlowoutPerChannelClip;
+      // float PCBlowoutPerChannelEnd;
+      // float PCBlowoutPerChannel2ndStartRatio;
+      // float PCBlowoutPerChannel2ndEnd;
       
       // float FakeBT2020Gamma;
       float FakeBT2020Chroma;
@@ -108,6 +100,8 @@ namespace CB
       float CGShadowsMidGray;
 
       float ProgressBarRatio;
+
+      float XeGTAOFinalPower;
    };
    
    struct LumaGameData
