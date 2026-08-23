@@ -8,22 +8,6 @@
 
 namespace PragMap
 {
-  // constants: values ---------------------------------------------------------------------------------------- 
-  static const float epsilon = 1e-6f;
-
-  static const float pi = 3.14159265358979324f;
-  static const float twoPi = 6.28318530717958648f;
-  static const float invTwoPi = 0.15915494309189534f;
-
-  static const float bbPurpleHue = 0.19199f; //  11.0 deg  repeller (494c)
-  static const float bbYellowHue = 1.86750f; // 107.0 deg  ATTRACTOR (571nm)
-  static const float bbGreenHue = 2.95833f;  // 169.5 deg  repeller (506nm)
-  static const float bbBlueHue = 4.45932f; // 255.5 deg  ATTRACTOR (474nm)
-
-  static const float bbArcToYellow = bbYellowHue - bbPurpleHue;
-  static const float bbArcToGreen = bbGreenHue - bbPurpleHue;
-  static const float bbArcToBlue = bbBlueHue - bbPurpleHue;
-
   // constants: params ---------------------------------------------------------------------------------------- 
   // TODO: make optional customizable by optional defines... or something
   
@@ -39,6 +23,22 @@ namespace PragMap
   static const float toneAnchor = 0.18f;
   static const float toneCompression = 3.0f - (2.0f * GS.WhiteClip); //TODO: tune
   static const float overshootShoulder = 0.8f;
+
+  // constants: values ---------------------------------------------------------------------------------------- 
+  static const float epsilon = 1e-6f;
+
+  static const float pi = 3.14159265358979324f;
+  static const float twoPi = 6.28318530717958648f;
+  static const float invTwoPi = 0.15915494309189534f;
+
+  static const float bbPurpleHue = 0.19199f; //  11.0 deg  repeller (494c)
+  static const float bbYellowHue = 1.86750f; // 107.0 deg  ATTRACTOR (571nm)
+  static const float bbGreenHue = 2.95833f;  // 169.5 deg  repeller (506nm)
+  static const float bbBlueHue = 4.45932f; // 255.5 deg  ATTRACTOR (474nm)
+
+  static const float bbArcToYellow = bbYellowHue - bbPurpleHue;
+  static const float bbArcToGreen = bbGreenHue - bbPurpleHue;
+  static const float bbArcToBlue = bbBlueHue - bbPurpleHue;
 
   // tonemap ----------------------------------------------------------------------------------------
 

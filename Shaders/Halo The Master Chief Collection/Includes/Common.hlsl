@@ -148,7 +148,7 @@ float3 UCS_Decode(float3 x) {
   return renodx::color::ictcp::Decode(x, CS_BT709);
 }
 
-float3 RestoreHueAndChrominanceUcsInternal(float3 targetUcs, float3 sourceUcs, float currentChrominance, float hueStrength, float chrominanceStrength, float minChromaRatio = 0.f)
+float3 RestoreHueAndChrominanceUcsInternal(float3 targetUcs, float3 sourceUcs, float currentChrominance, float hueStrength, float chrominanceStrength, float minChromaRatio = 0.f, float maxChromaRatio = 1000000.f)
 {
   if (targetUcs.x == 0) return targetUcs;
 
@@ -165,15 +165,15 @@ float3 RestoreHueAndChrominanceUcsInternal(float3 targetUcs, float3 sourceUcs, f
   {
     const float sourceChrominance = length(sourceUcs.yz);
     float targetChrominanceRatio = safeDivision(sourceChrominance, currentChrominance, 1);
-    targetChrominanceRatio = clamp(targetChrominanceRatio, minChromaRatio, 99999999);
+    targetChrominanceRatio = clamp(targetChrominanceRatio, minChromaRatio, maxChromaRatio);
     targetUcs.yz *= lerp(1.0, targetChrominanceRatio, chrominanceStrength);
   }
 
   return targetUcs;
 }
-float3 RestoreHueAndChrominanceUcs(float3 targetUcs, float3 sourceUcs, float hueStrength, float chrominanceStrength, float minChromaRatio = 0.f)
+float3 RestoreHueAndChrominanceUcs(float3 targetUcs, float3 sourceUcs, float hueStrength, float chrominanceStrength, float minChromaRatio = 0.f, float maxChromaRatio = 1000000.f)
 {
-  return RestoreHueAndChrominanceUcsInternal(targetUcs, sourceUcs, length(targetUcs.yz), hueStrength, chrominanceStrength, minChromaRatio);
+  return RestoreHueAndChrominanceUcsInternal(targetUcs, sourceUcs, length(targetUcs.yz), hueStrength, chrominanceStrength, minChromaRatio, maxChromaRatio);
 }
 /////////////////////////////////////////////////////////////////////////////////////////
 

@@ -1,6 +1,7 @@
 #define LUT_3D 1
 #include "./Includes/Common.hlsl"
 #include "./Includes/PragMap.hlsl"
+#include "./Includes/PragMap2.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
 
 struct ToneMapInfo {
@@ -91,23 +92,34 @@ void Rolloff(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor, float4 c) {
 
   // HDR Rolloff
   tmi.p = GammaCorrectionPeak(HDR_PEAK * pDelta);
-//   tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip);
-// 
-//   // Hue Correct
-//   float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 3, 1));
-//   sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
-//   sdr = UCS_Encode(sdr);
-//   tmi.x = UCS_Encode(tmi.x);
-//   tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.667, 0.226, 0.89);
-//   tmi.x = UCS_Decode(tmi.x);
-  tmi.x = PragMap::pragmap(tmi.x, tmi.p, 0.5, 0.09);
+
+#if 1
+  float3 hdr = tmi.x;
+  tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip);
+
+  // Hue Correct
+  float3 sdr = hdr / ((hdr / tmi.p) + 1);
+  sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
+  sdr = UCS_Encode(sdr);
+  tmi.x = UCS_Encode(tmi.x);
+  tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.88, 0.88, 0, 1);
+  tmi.x = UCS_Decode(tmi.x);
+  tmi.x = CorrectPerChannelTonemapHiglightsDesaturation(tmi.x, tmi.p, 0.867, CS_BT709);
+  tmi.x = max(tmi.x, 0);
+#else
+  // tmi.x = PragMap::pragmap(tmi.x, tmi.p, 0.5, 0.09);
+  tmi.x = PragMap2::pragmap2_BT709(tmi.x, tmi.p, GamePaperWhiteNits, true, DVS1, DVS2, DVS3);
+#endif
 
   // Clean
-  tmi.x = max(tmi.x, 0);
   tmi.x = min(tmi.x, tmi.p);
 }
 
 void LUT(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor) {
+  #if ALLOW_COLORGRADE == 0
+    return;
+  #endif
+
   // HDR Compress
   float3 colorU = tmi.x;
   float3 colorN = colorU;

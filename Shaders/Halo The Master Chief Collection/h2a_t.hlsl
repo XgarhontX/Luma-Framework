@@ -1,6 +1,8 @@
+#define GAME_H2A 1
 #define LUT_3D 1
+
 #include "./Includes/Common.hlsl"
-#include "./Includes/PragMap.hlsl"
+#include "./Includes/PragMap2.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
 
 struct ToneMapInfo {
@@ -96,7 +98,6 @@ void Rolloff() {
 
   // Hmmmmm's luminance normalization
   float extY = GetLuminance(ext);
-  hdr709 *= safeDivision(extY / GetLuminance(hdr709), 1); // TODO: prob uneeded
   sdr *= safeDivision(extY / GetLuminance(sdr), 1.0);
 
   // blend HDR and SDR (aka Hue Correction and Additional Blowout)
@@ -109,10 +110,11 @@ void Rolloff() {
   ext = max(ext, 0); //clean
 
   // highlights sat boost makeup
-  ext = CorrectPerChannelTonemapHiglightsDesaturationCurved(tmi.x, tmi.p, 2., 0.867, CS_BT709);
+  ext = CorrectPerChannelTonemapHiglightsDesaturationCurved(ext, tmi.p, 2., 0.867, CS_BT709);
   ext = max(ext, 0); // clean
 #else 
-  ext = PragMap::pragmap(ext, tmi.p, DVS1, DVS2, CS_BT709);
+  ext = PragMap2::pragmap2_BT709(ext, tmi.p, GamePaperWhiteNits, true, 0.75, 1, 0.5);
+  // ext = PragMap2::pragmap2_SDRAid_BT709(ext, sdr, tmi.p, GamePaperWhiteNits, 0.75, 1, 0.5, 0.26, 0.126);
 #endif
 
   // set output
