@@ -29,7 +29,7 @@ float3 ColorInBlowout(float3 hdr) {
   sdr *= GetLuminance(hdr) / sdrY;
   sdr = UCS_Encode(sdr);
   hdr = UCS_Encode(hdr);
-  hdr = RestoreHueAndChrominanceUcs(hdr, sdr, DVS1, DVS2, 0, 100000);
+  hdr = RestoreHueAndChrominanceUcs(hdr, sdr, 0, 0.18, 0, 100000);
   hdr = UCS_Decode(hdr);
 #elif HALO3_TONEMAP == 1
   float3 sdr = anchoredCInfinityShoulder(hdr, 1.1525, 0.8175, 1);
@@ -130,7 +130,10 @@ void Rolloff(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor, float4 c) {
   // HDR Rolloff
   tmi.p = GammaCorrectionPeak(HDR_PEAK * pDelta);
 #if HALO3_TONEMAP == 0
-  float3 hdr = tmi.x;
+  // Hue Correct
+  tmi.x = PragMap::hueShiftBezoldBrucke(tmi.x, 0.18, 0.18);
+  tmi.x = max(0, tmi.x);
+
   // tmi.x = BT709_To_BT2020(tmi.x);
   tmi.x = NeupowHQ(tmi.x, tmi.p, 6 * GS.WhiteClip);
   // tmi.x = BT2020_To_BT709(tmi.x);
@@ -148,7 +151,7 @@ void Rolloff(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor, float4 c) {
   tmi.x /= tmi.p;
   tmi.x = sqrt(tmi.x);
   float y = GetLuminance(tmi.x);
-  tmi.x = lerp(tmi.x, y, smoothstep(DVS3, DVS4, y) * DVS5);
+  tmi.x = lerp(tmi.x, y, smoothstep(0.777, 1, y) * 0.55);
   tmi.x *= tmi.x;
   tmi.x *= tmi.p;
 
