@@ -640,7 +640,7 @@ float4 main(float4 pos : SV_Position) : SV_Target0
 #endif
 
 	// clamp scRGB
-	color.rgb = min(color.rgb, PeakWhiteNits / 80.f);
+	color.rgb = min(color.rgb, max(PeakWhiteNits, GamePaperWhiteNits) / 80.f);
 
 #if SWAPCHAIN_TEST_PEAK
 	color.rgb = 0;

@@ -1,7 +1,11 @@
 #define LUT_3D 1
+// #define UCS_MODE 1
 #include "./Includes/Common.hlsl"
 #include "./Includes/PragMap.hlsl"
+#include "./Includes/PragMap2.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
+
+#define HALO3_TONEMAP 0
 
 struct ToneMapInfo {
   float3 x;   // HDR output
@@ -14,6 +18,41 @@ struct TexTuple {
   Texture3D<float4> t;
   SamplerState s;
 };
+
+float3 ColorInBlowout(float3 hdr) {
+  if (!HDR_ENABLED) return saturate(hdr);
+
+#if HALO3_TONEMAP == 0
+  float3 sdr = anchoredCInfinityShoulder(hdr, 1.1525, 0.8175, 1);
+  float sdrY = GetLuminance(sdr);
+  if (sdrY <= 0) return 0;
+
+  sdr *= GetLuminance(hdr) / sdrY;
+  sdr = UCS_Encode(sdr);
+  hdr = UCS_Encode(hdr);
+  hdr = RestoreHueAndChrominanceUcs(hdr, sdr, DVS1, DVS2, 0, 100000);
+  hdr = UCS_Decode(hdr);
+#elif HALO3_TONEMAP == 1
+  float3 sdr = anchoredCInfinityShoulder(hdr, 1.1525, 0.8175, 1);
+  float sdrY = GetLuminance(sdr);
+  if (sdrY <= 0) return 0;
+
+  sdr *= GetLuminance(hdr) / sdrY;
+  sdr = UCS_Encode(sdr);
+  hdr = UCS_Encode(hdr);
+  //TODO: HDR_STOPS CPU side
+  hdr = RestoreHueAndChrominanceUcs(hdr, sdr, 0.777 / (HDR_STOPS * 2), 0.267 / HDR_STOPS /* 0.5115 */, 0, 1);
+  hdr = UCS_Decode(hdr);
+#endif
+
+  hdr = max(0, hdr);
+  return hdr;
+}
+
+float ContrastPower(float3 x, float y, float c) {
+  // return pow(y, c);
+  return lerp(pow(y, c), y, !HDR_ENABLED ? 0 : smoothstep(0, 0.87, GetLuminance(x)));
+}
 
 void SetColor(float3 x) {
   tmi.x = x;
@@ -50,7 +89,7 @@ float3 Rolloff_Pos(float3 x, float4 c) {
 void Rolloff(float4 c) {
   // SDR
   tmi.sdr = Rolloff_Pos(min(c.x, tmi.x), c);
-  tmi.sdr = max(tmi.sdr, 0);
+  tmi.sdr = saturate(tmi.sdr);
 
   // SDR early out
   if (!HDR_ENABLED) {
@@ -82,16 +121,51 @@ void Rolloff(float4 c) {
 
   // HDR Rolloff
   tmi.p = GammaCorrectionPeak(HDR_PEAK);
-//   tmi.x = NeupowHQ(tmi.x, tmi.p, 9 * GS.WhiteClip);
-// 
-//   // Hue Correct
-//   float3 sdr = Neutwo(tmi.sdr, max(tmi.p / 3, 1));
-//   sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
-//   sdr = UCS_Encode(sdr);
-//   tmi.x = UCS_Encode(tmi.x);
-//   tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.667, 0.226, 0.89);
-//   tmi.x = UCS_Decode(tmi.x);
-  tmi.x = PragMap::pragmap(tmi.x, tmi.p, 0.5, 0.09);
+#if HALO3_TONEMAP == 0
+  float3 hdr = tmi.x;
+  // tmi.x = BT709_To_BT2020(tmi.x);
+  tmi.x = NeupowHQ(tmi.x, tmi.p, 6 * GS.WhiteClip);
+  // tmi.x = BT2020_To_BT709(tmi.x);
+
+  // Hue Correct
+  // float3 sdr = min(hdr, 1);
+  // sdr *= safeDivision(GetLuminance(tmi.x), GetLuminance(tmi.sdr), 1); // luma normalization
+  // sdr = UCS_Encode(sdr);
+  // tmi.x = UCS_Encode(tmi.x);
+  // tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.888, 0.888, 0, 1);
+  // tmi.x = UCS_Decode(tmi.x);
+  // tmi.x = CorrectPerChannelTonemapHiglightsDesaturation(tmi.x, tmi.p, DVS3, CS_BT709);
+  // tmi.x = PerChannelTonemapLuminanceReductionEmulation(tmi.x, hdr, 1, 1.0, 0.326);
+
+  tmi.x /= tmi.p;
+  tmi.x = sqrt(tmi.x);
+  float y = GetLuminance(tmi.x);
+  tmi.x = lerp(tmi.x, y, smoothstep(DVS3, DVS4, y) * DVS5);
+  tmi.x *= tmi.x;
+  tmi.x *= tmi.p;
+
+  tmi.x = max(tmi.x, 0);
+#elif HALO3_TONEMAP == 1
+  float3 hdr = tmi.x;
+  tmi.x = BT709_To_BT2020(tmi.x);
+  tmi.x = NeupowHQ(tmi.x, tmi.p + 0.00001, 6 * GS.WhiteClip);
+  tmi.x = BT2020_To_BT709(tmi.x);
+  tmi.x = min(tmi.x, tmi.p - 0.00001);
+
+  // Hue Correct
+  float3 sdr = hdr;
+  //TODO: HDR_STOPS CPU side
+  // sdr = Neutwo(sdr, HDR_STOPS);
+  sdr = NeupowHQ(sdr, HDR_STOPS, 6 * GS.WhiteClip);
+  sdr = UCS_Encode(sdr);
+  tmi.x = UCS_Encode(tmi.x);
+  tmi.x = RestoreHueAndChrominanceUcs(tmi.x, sdr, 0.888 /* * saturate(0.650072 * HDR_STOPS - 0.53598) */, 0.888, 0.89, 1000000/* max(1, -74.53313 * HDR_STOPS + 170.64102) */);
+  tmi.x.yz *= 1.056;
+  tmi.x = UCS_Decode(tmi.x);
+#elif HALO3_TONEMAP == 2
+  // tmi.x = PragMap::pragmap(tmi.x, tmi.p, 0.5, 0.09);
+  // tmi.x = PragMap2::pragmap2_BT709(tmi.x, tmi.p, GamePaperWhiteNits, true, true, 0.777, 0.5115, 0);
+#endif
 
   // Clean
   tmi.x = max(tmi.x, 0);

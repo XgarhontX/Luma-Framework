@@ -105,6 +105,8 @@ void main(
     r0.xw = v1.xy;
   }
   r3.xyz = LocalTexture_surface_sampler.Sample(LocalSampler_surface_sampler_s, r0.xw).xyz;
+  r3.xyz = ColorInBlowout(r3.xyz);
+
   r4.xyz = r3.xyz * r3.xyz;
   r3.xyz = LDR_gamma2 ? r4.xyz : r3.xyz;
   if (r0.z != 0) {
@@ -142,10 +144,10 @@ void main(
 
   r0.x = dot(r1.xyz, float3(0.333000004,0.333000004,0.333000004));
   r0.y = cmp(0 < r0.x);
-  
-  r0.z = log2(r0.x);
-  r0.z = ps_postprocess_contrast.x * r0.z;
-  r0.z = exp2(r0.z);
+  // r0.z = log2(r0.x);
+  // r0.z = ps_postprocess_contrast.x * r0.z;
+  // r0.z = exp2(r0.z);
+  r0.z = ContrastPower(r1.xyz, r0.x, ps_postprocess_contrast.x);
   r0.x = r0.z / r0.x;
   r0.xzw = r1.xyz * r0.xxx;
   r0.xyz = r0.yyy ? r0.xzw : r1.xyz;

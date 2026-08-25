@@ -69,6 +69,8 @@ void main(
     r1.xy = v1.xy;
   }
   r1.xyz = LocalTexture_surface_sampler.Sample(LocalSampler_surface_sampler_s, r1.xy).xyz;
+  r1.xyz = ColorInBlowout(r1.xyz);
+
   r2.xy = v1.xy * bloom_sampler_xform.xy + bloom_sampler_xform.zw;
   if (r0.y != 0) {
     r0.xy = r2.xy * ps_global_viewport_res_multipliers.xy + r0.zw;
@@ -87,8 +89,8 @@ void main(
   // Contrast
   r0.x = dot(r1.xyz, float3(0.333000004,0.333000004,0.333000004)); // luma based
   r0.y = cmp(0 < r0.x);
-
-  r0.z = pow(r0.x, ps_postprocess_contrast.x);
+  // r0.z = pow(r0.x, ps_postprocess_contrast.x);
+  r0.z = ContrastPower(r1.xyz, r0.x, ps_postprocess_contrast.x);
   r0.x = r0.z / r0.x;
   r0.xzw = r1.xyz * r0.xxx;
   r0.xyz = r0.yyy ? r0.xzw : r1.xyz;

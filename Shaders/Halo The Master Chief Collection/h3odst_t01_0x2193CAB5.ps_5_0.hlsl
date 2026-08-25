@@ -94,6 +94,8 @@ void main(
     r0.xw = v1.xy;
   }
   r3.xyz = LocalTexture_surface_sampler.Sample(LocalSampler_surface_sampler_s, r0.xw).xyz;
+  r2.xyz = ColorInBlowout(r2.xyz);
+
   if (r0.z != 0) {
     r0.xz = v1.xy * ps_global_viewport_res_multipliers.xy + r1.yz;
     r0.xz = max(ps_global_viewport_bounds_uv.xy, r0.xz);
@@ -133,17 +135,16 @@ void main(
   r1.xyz = shield_mult_scale.xyz * r0.www + shield_mult_base.xyz;
   r2.xyz = shield_add_scale.xyz * r0.www + shield_add_base.xyz;
   r0.xyz = r0.xyz * r1.xyz + r2.xyz;
-  r0.w = 1;
 
+  r0.w = 1;
   r1.x = dot(r0.xyzw, ps_postprocess_hue_saturation_matrix._m00_m10_m20_m30);
   r1.y = dot(r0.xyzw, ps_postprocess_hue_saturation_matrix._m01_m11_m21_m31);
   r1.z = dot(r0.xyzw, ps_postprocess_hue_saturation_matrix._m02_m12_m22_m32);
 
   r0.x = dot(r1.xyz, float3(0.333000004,0.333000004,0.333000004));
   r0.y = cmp(0 < r0.x);
-  r0.z = log2(r0.x);
-  r0.z = ps_postprocess_contrast.x * r0.z;
-  r0.z = exp2(r0.z);
+  // r0.z = pow(r0.x, ps_postprocess_contrast.x);
+  r0.z = ContrastPower(r1.xyz, r0.x, ps_postprocess_contrast.x);
   r0.x = r0.z / r0.x;
   r0.xzw = r1.xyz * r0.xxx;
   r0.xyz = r0.yyy ? r0.xzw : r1.xyz;

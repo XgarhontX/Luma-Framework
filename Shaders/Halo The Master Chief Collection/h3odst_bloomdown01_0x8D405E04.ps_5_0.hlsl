@@ -59,7 +59,6 @@ void main(
     r1.xy = min(ps_global_viewport_bounds_uv.zw, r1.zw);
   }
   r1.xyz = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r1.xy).xyz;
-  r1.xyz = Neutwo(r1.xyz, 1);
   r1.xyz = float3(9.99999994e-009,9.99999994e-009,9.99999994e-009) + r1.xyz;
   r2.xyzw = ps_postprocess_pixel_size.xyxy * float4(1,-1,-1,1) + v1.xyxy;
   if (r0.y != 0) {
@@ -68,7 +67,6 @@ void main(
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r3.xy);
   }
   r3.xyz = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyz;
-  r3.xyz = Neutwo(r3.xyz, 1);
   r1.xyz = r3.xyz + r1.xyz;
   if (r0.y != 0) {
     r2.xy = r2.zw * ps_global_viewport_res_multipliers.xy + r0.zw;
@@ -76,7 +74,6 @@ void main(
     r2.zw = min(ps_global_viewport_bounds_uv.zw, r2.xy);
   }
   r2.xyz = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.zw).xyz;
-  r2.xyz = Neutwo(r2.xyz, 1);
   r1.xyz = r2.xyz + r1.xyz;
   r2.xy = ps_postprocess_pixel_size.xy + v1.xy;
   if (r0.y != 0) {
@@ -85,9 +82,13 @@ void main(
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r2.zw);
   }
   r2.xyz = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, r2.xy).xyz;
-  r2.xyz = Neutwo(r2.xyz, 1);
   r1.xyz = r2.xyz + r1.xyz;
   r1.xyz = float3(0.25,0.25,0.25) * r1.xyz;
+
+  // clamp
+  if (!HDR_ENABLED) r1.xyz = saturate(r1.xyz);
+  else r1.xyz = anchoredCInfinityShoulder(r1.xyz, 1.1525, 0.8175, 1);
+
   r2.w = dot(r1.xyz, intensity_vector.xyz);
   r0.y = ps_postprocess_scale.y * r2.w;
   r1.w = -ps_postprocess_scale.x + r2.w;

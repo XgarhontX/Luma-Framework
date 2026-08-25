@@ -193,7 +193,7 @@ namespace PragMap2
 
   // main ---------------------------------------------------------------------
   float3 pragmap2_BT709(
-    float3 color, float peak, float sceneWhiteNits, bool isClamp,
+    float3 color, float peak, float sceneWhiteNits, bool isClamp, bool isApplyLuma = true,
     float hueStrength = 0.35f, float blowoutStrength = 0.75f, float blowoutHarshness = 0.f // 0 - 1 only!
   ) {
     float y1 = GetLuminance(color);
@@ -220,14 +220,16 @@ namespace PragMap2
     jzazbz = lerp(jzazbz, bCol, blowoutStrength);
 
     color = bt709FromJzAzBz(jzazbz, sceneWhiteNits);
-    color *= DivideSafe(y2, GetLuminance(color), 1.f);
-    color = overshootCorrection(color, peak, overshootShoulder);
+    if (isApplyLuma) {
+      color *= DivideSafe(y2, GetLuminance(color), 1.f);
+      color = overshootCorrection(color, peak, overshootShoulder);
+    }
     if (isClamp) color = max(0, color);
     return color;
   }
 
   float3 pragmap2_SDRAid_BT709(
-    float3 color, float3 colorSDR, float peak, float sceneWhiteNits, bool isClamp,
+    float3 color, float3 colorSDR, float peak, float sceneWhiteNits, bool isClamp, bool isApplyLuma = true,
     float hueStrength = 0.35f, float blowoutStrength = 0.75f, float blowoutHarshness = 0.f, // 0 - 1 only!
     float sdrAidHue = 0.36f, float sdrAidChrom = 0.126f // 0 - 1 only!
   ) {
@@ -259,9 +261,11 @@ namespace PragMap2
 
     color = bt709FromJzAzBz(jzazbz, sceneWhiteNits);
 
-    color *= DivideSafe(y2, GetLuminance(color), 1.f);
-    color = overshootCorrection(color, peak, overshootShoulder);
-
+    if (isApplyLuma) {
+      color *= DivideSafe(y2, GetLuminance(color), 1.f);
+      color = overshootCorrection(color, peak, overshootShoulder);
+    }
+    
     if (isClamp) color = max(0, color);
     return color;
   }

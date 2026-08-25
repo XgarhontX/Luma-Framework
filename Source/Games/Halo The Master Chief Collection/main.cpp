@@ -606,9 +606,9 @@ namespace
          { Halo2Classic, Settings::WIP },
          { Halo2Anniversary,  Settings::Working },
          { Halo2AnniversaryMP, Settings::NotSupported },
-         { Halo3,  Settings::Untested },
-         { Halo3ODST, Settings::Untested },
-         { HaloReach, Settings::Untested },
+         { Halo3,  Settings::Working },
+         { Halo3ODST, Settings::Working },
+         { HaloReach, Settings::Working },
          { Halo4, Settings::Untested },
       };
 

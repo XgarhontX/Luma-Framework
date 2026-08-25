@@ -127,6 +127,24 @@ float3 ReinhardClip(float3 x, float peak, float clip) { //when power = 1
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
+// from PragMap (from Musa)
+float anchoredCInfinityShoulder(float color, float peak, float anchor, float compressionStrength) {
+  float shoulderRange = peak - anchor;
+  float distanceFromAnchor = max(color - anchor, 0.f);
+  float flatWeight = exp2(-shoulderRange / (compressionStrength * distanceFromAnchor));
+  float responseDenominator = mad(distanceFromAnchor, flatWeight, shoulderRange);
+  return mad(shoulderRange, distanceFromAnchor / responseDenominator, color - distanceFromAnchor);
+}
+float3 anchoredCInfinityShoulder(float3 color, float3 peak, float3 anchor, float compressionStrength) {
+  float3 shoulderRange = peak - anchor;
+  float3 distanceFromAnchor = max(color - anchor, 0.f);
+  float3 flatWeight = exp2(-shoulderRange / (compressionStrength * distanceFromAnchor));
+  float3 responseDenominator = mad(distanceFromAnchor, flatWeight, shoulderRange);
+  return mad(shoulderRange, distanceFromAnchor / responseDenominator, color - distanceFromAnchor);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
 //Extension: slope_at_piecewise * (x - thres_at_piecewise) + output_at_piecewise
 float3 LinearPiecewiseExtension(float3 sdr, float3 hdr, float thres, float slope, float output)
 {
@@ -137,15 +155,29 @@ float3 LinearPiecewiseExtension(float3 sdr, float3 hdr, float thres, float slope
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-// #include "../Includes/JzAzBz.hlsl"
-#include "./ictcp_portable.hlsl"
+#ifndef UCS_MODE
+  #define UCS_MODE 0
+#endif
+
+#if UCS_MODE == 0
+  #include "./ictcp_portable.hlsl"
+#elif UCS_MODE == 1
+  #include "../../Includes/JzAzBz.hlsl"
+#endif
+
 float3 UCS_Encode(float3 x) {
-  // return JzAzBz::rgbToJzazbz(x, CS_BT709);
+#if UCS_MODE == 0
   return renodx::color::ictcp::Encode(x, CS_BT709);
+#elif UCS_MODE == 1
+  return JzAzBz::rgbToJzazbz(x, CS_BT709);
+#endif
 }
 float3 UCS_Decode(float3 x) {
-  // return JzAzBz::jzazbzToRgb(x, CS_BT709);
+#if UCS_MODE == 0
   return renodx::color::ictcp::Decode(x, CS_BT709);
+#elif UCS_MODE == 1
+  return JzAzBz::jzazbzToRgb(x, CS_BT709);
+#endif
 }
 
 float3 RestoreHueAndChrominanceUcsInternal(float3 targetUcs, float3 sourceUcs, float currentChrominance, float hueStrength, float chrominanceStrength, float minChromaRatio = 0.f, float maxChromaRatio = 1000000.f)
@@ -175,6 +207,42 @@ float3 RestoreHueAndChrominanceUcs(float3 targetUcs, float3 sourceUcs, float hue
 {
   return RestoreHueAndChrominanceUcsInternal(targetUcs, sourceUcs, length(targetUcs.yz), hueStrength, chrominanceStrength, minChromaRatio, maxChromaRatio);
 }
+/////////////////////////////////////////////////////////////////////////////////////////
+// Emulate luminance loss/clipping from LDR per-channel tonemap on high single channel colors.
+//
+// Takes in raw/no-blowout linear color, do per-channel tonemap, then do inverse luminance tonemap.
+// That gives a luminance ratio to reduce HDR luminance upgraded color (i.e. from UpgradeToneMap()).
+// This means single channel highlights must try harder to be bright.
+//
+// color_upgraded: Luminance upgraded Color to apply emulation.
+// color_untonemapped: Color WITHOUT per-channel blowout.
+// peak: The peak of the LDR tonemap curve. (Prob best 1.0 - 1.5)
+// makeup: Simple multiplier after inverse luminance to compensate reduction. (prob best around 1.3)
+// strength: Global strength of the effect. (prob best 0.25 - 0.35)
+// cs: Color space for luminance.
+// return: color_upgraded adjusted by the emulated luminance reduction.
+float3 PerChannelTonemapLuminanceReductionEmulation(float3 color_upgraded, float3 color_untonemapped, float peak = 1.0f, float makeup = 1.35f, float strength = 0.25f, uint cs = CS_BT709) {
+  float peak2 = peak * peak;
+
+  // compress perchannel
+  color_untonemapped = (color_untonemapped * peak) * rsqrt(color_untonemapped * color_untonemapped + peak2);
+  color_untonemapped = min(color_untonemapped, peak); //clip
+
+  //inverse luminance
+  float y = GetLuminance(color_untonemapped, cs);
+  float y1 = (y * peak) * rsqrt(-y * y + peak2);
+  y1 *= makeup; //makeup
+
+  //ratio
+  float y2 = GetLuminance(color_upgraded, cs);
+  float ratio = y1 / y2;
+  ratio = lerp(1, ratio, saturate(y2 * 2)); //high pass
+  ratio = lerp(1, ratio, strength); //global
+  
+  //apply
+  return color_upgraded * ratio;
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////
 
 float GammaCorrectionPeak(float x) {
