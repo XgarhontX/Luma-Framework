@@ -26,7 +26,7 @@ Texture2D<float4> GlobalTexture_noise_sampler : register(t7);
 
 // 3Dmigoto declarations
 #define cmp -
-#include "./Includes/Common.hlsl"
+#include "./hr_t.hlsl"
 //TODO: common for variants
 
 //https://github.com/halohlsl/HaloReach-Shader-Source/blob/pc/source/omaha/rasterizer/hlsl/postprocess/final_composite_base.fx
@@ -45,17 +45,32 @@ void main(
   r0.xy = r0.xx * noise_params.xy + noise_params.zw;
   r0.y *= GS.FilmGrain;
 
-  r1.xyz = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy).xyz * GS.Bloom;
+  // r1.xyz = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy).xyz * GS.Bloom;
+  {
+    float3 C = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy).xyz;
+    float3 N = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy, int2(0,-1)).xyz;
+    float3 S = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy, int2(0,1)).xyz;
+    float3 W = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy, int2(-1,0)).xyz;
+    float3 E = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy, int2(1, 0)).xyz;
+    float3 x = C.xyz;
+    x += N.xyz;
+    x += S.xyz;
+    x += W.xyz;
+    x += E.xyz;
+    x /= 5;
+    r1.xyz = x * GS.Bloom;
+    r1.xyz = max(0, r1.xyz);
+  }
   r1.xyz = max(r1.xyz, 0);
   r1.xyz = float3(8,8,8) * r1.xyz;
 
   r2.xyz = GlobalTexture_surface_sampler.Sample(GlobalSampler_surface_sampler_s, v1.xy).xyz;
-  r2.xyz = max(r2.xyz, 0);
+    r2.xyz = max(r2.xyz, 0);
   r1.xyz = r2.xyz * g_exposure.yyy + r1.xyz;
   
   // Gamma Encode
   r1.xyz = max(r1.xyz, 0);
-  r1.xyz = pow(r1.xyz, gamma.z);
+  r1.xyz = pow(r1.xyz, gamma.z); //1/2.0
 
   // Color Matrix
   r1.w = 1;
@@ -66,7 +81,7 @@ void main(
 
   // HDR Tonemap
   r2.xyz = sRGB_Decode(r2.xyz);
-  r2.xyz = NeupowHQ(r2.xyz, GammaCorrectionPeak(HDR_PEAK), 9 * GS.WhiteClip);
+  r2.xyz = Rolloff(r2.xyz);
   r2.xyz = sRGB_Encode(r2.xyz);
 
   // Noise apply

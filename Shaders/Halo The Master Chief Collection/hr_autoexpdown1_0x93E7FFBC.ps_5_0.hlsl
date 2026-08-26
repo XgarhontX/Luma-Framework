@@ -36,9 +36,32 @@ void main(
   uint4 bitmask, uiDest;
   float4 fDest;
 
-  r0.xyz = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy).xyz;
-  // o0.xyz = pow(o0.xyz, 1/2.2);
-  // r0.xyz = saturate(r0.xyz);
+  // r0.xyz = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy).xyz;
+  {
+    int o = 2;
+    float3 C = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy).xyz;
+    float3 N = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(0,-o)).xyz;
+    float3 S = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(0,o)).xyz;
+    float3 W = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(-o,0)).xyz;
+    float3 E = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(o, 0)).xyz;
+
+    float3 N1 = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(0,-o*2)).xyz;
+    float3 S1 = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(0,o*2)).xyz;
+    float3 W1 = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(-o*2,0)).xyz;
+    float3 E1 = LocalTexture_source_sampler.Sample(LocalSampler_source_sampler_s, v1.xy, int2(o*2, 0)).xyz;
+
+    float3 x = C.xyz;
+    x += N.xyz;
+    x += S.xyz;
+    x += W.xyz;
+    x += E.xyz;
+    x += N1.xyz;
+    x += S1.xyz;
+    x += W1.xyz;
+    x += E1.xyz;
+    x /= 1 + 4 + 4;
+    r0.xyz = x;
+  }
 
   r0.xyz = g_exposure.yyy * r0.xyz;
   r1.w = dot(r0.xyz, intensity_vector.xyz);

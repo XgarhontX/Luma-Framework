@@ -98,11 +98,22 @@ namespace PragMap
     float chroma = length(jzazbz.yz);
     if (chroma < epsilon) return color;
 
+//     float hue = atan2(jzazbz.z, jzazbz.y);
+//     float shifted = hue + bezoldBruckeShift(hue, saturate(cap * driver));
+// 
+//     float sinHue, cosHue;
+//     sincos(shifted, sinHue, cosHue);
+//     jzazbz.yz = float2(cosHue, sinHue) * chroma;
+
+    // high chroma colors get their chroma reduces slightly to protect against nans
+    float chromaDriver = safeDivision(chroma, chroma + 0.05f, 0);
+    chroma *= 1.f - (0.0677f * cap) * chromaDriver * chromaDriver;
+
     float hue = atan2(jzazbz.z, jzazbz.y);
-    float shifted = hue + bezoldBruckeShift(hue, saturate(cap * driver));
+    hue += bezoldBruckeShift(hue, saturate(cap * driver));
 
     float sinHue, cosHue;
-    sincos(shifted, sinHue, cosHue);
+    sincos(hue, sinHue, cosHue);
     jzazbz.yz = float2(cosHue, sinHue) * chroma;
 
     return JzAzBz::jzazbzToRgb(jzazbz, colorspace);
@@ -115,6 +126,26 @@ namespace PragMap
     float positionSquared = position * position;
     return positionSquared * position * mad(position, mad(6.f, position, -15.f), 10.f);
   }
+
+  float3 hueShiftBezoldBrucke_PerChannelAid(float3 color, float3 colorSDR, float driver, float cap, float sdrHue, float sdrChrom, float2 sdrChromLimit = float2(0, 1000000), uint colorspace = CS_BT709) {
+    float3 jzazbz = JzAzBz::rgbToJzazbz(color, colorspace);
+
+    float chroma = length(jzazbz.yz);
+    if (chroma < epsilon) return color;
+
+    float hue = atan2(jzazbz.z, jzazbz.y);
+    float shifted = hue + bezoldBruckeShift(hue, saturate(cap * driver));
+
+    float sinHue, cosHue;
+    sincos(shifted, sinHue, cosHue);
+    jzazbz.yz = float2(cosHue, sinHue) * chroma;
+
+    float3 colorSDRJzazbz = JzAzBz::rgbToJzazbz(colorSDR, colorspace);
+    jzazbz = RestoreHueAndChrominanceUcs(jzazbz, colorSDRJzazbz, sdrHue, sdrChrom, sdrChromLimit.x, sdrChromLimit.y);
+
+    return JzAzBz::jzazbzToRgb(jzazbz, colorspace);
+  }
+
 
   // Blowout ----------------------------------------------------------------------------------------
   

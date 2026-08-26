@@ -247,6 +247,9 @@ namespace
       constexpr const char* Luma_H2A_XeGTAO_DenoisePass1 = "XeGTAO HH2A Denoise Pass 1 CS";
       constexpr const char* Luma_H2A_XeGTAO_DenoisePass2 = "XeGTAO H2A Denoise Pass 2 CS";
 
+      constexpr const char* Luma_H3_XeGTAO = "Luma_H3_XeGTAO"; //file name
+
+
       constexpr size_t DEPTH_MIP_LEVELS = 5;
       constexpr UINT NUMTHREADS_X = 8;
       constexpr UINT NUMTHREADS_Y = 8;
@@ -257,6 +260,8 @@ namespace
          native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_MainPass),      ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
          native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass1),  ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
          native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass2),  ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+
+         
       }
 
       namespace H2A
@@ -488,10 +493,182 @@ namespace
             return DrawOrDispatchOverrideType::None;
          }
       }
+
+      // namespace H3
+      // {
+      //    enum State : uint8_t
+      //    {
+      //       Unknown, // on boot
+      //       Ready,  // ready to draw
+      //       Done, // drawn, wait for next frame
+      //    };
+      //    State state = Unknown;
+      //
+      //    namespace CreatedResources
+      //    {
+      //       bool initialized = false;
+      //       
+      //       namespace PreFilteredDepth
+      //       {
+      //          D3D11_TEXTURE2D_DESC tex_desc;
+      //          ComPtr<ID3D11Texture2D> tex = nullptr;
+      //
+      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+      //          std::array<ID3D11UnorderedAccessView*, DEPTH_MIP_LEVELS> uavs;
+      //          
+      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
+      //       }
+      //
+      //       namespace Main0
+      //       {
+      //          D3D11_TEXTURE2D_DESC tex_desc;
+      //          ComPtr<ID3D11Texture2D> tex = nullptr;
+      //
+      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
+      //          ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
+      //          
+      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
+      //       }
+      //       
+      //       namespace Main1
+      //       {
+      //          // D3D11_TEXTURE2D_DESC tex_desc; // same as Main0
+      //          ComPtr<ID3D11Texture2D> tex = nullptr;
+      //
+      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc; // same as Main0
+      //          ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
+      //          
+      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
+      //       }
+      //
+      //       namespace MainColorDuped
+      //       {
+      //          D3D11_TEXTURE2D_DESC tex_desc;
+      //          ComPtr<ID3D11Texture2D> tex = nullptr;
+      //
+      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
+      //          // ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
+      //          
+      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
+      //
+      //          // // D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
+      //          // ComPtr<ID3D11RenderTargetView> rtv = nullptr;
+      //       }
+      //
+      //       void Create(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint2 size)
+      //       {
+      //          // gatekeep: created
+      //          [[likely]]
+      //          if (initialized) return;
+      //          initialized = true;
+      //    
+      //          // PreFilteredDepth
+      //          {
+      //             // tex desc
+      //             PreFilteredDepth::tex_desc = {};
+      //             PreFilteredDepth::tex_desc.Width = size.x;
+      //             PreFilteredDepth::tex_desc.Height = size.y;
+      //             PreFilteredDepth::tex_desc.MipLevels = DEPTH_MIP_LEVELS;
+      //             PreFilteredDepth::tex_desc.ArraySize = 1;
+      //             PreFilteredDepth::tex_desc.Format = DXGI_FORMAT_R32_FLOAT;
+      //             PreFilteredDepth::tex_desc.SampleDesc.Count = 1;
+      //             PreFilteredDepth::tex_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+      //
+      //             // tex
+      //             auto hr0 = native_device->CreateTexture2D(&PreFilteredDepth::tex_desc, nullptr, PreFilteredDepth::tex.put());
+      //             ASSERT_MSG(SUCCEEDED(hr0), "PreFilteredDepth hr0");
+      //
+      //             // uavs
+      //             D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
+      //             uav_desc.Format = PreFilteredDepth::tex_desc.Format;
+      //             uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+      //             for (int i = 0; i < PreFilteredDepth::uavs.size(); ++i)
+      //             {
+      //                uav_desc.Texture2D.MipSlice = i;
+      //                auto hr = native_device->CreateUnorderedAccessView(PreFilteredDepth::tex.get(), &uav_desc, &PreFilteredDepth::uavs[i]);
+      //                ASSERT_MSG(SUCCEEDED(hr), "PreFilteredDepth loop hr");
+      //             }
+      //       
+      //             // srv
+      //             auto hr2 = native_device->CreateShaderResourceView(PreFilteredDepth::tex.get(), nullptr, PreFilteredDepth::srv.put());
+      //             ASSERT_MSG(SUCCEEDED(hr2), "PreFilteredDepth hr2");
+      //          }
+      //
+      //          // Main 0 & 1
+      //          {
+      //             // tex desc
+      //             Main0::tex_desc = {};
+      //             Main0::tex_desc.Width = size.x;
+      //             Main0::tex_desc.Height = size.y;
+      //             Main0::tex_desc.MipLevels = 1;
+      //             Main0::tex_desc.ArraySize = 1;
+      //             Main0::tex_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+      //             Main0::tex_desc.SampleDesc.Count = 1;
+      //             Main0::tex_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+      //
+      //             // tex
+      //             auto hr0_0 = native_device->CreateTexture2D(&Main0::tex_desc, nullptr, Main0::tex.put());
+      //             ASSERT_MSG(SUCCEEDED(hr0_0), "Main0 hr0_0");
+      //             auto hr0_1 = native_device->CreateTexture2D(&Main0::tex_desc, nullptr, Main1::tex.put());
+      //             ASSERT_MSG(SUCCEEDED(hr0_1), "Main1 hr0_1");
+      //
+      //             // uav
+      //             auto hr1_0 = native_device->CreateUnorderedAccessView(Main0::tex.get(), nullptr, Main0::uav.put());
+      //             ASSERT_MSG(SUCCEEDED(hr1_0), "Main0 hr1_0");
+      //             auto hr1_1 = native_device->CreateUnorderedAccessView(Main1::tex.get(), nullptr, Main1::uav.put());
+      //             ASSERT_MSG(SUCCEEDED(hr1_1), "Main1 hr1_1");
+      //
+      //             // srv
+      //             auto hr2_0 = native_device->CreateShaderResourceView(Main0::tex.get(), nullptr, Main0::srv.put());
+      //             ASSERT_MSG(SUCCEEDED(hr2_0), "Main0 hr2_0");
+      //             auto hr2_1 = native_device->CreateShaderResourceView(Main1::tex.get(), nullptr, Main1::srv.put());
+      //             ASSERT_MSG(SUCCEEDED(hr2_1), "Main1 hr2_1");
+      //          }
+      //
+      //          // MainColorDuped
+      //          {
+      //             // tex desc
+      //             MainColorDuped::tex_desc = {};
+      //             MainColorDuped::tex_desc.Width = size.x;
+      //             MainColorDuped::tex_desc.Height = size.y;
+      //             MainColorDuped::tex_desc.MipLevels = 1;
+      //             MainColorDuped::tex_desc.ArraySize = 1;
+      //             MainColorDuped::tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      //             MainColorDuped::tex_desc.SampleDesc.Count = 1;
+      //             MainColorDuped::tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/;
+      //
+      //             // tex
+      //             auto hr0 = native_device->CreateTexture2D(&MainColorDuped::tex_desc, nullptr, MainColorDuped::tex.put());
+      //             ASSERT_MSG(SUCCEEDED(hr0), "MainColorDuped hr0");
+      //
+      //             // srv
+      //             auto hr1 = native_device->CreateShaderResourceView(MainColorDuped::tex.get(), nullptr, MainColorDuped::srv.put());
+      //             ASSERT_MSG(SUCCEEDED(hr1), "MainColorDuped hr1");
+      //          }
+      //
+      //          // log
+      //          reshade::log::message(reshade::log::level::info, std::format("XeGTAO::Resource::Create() Created resources for size {}x{}", size.x, size.y).c_str());
+      //       }
+      //    }
+      //
+      //    namespace FoundResource
+      //    {
+      //       
+      //    }
+      //
+      //    void Reset()
+      //    {
+      //       state = Unknown;
+      //    }
+      // }
       
       void OnSubGameChange(SubGame prev_game, SubGame new_game)
       {
-         if (/*prev_game == Halo2Anniversary &&*/ new_game != Halo2Anniversary) H2A::Reset();
+         if (prev_game == Halo2Anniversary && new_game != Halo2Anniversary) H2A::Reset();
       }
    }
    
@@ -670,8 +847,8 @@ namespace
 
                auto GetFormat = [](int v) { return v > 0 ? "%d" : "%d (Inactive)"; };
                ImGui::SliderInt("Display Peak", &s->peak, 0, 4000, GetFormat(s->peak));
-               if (s->subgame != Unknown) ImGui::SliderInt("Scene Paper White", &s->paper_scene, 0, 400, GetFormat(s->paper_scene));
-               ImGui::SliderInt("UI Paper White", &s->paper_ui, 0, 400, GetFormat(s->paper_ui));
+               ImGui::SliderInt("Scene Paper White", &s->paper_scene, 0, 500, GetFormat(s->paper_scene));
+               ImGui::SliderInt("UI Paper White", &s->paper_ui, 0, 500, GetFormat(s->paper_ui));
                
                if (peak != s->peak) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Peak"), s->peak);
                if (paper_scene != s->paper_scene) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
@@ -799,21 +976,26 @@ namespace
                ignore_upgraded_samplers = false;
                break;
             case Halo3:
-               auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 //TODO: more variants?
+               auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 
                auto_texture_format_upgrade_shader_hashes[0x7D41B2E6] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
                WarmupDirectAndIndirectHandler::Start();
                break;
             case Halo3ODST:
-               auto_texture_format_upgrade_shader_hashes[0xADADBE3D] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 //TODO: more variants?
+               // 0x01262530: color diffuse copy (SRV0 is used by regular opaque. RTV0 is used by small and cutout stuff (vegetation))
+               auto_texture_format_upgrade_shader_hashes[0xADADBE3D] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
                auto_texture_format_upgrade_shader_hashes[0x2193CAB5] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
                auto_texture_format_upgrade_shader_hashes[0x03B68268] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //noise overlay
                WarmupDirectAndIndirectHandler::Start();
                break;
             case HaloReach:
+               auto_texture_format_upgrade_shader_hashes[0x6A2F1FE6] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //downsample
                auto_texture_format_upgrade_shader_hashes[0xC1FF277A] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
+               auto_texture_format_upgrade_shader_hashes[0x363648B2] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01
                auto_texture_format_upgrade_shader_hashes[0x0EFB2B17] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+               auto_texture_format_upgrade_shader_hashes[0xBD7AE2AF] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //health pickup fx: down
+               auto_texture_format_upgrade_shader_hashes[0x270131A1] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //health pickup fx: kernel blur
                break;
             case Halo4:
                auto_texture_format_upgrade_shader_hashes[0x3A2F6CF7] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
@@ -1195,7 +1377,7 @@ public:
          // XBOX360_CURVE
          DrawColoredSubHeader("Xbox 360 Gamma Curve");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Emulate the Xbox 360's more aggressive gamma curve.");
-         ShaderDefines::UIDropDown(ShaderDefines::XBOX360_CURVE, "Perceptual Emulation", { "Off", "If Applicable" }, "This is emulation as the actual curve is a wonky \"jagged\" piecewise curve for performance reasons.\nThis emulation also keep dark colors from being overly saturated (hence why \"perceptual\").");
+         ShaderDefines::UIDropDown(ShaderDefines::XBOX360_CURVE, "Perceptual Emulation", { "Off", "If Applicable" }, "This is emulation as the actual curve is a wonky jagged piecewise curve for performance reasons.\nThis is also perceptual, keeping dark colors from being overly saturated).");
       }
       ShaderDefines::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0); // Forced
 
