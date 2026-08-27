@@ -126,18 +126,9 @@ void Rolloff(TexTuple lut0, TexTuple lut1, float4 cg_blend_factor, float4 c) {
   // Hue Correct
   float y0 = dot(hdr, Rec709_Luminance);
   tmi.x = NeupowHQ(tmi.x, tmi.p, 5 * GS.WhiteClip); // HDR Rolloff
-  tmi.x = PragMap::hueShiftBezoldBrucke(tmi.x, 0.7614 * y0, 0.0459);
+  // tmi.x = PragMap::hueShiftBezoldBrucke_PerChannelAid(tmi.x, tmi.sdr, 0.7614 * y0, 0.0459, 0.236 * y0, 0.124 * y0, float2(0, 1));
+  tmi.x = PragMap::hueShiftBezoldBrucke(tmi.x, 0.78 * y0, 0.0459);
   tmi.x = max(0, tmi.x);
-
-  // Path to White
-  tmi.x /= tmi.p;
-  tmi.x = sqrt(tmi.x);
-  float y = dot(tmi.x, Rec709_Luminance * float3(0.8,0.87,1));
-  // float m = dot(tmi.x, Rec709_Luminance * float3(0.1,0.1,10));
-  tmi.x = lerp(tmi.x, y, smoothstep(0.726, 1, y) * 0.55);
-  // tmi.x = lerp(tmi.x, y, smoothstep(0.719, 1, m) * 0.1125);
-  tmi.x *= tmi.x;
-  tmi.x *= tmi.p;
 
   tmi.x = max(tmi.x, 0);
 #elif HALO3_TONEMAP == 1

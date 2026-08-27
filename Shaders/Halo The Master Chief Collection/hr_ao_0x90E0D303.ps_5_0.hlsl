@@ -12,15 +12,70 @@ cbuffer HDAOPS : register(b0)
   float4 channel_offset : packoffset(c7);
 }
 
+// In XeGTAO.hlsl
 // cbuffer SSAOLocalDepthPS : register(b1)
 // {
 //   float4 local_depth_constants : packoffset(c0);
 // }
 
+// New, bound by Luma
+cbuffer ViewVS : register(b6)
+{
+  float4x4 View_Projection : packoffset(c0);
+// -1.20691
+// 0.245012
+// -1.51971e-07
+// -111.365
+// 
+// 0.0111751
+// 0.055049
+// 2.18867
+// -35.5318
+// 
+// 1.51736e-07
+// 7.47443e-07
+// -1.95743e-08
+// 0.00780883
+// 
+// -0.198884
+// -0.979687
+// 0.0256564
+// 4.82235
+
+  float4x4 Camera_To_World : packoffset(c4);
+// -0.98001
+// 0.198949
+// -1.23866e-07
+// 0
+// 
+// 0.00510419
+// 0.0251435
+// 0.999671
+// -0
+// 
+// 0.198884
+// 0.979687
+// -0.0256564
+// 0
+// 
+// -87.5785
+// 23.123
+// 16.1
+// 1
+
+  float4 v_clip_plane : packoffset(c8);
+// 0
+// 0
+// 0
+// 0
+}
+
 SamplerState GlobalSampler_depth_sampler_s : register(s0);
 SamplerState GlobalSampler_depth_low_sampler_s : register(s1);
+// SamplerState GlobalTexture_normal_sampler_s : register(s2); // unbound from prev
 Texture2D<float4> GlobalTexture_depth_sampler : register(t0);
 Texture2D<float4> GlobalTexture_depth_low_sampler : register(t1);
+Texture2D<float4> GlobalTexture_normal_sampler : register(t2); // unbound from prev
 
 
 // 3Dmigoto declarations
@@ -47,18 +102,30 @@ void main(
   c.ViewportSize = LumaSettings.SwapchainSize;
   c.ViewportPixelSize = LumaSettings.SwapchainInvSize;
 
-  // // NDC to View
-  // c.NDCToViewMul = float2(2.0, -2.0) * PS_REG_SSAO_FRUSTUM_SCALE_.xy;
-  // c.NDCToViewAdd = float2(-1.0, 1.0) * PS_REG_SSAO_FRUSTUM_SCALE_.xy;
+  // // NDC to View (current placeholder test)
+  // float tanHalfFOV = tan(50 * XE_GTAO_PI_OVER_360);
+  // float aspect = c.ViewportSize.x / c.ViewportSize.y;
+  // c.NDCToViewMul = float2(2.0, -2.0) * float2(aspect * tanHalfFOV, tanHalfFOV);
+  // c.NDCToViewAdd = float2(-1.0, 1.0) * float2(aspect * tanHalfFOV, tanHalfFOV);
   // c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.ViewportPixelSize;
 
-  // NDC to View (test)
-  float tanHalfFOV = tan(50 * XE_GTAO_PI_OVER_360);
-  float aspect = c.ViewportSize.x / c.ViewportSize.y;
-  c.NDCToViewMul = float2(2.0, -2.0) * float2(aspect * tanHalfFOV, tanHalfFOV);
-  c.NDCToViewAdd = float2(-1.0, 1.0) * float2(aspect * tanHalfFOV, tanHalfFOV);
+  // NDC to View (from constructed Projection mat)
+  float4x4 View_Projection_t = transpose(View_Projection);
+  float4x4 Projection = mul(View_Projection_t, Camera_To_World);
+  float tanHalfFovX = 1.0 / abs(Projection[0][0]);
+  float tanHalfFovY = 1.0 / abs(Projection[1][1]);
+  c.NDCToViewMul = float2(2.0, -2.0) * float2(tanHalfFovX, tanHalfFovY);
+  c.NDCToViewAdd = float2(-1.0, 1.0) * float2(tanHalfFovX, tanHalfFovY);
   c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.ViewportPixelSize;
 
+  // ViewNormal
+  float3 normal = GlobalTexture_normal_sampler.Sample(GlobalSampler_depth_sampler_s, v1.xy).xyz;
+    normal = mad(normal, 2.0, -1.0);
+    normal = normalize(normal);
+  float3x3 WorldToView_Rot = transpose((float3x3)Camera_To_World);
+  float3 viewNormal = normalize(mul(WorldToView_Rot, normal));
+  viewNormal.z *= -1;
+  
   // Noise
   // #if HALO2_GTAO_NOISE == 0
   //     const float frameIndex = 0;
@@ -68,7 +135,7 @@ void main(
   float2 localNoise = SpatioTemporalNoise(pixCoord, frameIndex);
 
   o0 = 1;
-  float2 r = XeGTAO_MainPassCS(pixCoord, localNoise, 0, GlobalTexture_depth_sampler, GlobalSampler_depth_sampler_s, c);
+  float2 r = XeGTAO_MainPassCS(pixCoord, localNoise, viewNormal, GlobalTexture_depth_sampler, GlobalSampler_depth_sampler_s, c);
   // r.y = 1 - r.y;
   // r.x += r.y;
   o0.x = r.x;

@@ -665,10 +665,40 @@ namespace
       //       state = Unknown;
       //    }
       // }
+
+      namespace HR
+      {
+         namespace FoundResources
+         {
+            // CB
+            ComPtr<ID3D11Buffer> viewvs_cb = nullptr;
+            // cbuffer ViewVS
+            // {
+            //   float4x4 View_Projection;
+            //   float4x4 Camera_To_World;
+            //   float4 v_clip_plane;
+            // }
+
+            // WorldNormals
+            ComPtr<ID3D11ShaderResourceView> worldnormals_srv = nullptr;
+         }
+
+         bool IsReady()
+         {
+            return FoundResources::worldnormals_srv && FoundResources::viewvs_cb;
+         }
+
+         void Reset()
+         {
+            FoundResources::viewvs_cb.reset();
+            FoundResources::worldnormals_srv.reset();
+         }
+      }
       
       void OnSubGameChange(SubGame prev_game, SubGame new_game)
       {
          if (prev_game == Halo2Anniversary && new_game != Halo2Anniversary) H2A::Reset();
+         if (prev_game == HaloReach && new_game != HaloReach) HR::Reset();
       }
    }
    
@@ -1214,7 +1244,95 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
-      // TODO: HaloReach: GTAO (0x90E0D303) (VERY HARD! Req finding inconsistent use of world normals to create SRV and save. Also req World --> View Matrix, which idk where it is located at. Else, live with depth generated normals.)
+      // HaloReach: AO
+      if (SubGameHandler::curr == HaloReach)
+      {
+         [[unlikely]]
+         if (!XeGTAOHandler::HR::IsReady())
+         {
+            // steal cb0 ViewVS
+            const static std::unordered_set<uint32_t> viewvs_using_shaders = { //hashs that use ViewVS cb0
+               0x59333658,
+               0xC2CB44CD,
+               0xEF304905,
+               0x48D09462,
+            };
+            if (!XeGTAOHandler::HR::FoundResources::viewvs_cb.get() && viewvs_using_shaders.contains(vs))
+            {
+               native_device_context->VSGetConstantBuffers(0, 1, XeGTAOHandler::HR::FoundResources::viewvs_cb.put());
+               ASSERT_MSG(XeGTAOHandler::HR::FoundResources::viewvs_cb.get(), "HaloReach Failed to get ViewVS CB 0");
+            }
+
+            // create our own SRV to normals
+            const static std::unordered_map<uint32_t, int8_t> normals_using_shaders = { //hash to SRV index (if >= 0) or RTV index (if < 0, -1 = RTV0, -2 = RTV1, etc.)
+               {0x4C8A0B12, -1 - 1}, // texture-less rock world geo
+               {0x04719B4D, -1 - 1},
+               {0x2CE86C20, -1 - 1},
+               {0x3649837C, -1 - 1},
+               {0x4E934D49, -1 - 1},
+               {0x92AD1942, -1 - 1},
+               {0xA9B18655, 2},
+            };
+            if (!XeGTAOHandler::HR::FoundResources::worldnormals_srv.get())
+            {
+               auto info = normals_using_shaders.find(ps);
+               if (info != normals_using_shaders.end())
+               {
+                  // create our own SRV to normals
+                  ComPtr<ID3D11Resource> res;
+                  int i = info->second;
+                  if (i >= 0) // SRV
+                  {
+                     ID3D11ShaderResourceView* srv;
+                     native_device_context->PSGetShaderResources(i, 1, &srv);
+                     ASSERT_MSG(srv, "HaloReach Failed to get WorldNormals SRV >= 0");
+                     srv->GetResource(res.put());
+                  }
+                  else //RTV
+                  {
+                     constexpr int amount = 2;
+                     i = std::abs(i) - 1; // parsed RTV index
+
+                     // fetch
+                     std::array<ID3D11RenderTargetView*, amount> rtvs;
+                     ID3D11DepthStencilView* dsv;
+                     native_device_context->OMGetRenderTargets(amount, rtvs.data(), &dsv);
+
+                     // take
+                     ID3D11RenderTargetView* rtv;
+                     rtv = rtvs[i];
+
+                     // RES
+                     ASSERT_MSG(rtv, "HaloReach Failed to get WorldNormals RTV < 0");
+                     rtv->GetResource(res.put());
+
+                     // release
+                     for (int j = 0; j < amount; j++) if (rtvs[j]) rtvs[j]->Release();
+                  }
+                  ASSERT_MSG(res, "HaloReach Failed to get WorldNormals Resource < 0");
+                  // reshade::log::message(reshade::log::level::info, std::format("HaloReach Found WorldNormalsResource for PS 0x{:X}, res handle {}", ps, reinterpret_cast<uint64_t>(res.get())).c_str());
+
+                  // SRV
+                  D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+                  srv_desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;
+                  srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                  srv_desc.Texture2D.MostDetailedMip = 0;
+                  srv_desc.Texture2D.MipLevels = 1;
+                  auto hr = native_device->CreateShaderResourceView(res.get(), &srv_desc, XeGTAOHandler::HR::FoundResources::worldnormals_srv.put());
+                  ASSERT_ONCE_MSG(SUCCEEDED(hr), "HaloReach Failed to create WorldNormals SRV BRUH");
+               }
+            }
+         }
+         else
+         {
+            if (ps == 0x90E0D303)
+            {
+               // pass in CB -> 6 & SRV -> 2
+               native_device_context->PSSetConstantBuffers(6, 1, &XeGTAOHandler::HR::FoundResources::viewvs_cb);
+               native_device_context->PSSetShaderResources(2, 1, &XeGTAOHandler::HR::FoundResources::worldnormals_srv);
+            }
+         }
+      }
       // HaloReach: fxaa
       if (!device_data.has_drawn_main_post_processing && ps == 0x0EFB2B17)
       {
@@ -1444,6 +1562,14 @@ public:
          auto gtao_fullres_enabled = ShaderDefines::UIToggleCheckmark(ShaderDefines::HALO2_GTAO_FULLRES, "Halo 2 Anniversary: GTAO Full Res", "Instead of original 0.5x, run GTAO at 1x resolution for more precise edge detection.");
          if (gtao_fullres_enabled.second) XeGTAOHandler::H2A::Reset();
          if (!gtao_enabled.first) ImGui::EndDisabled();
+
+         // Halo Reach GTAO status
+         if (DEVELOPMENT)
+         {
+            DrawColoredSubHeader("Halo Reach GTAO Status");
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("CB %s", XeGTAOHandler::HR::FoundResources::viewvs_cb ? "Ready" : "Not Ready");
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("SRV %s", XeGTAOHandler::HR::FoundResources::worldnormals_srv ? "Ready" : "Not Ready");
+         }
          
          ImGui::NewLine(); //////////////
 

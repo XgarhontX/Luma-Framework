@@ -12,15 +12,15 @@
 /////////////
 
 #define SLICE_COUNT 3.0
-#define STEPS_PER_SLICE 4.0
+#define STEPS_PER_SLICE 3.0
 
-#define EFFECT_RADIUS 1 // Default 0.5
-#define RADIUS_MULTIPLIER 1.457 // Default 1.457
-#define EFFECT_FALLOFF_RANGE 0.615 // Default 0.615
-#define EFFECT_RADIUS_DISTANCE_SCALE 0.015
-#define SAMPLE_DISTRIBUTION_POWER 2.0 // Default 2.0
+#define EFFECT_RADIUS 0.5 // Default 0.5
+#define RADIUS_MULTIPLIER 1. // Default 1.457
+#define EFFECT_FALLOFF_RANGE 0.1 // Default 0.615
+#define EFFECT_RADIUS_DISTANCE_SCALE 0.03
+#define SAMPLE_DISTRIBUTION_POWER 3.0 // Default 2.0
 #define THIN_OCCLUDER_COMPENSATION 0.0 // Default 0.0 
-#define FINAL_VALUE_POWER 1.25 // Default 2.2
+#define FINAL_VALUE_POWER 2.0 // Default 2.2
 #define DEPTH_MIP_SAMPLING_OFFSET 2 // Default 3.3
 #define DENOISE_BLUR_BETA 1.2 // Default 1.2
 
@@ -300,12 +300,12 @@ float2 XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, float3 viewspaceNorm
     const float edges = min(edgesLRTB.x, min(edgesLRTB.y, min(edgesLRTB.z, edgesLRTB.w)));
     // return edges;
 
-    float3 CENTER   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos,                                             viewspaceZ, consts );
-    float3 LEFT     = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, pixLZ,      consts );
-    float3 RIGHT    = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, pixRZ,      consts );
-    float3 TOP      = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, pixTZ,      consts );
-    float3 BOTTOM   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, pixBZ,      consts );
-    viewspaceNormal = XeGTAO_CalculateNormal( edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM );
+    // float3 CENTER   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos,                                             viewspaceZ, consts );
+    // float3 LEFT     = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2(-1,  0) * consts.ViewportPixelSize, pixLZ,      consts );
+    // float3 RIGHT    = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 1,  0) * consts.ViewportPixelSize, pixRZ,      consts );
+    // float3 TOP      = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0, -1) * consts.ViewportPixelSize, pixTZ,      consts );
+    // float3 BOTTOM   = XeGTAO_ComputeViewspacePosition( normalizedScreenPos + float2( 0,  1) * consts.ViewportPixelSize, pixBZ,      consts );
+    // viewspaceNormal = XeGTAO_CalculateNormal( edgesLRTB, CENTER, LEFT, RIGHT, TOP, BOTTOM );
     // return viewspaceNormal.x * 0.5 + 0.5;
 
     // Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used

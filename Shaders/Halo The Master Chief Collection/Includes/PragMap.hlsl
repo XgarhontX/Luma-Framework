@@ -66,28 +66,33 @@ namespace PragMap
     float h = hue - bbPurpleHue;
     h -= twoPi * floor(h * invTwoPi);
 
-    float arcStart, arcEnd, arcSign;
+    float arcStart, arcEnd, arcSign, amountPow;
     if (h < bbArcToYellow) {  // purple -> yellow   (reds, oranges)      attractor at the far end
       arcStart = 0.f;
       arcEnd = bbArcToYellow;
       arcSign = 1.f;
+      // amountPow = DVS1;
     } else if (h < bbArcToGreen) {  // yellow -> green    (yellow-greens)     attractor at the near end
       arcStart = bbArcToYellow;
       arcEnd = bbArcToGreen;
       arcSign = -1.f;
+      // amountPow = DVS2;
     } else if (h < bbArcToBlue) {  // green -> blue      (greens, cyans)     attractor at the far end
       arcStart = bbArcToGreen;
       arcEnd = bbArcToBlue;
-      arcSign = 1.f;
+      arcSign = DVS3;
+      // amountPow = DVS1;
     } else {  // blue -> purple     (violets, magentas) attractor at the near end
       arcStart = bbArcToBlue;
       arcEnd = twoPi;
       arcSign = -1.f;
+      // amountPow = DVS4;
     }
 
     float arcLength = arcEnd - arcStart;
     float t = (h - arcStart) / arcLength;
     float distanceToAttractor = arcSign > 0.f ? (1.f - t) : t;
+    // amount = pow(amount, amountPow);
 
     return arcSign * arcLength * min(0.5f * sin(pi * t) * amount, distanceToAttractor);
   }
@@ -98,23 +103,23 @@ namespace PragMap
     float chroma = length(jzazbz.yz);
     if (chroma < epsilon) return color;
 
-//     float hue = atan2(jzazbz.z, jzazbz.y);
-//     float shifted = hue + bezoldBruckeShift(hue, saturate(cap * driver));
-// 
-//     float sinHue, cosHue;
-//     sincos(shifted, sinHue, cosHue);
-//     jzazbz.yz = float2(cosHue, sinHue) * chroma;
-
-    // high chroma colors get their chroma reduces slightly to protect against nans
-    float chromaDriver = safeDivision(chroma, chroma + 0.05f, 0);
-    chroma *= 1.f - (0.0677f * cap) * chromaDriver * chromaDriver;
-
     float hue = atan2(jzazbz.z, jzazbz.y);
-    hue += bezoldBruckeShift(hue, saturate(cap * driver));
+    float shifted = hue + bezoldBruckeShift(hue, saturate(cap * driver));
 
     float sinHue, cosHue;
-    sincos(hue, sinHue, cosHue);
+    sincos(shifted, sinHue, cosHue);
     jzazbz.yz = float2(cosHue, sinHue) * chroma;
+
+//     // high chroma colors get their chroma reduces slightly to protect against nans
+//     float chromaDriver = safeDivision(chroma, chroma + 0.05f, 0);
+//     chroma *= 1.f - (0.0677f * cap) * chromaDriver * chromaDriver;
+// 
+//     float hue = atan2(jzazbz.z, jzazbz.y);
+//     hue += bezoldBruckeShift(hue, saturate(cap * driver));
+// 
+//     float sinHue, cosHue;
+//     sincos(hue, sinHue, cosHue);
+//     jzazbz.yz = float2(cosHue, sinHue) * chroma;
 
     return JzAzBz::jzazbzToRgb(jzazbz, colorspace);
   }
@@ -141,11 +146,11 @@ namespace PragMap
     jzazbz.yz = float2(cosHue, sinHue) * chroma;
 
     float3 colorSDRJzazbz = JzAzBz::rgbToJzazbz(colorSDR, colorspace);
-    jzazbz = RestoreHueAndChrominanceUcs(jzazbz, colorSDRJzazbz, sdrHue, sdrChrom, sdrChromLimit.x, sdrChromLimit.y);
+    float colorSDRJzazbzChrom = length(colorSDRJzazbz.yz);
+    jzazbz = RestoreHueAndChrominanceUcs(jzazbz, colorSDRJzazbz, sdrHue * saturate(colorSDRJzazbzChrom * 2), sdrChrom, sdrChromLimit.x, sdrChromLimit.y);
 
     return JzAzBz::jzazbzToRgb(jzazbz, colorspace);
   }
-
 
   // Blowout ----------------------------------------------------------------------------------------
   

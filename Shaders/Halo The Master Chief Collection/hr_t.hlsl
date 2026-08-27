@@ -29,18 +29,8 @@ float3 Rolloff(float3 hdr) {
   // Hue Correct
   float y0 = dot(hdr, Rec709_Luminance);
   hdr = NeupowHQ(hdr, p, 5 * GS.WhiteClip); // HDR Rolloff
-  hdr = PragMap::hueShiftBezoldBrucke(hdr, 0.7614 * y0, 0.0459);
+  hdr = PragMap::hueShiftBezoldBrucke(hdr, 0.78 * y0, 0.0459);
   hdr = max(0, hdr);
-
-  // Path to White
-  hdr /= p;
-  hdr = sqrt(hdr);
-  float y = dot(hdr, Rec709_Luminance * float3(0.8,0.87,1));
-  // float m = dot(hdr, Rec709_Luminance * float3(0.1,0.1,10));
-  hdr = lerp(hdr, y, smoothstep(0.726, 1, y) * 0.55);
-  // hdr = lerp(hdr, y, smoothstep(0.719, 1, m) * 0.1125);
-  hdr *= hdr;
-  hdr *= p;
 
   hdr = max(hdr, 0);
 #endif

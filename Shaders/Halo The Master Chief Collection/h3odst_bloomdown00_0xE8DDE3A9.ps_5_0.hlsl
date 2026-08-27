@@ -45,6 +45,16 @@ Texture2D<float4> LocalTexture_dark_source_sampler : register(t0);
 #define cmp -
 #include "./Includes/Common.hlsl"
 
+float3 SampleBloom(float2 uv, float4 r0) {
+  float4 r2, r3;
+  if (r0.x != 0) {
+    r3.xy = uv * ps_global_viewport_res_multipliers.xy + r0.yz;
+    r3.xy = max(ps_global_viewport_bounds_uv.xy, r3.xy);
+    r2.xy = min(ps_global_viewport_bounds_uv.zw, r3.xy);
+  }
+  r3.xyz = LocalTexture_dark_source_sampler.Sample(LocalSampler_dark_source_sampler_s, r2.xy).xyz;
+  return r3.xyz;
+}
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -56,6 +66,7 @@ void main(
 
   r0.x = ps_global_is_texture_in_viewport_flags & 1;
   r0.yz = ps_global_render_pixel_size.xy * ps_global_viewport_top_left_pixel.xy;
+
   r1.xy = -ps_postprocess_pixel_size.xy + v1.xy;
   if (r0.x != 0) {
     r1.zw = r1.xy * ps_global_viewport_res_multipliers.xy + r0.yz;
@@ -63,22 +74,28 @@ void main(
     r1.xy = min(ps_global_viewport_bounds_uv.zw, r1.zw);
   }
   r1.xyz = LocalTexture_dark_source_sampler.Sample(LocalSampler_dark_source_sampler_s, r1.xy).xyz;
+  float3 b0 = r1.xyz;
   r1.xyz = float3(9.99999994e-009,9.99999994e-009,9.99999994e-009) + r1.xyz;
-  r2.xyzw = ps_postprocess_pixel_size.xyxy * float4(1,-1,-1,1) + v1.xyxy;
+
+  r2.xyzw = ps_postprocess_pixel_size.xyxy * float4(1, -1, -1, 1) + v1.xyxy;
   if (r0.x != 0) {
     r3.xy = r2.xy * ps_global_viewport_res_multipliers.xy + r0.yz;
     r3.xy = max(ps_global_viewport_bounds_uv.xy, r3.xy);
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r3.xy);
   }
   r3.xyz = LocalTexture_dark_source_sampler.Sample(LocalSampler_dark_source_sampler_s, r2.xy).xyz;
+  float3 b1 = r3.xyz;
   r1.xyz = r3.xyz + r1.xyz;
+
   if (r0.x != 0) {
     r2.xy = r2.zw * ps_global_viewport_res_multipliers.xy + r0.yz;
     r2.xy = max(ps_global_viewport_bounds_uv.xy, r2.xy);
     r2.zw = min(ps_global_viewport_bounds_uv.zw, r2.xy);
   }
   r2.xyz = LocalTexture_dark_source_sampler.Sample(LocalSampler_dark_source_sampler_s, r2.zw).xyz;
+  float3 b2 = r2.xyz;
   r1.xyz = r2.xyz + r1.xyz;
+
   r2.xy = ps_postprocess_pixel_size.xy + v1.xy;
   if (r0.x != 0) {
     r0.xy = r2.xy * ps_global_viewport_res_multipliers.xy + r0.yz;
@@ -86,7 +103,9 @@ void main(
     r2.xy = min(ps_global_viewport_bounds_uv.zw, r0.xy);
   }
   r0.xyz = LocalTexture_dark_source_sampler.Sample(LocalSampler_dark_source_sampler_s, r2.xy).xyz;
+  float3 b3 = r0.xyz;
   r0.xyz = r1.xyz + r0.xyz;
+
   r0.w = 1.00294113 * r0.x;
   r1.xyzw = cmp(r0.xxxy < float4(0.250244379,0.500488758,1.00097752,0.250244379));
   r2.xyz = r0.xxx * float3(0.501470566,0.250735283,0.125367641) + float3(0.125490203,0.250980407,0.501960814);
@@ -94,6 +113,7 @@ void main(
   r0.x = r1.y ? r2.x : r0.x;
   r0.x = r1.x ? r0.w : r0.x;
   r1.x = r0.x * r0.x;
+
   r0.x = 1.00294113 * r0.y;
   r2.xyzw = cmp(r0.yyzz < float4(0.500488758,1.00097752,0.250244379,0.500488758));
   r3.xyz = r0.yyy * float3(0.501470566,0.250735283,0.125367641) + float3(0.125490203,0.250980407,0.501960814);
@@ -101,6 +121,7 @@ void main(
   r0.y = r2.x ? r3.x : r0.y;
   r0.x = r1.w ? r0.x : r0.y;
   r1.y = r0.x * r0.x;
+
   r0.x = 1.00294113 * r0.z;
   r0.y = cmp(r0.z < 1.00097752);
   r3.xyz = r0.zzz * float3(0.501470566,0.250735283,0.125367641) + float3(0.125490203,0.250980407,0.501960814);
@@ -108,6 +129,63 @@ void main(
   r0.y = r2.w ? r3.x : r0.y;
   r0.x = r2.z ? r0.x : r0.y;
   r1.z = r0.x * r0.x;
+
+//   float o = 1;
+//   r1.xyz = 0;
+// 
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, 0) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o, 0) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(-o, 0) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, -o) + v1.xy, r0);
+//   r1.xyz *= 4 / 5.f;
+//   r1.xyz *= r1.xyz;
+
+  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, 0) + v1.xy, r0));
+  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o, 0) + v1.xy, r0));
+  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(-o, 0) + v1.xy, r0));
+  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o) + v1.xy, r0));
+  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, -o) + v1.xy, r0));
+  // r1.xyz *= 4;
+  // r1.xyz *= r1.xyz;
+
+  // r1.xyz = 0;
+  // int2 pixCoord = v0.xy * 4;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,0), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,1), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,2), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,3), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,0), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,1), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,2), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,3), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,0), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,1), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,2), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,3), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,0), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,1), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,2), 0)).xyz;
+  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,3), 0)).xyz;
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,0), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,1), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,2), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,3), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,0), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,1), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,2), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,3), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,0), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,1), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,2), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,3), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,0), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,1), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,2), 0)).xyz);
+  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,3), 0)).xyz);
+  // r1.xyz *= 4;
+  // r1.xyz *= r1.xyz;
+
   r0.xyz = g_exposure.yyy * r1.xyz;
   r0.w = dot(r0.xyz, intensity_vector.xyz);
   r1.x = ps_postprocess_scale.y * r0.w;
