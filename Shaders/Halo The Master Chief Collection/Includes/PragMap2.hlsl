@@ -160,13 +160,16 @@ namespace PragMap2
     return arcSign * arcLength * min(0.5f * sin(pi * t) * amount, distanceToAttractor);
   }
 
-  float3 hueShiftBezoldBrucke(float3 jzazbz, float driver, float cap) {
+  float3 hueShiftBezoldBrucke(float3 jzazbz, float driver, float cap, bool isChromaReduce = true) {
     float chroma = length(jzazbz.yz);
     if (chroma < epsilon) return jzazbz;
 
     // high chroma colors get their chroma reduces slightly to protect against nans
-    float chromaDriver = DivideSafe(chroma, chroma + 0.05f, 0.f);
-    chroma *= 1.f - (0.0677f * cap) * chromaDriver * chromaDriver;
+    if (isChromaReduce)
+    {
+      float chromaDriver = DivideSafe(chroma, chroma + 0.05f, 0.f);
+      chroma *= 1.f - (0.0677f * cap) * chromaDriver * chromaDriver;
+    }
 
     float hue = atan2(jzazbz.z, jzazbz.y);
     hue += bezoldBruckeShift(hue, saturate(cap * driver));

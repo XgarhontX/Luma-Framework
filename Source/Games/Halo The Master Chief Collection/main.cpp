@@ -494,178 +494,6 @@ namespace
          }
       }
 
-      // namespace H3
-      // {
-      //    enum State : uint8_t
-      //    {
-      //       Unknown, // on boot
-      //       Ready,  // ready to draw
-      //       Done, // drawn, wait for next frame
-      //    };
-      //    State state = Unknown;
-      //
-      //    namespace CreatedResources
-      //    {
-      //       bool initialized = false;
-      //       
-      //       namespace PreFilteredDepth
-      //       {
-      //          D3D11_TEXTURE2D_DESC tex_desc;
-      //          ComPtr<ID3D11Texture2D> tex = nullptr;
-      //
-      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
-      //          std::array<ID3D11UnorderedAccessView*, DEPTH_MIP_LEVELS> uavs;
-      //          
-      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
-      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
-      //       }
-      //
-      //       namespace Main0
-      //       {
-      //          D3D11_TEXTURE2D_DESC tex_desc;
-      //          ComPtr<ID3D11Texture2D> tex = nullptr;
-      //
-      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
-      //          ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
-      //          
-      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
-      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
-      //       }
-      //       
-      //       namespace Main1
-      //       {
-      //          // D3D11_TEXTURE2D_DESC tex_desc; // same as Main0
-      //          ComPtr<ID3D11Texture2D> tex = nullptr;
-      //
-      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc; // same as Main0
-      //          ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
-      //          
-      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
-      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
-      //       }
-      //
-      //       namespace MainColorDuped
-      //       {
-      //          D3D11_TEXTURE2D_DESC tex_desc;
-      //          ComPtr<ID3D11Texture2D> tex = nullptr;
-      //
-      //          // D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
-      //          // ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
-      //          
-      //          // D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
-      //          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
-      //
-      //          // // D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
-      //          // ComPtr<ID3D11RenderTargetView> rtv = nullptr;
-      //       }
-      //
-      //       void Create(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint2 size)
-      //       {
-      //          // gatekeep: created
-      //          [[likely]]
-      //          if (initialized) return;
-      //          initialized = true;
-      //    
-      //          // PreFilteredDepth
-      //          {
-      //             // tex desc
-      //             PreFilteredDepth::tex_desc = {};
-      //             PreFilteredDepth::tex_desc.Width = size.x;
-      //             PreFilteredDepth::tex_desc.Height = size.y;
-      //             PreFilteredDepth::tex_desc.MipLevels = DEPTH_MIP_LEVELS;
-      //             PreFilteredDepth::tex_desc.ArraySize = 1;
-      //             PreFilteredDepth::tex_desc.Format = DXGI_FORMAT_R32_FLOAT;
-      //             PreFilteredDepth::tex_desc.SampleDesc.Count = 1;
-      //             PreFilteredDepth::tex_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-      //
-      //             // tex
-      //             auto hr0 = native_device->CreateTexture2D(&PreFilteredDepth::tex_desc, nullptr, PreFilteredDepth::tex.put());
-      //             ASSERT_MSG(SUCCEEDED(hr0), "PreFilteredDepth hr0");
-      //
-      //             // uavs
-      //             D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
-      //             uav_desc.Format = PreFilteredDepth::tex_desc.Format;
-      //             uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-      //             for (int i = 0; i < PreFilteredDepth::uavs.size(); ++i)
-      //             {
-      //                uav_desc.Texture2D.MipSlice = i;
-      //                auto hr = native_device->CreateUnorderedAccessView(PreFilteredDepth::tex.get(), &uav_desc, &PreFilteredDepth::uavs[i]);
-      //                ASSERT_MSG(SUCCEEDED(hr), "PreFilteredDepth loop hr");
-      //             }
-      //       
-      //             // srv
-      //             auto hr2 = native_device->CreateShaderResourceView(PreFilteredDepth::tex.get(), nullptr, PreFilteredDepth::srv.put());
-      //             ASSERT_MSG(SUCCEEDED(hr2), "PreFilteredDepth hr2");
-      //          }
-      //
-      //          // Main 0 & 1
-      //          {
-      //             // tex desc
-      //             Main0::tex_desc = {};
-      //             Main0::tex_desc.Width = size.x;
-      //             Main0::tex_desc.Height = size.y;
-      //             Main0::tex_desc.MipLevels = 1;
-      //             Main0::tex_desc.ArraySize = 1;
-      //             Main0::tex_desc.Format = DXGI_FORMAT_R8G8_UNORM;
-      //             Main0::tex_desc.SampleDesc.Count = 1;
-      //             Main0::tex_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-      //
-      //             // tex
-      //             auto hr0_0 = native_device->CreateTexture2D(&Main0::tex_desc, nullptr, Main0::tex.put());
-      //             ASSERT_MSG(SUCCEEDED(hr0_0), "Main0 hr0_0");
-      //             auto hr0_1 = native_device->CreateTexture2D(&Main0::tex_desc, nullptr, Main1::tex.put());
-      //             ASSERT_MSG(SUCCEEDED(hr0_1), "Main1 hr0_1");
-      //
-      //             // uav
-      //             auto hr1_0 = native_device->CreateUnorderedAccessView(Main0::tex.get(), nullptr, Main0::uav.put());
-      //             ASSERT_MSG(SUCCEEDED(hr1_0), "Main0 hr1_0");
-      //             auto hr1_1 = native_device->CreateUnorderedAccessView(Main1::tex.get(), nullptr, Main1::uav.put());
-      //             ASSERT_MSG(SUCCEEDED(hr1_1), "Main1 hr1_1");
-      //
-      //             // srv
-      //             auto hr2_0 = native_device->CreateShaderResourceView(Main0::tex.get(), nullptr, Main0::srv.put());
-      //             ASSERT_MSG(SUCCEEDED(hr2_0), "Main0 hr2_0");
-      //             auto hr2_1 = native_device->CreateShaderResourceView(Main1::tex.get(), nullptr, Main1::srv.put());
-      //             ASSERT_MSG(SUCCEEDED(hr2_1), "Main1 hr2_1");
-      //          }
-      //
-      //          // MainColorDuped
-      //          {
-      //             // tex desc
-      //             MainColorDuped::tex_desc = {};
-      //             MainColorDuped::tex_desc.Width = size.x;
-      //             MainColorDuped::tex_desc.Height = size.y;
-      //             MainColorDuped::tex_desc.MipLevels = 1;
-      //             MainColorDuped::tex_desc.ArraySize = 1;
-      //             MainColorDuped::tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-      //             MainColorDuped::tex_desc.SampleDesc.Count = 1;
-      //             MainColorDuped::tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/;
-      //
-      //             // tex
-      //             auto hr0 = native_device->CreateTexture2D(&MainColorDuped::tex_desc, nullptr, MainColorDuped::tex.put());
-      //             ASSERT_MSG(SUCCEEDED(hr0), "MainColorDuped hr0");
-      //
-      //             // srv
-      //             auto hr1 = native_device->CreateShaderResourceView(MainColorDuped::tex.get(), nullptr, MainColorDuped::srv.put());
-      //             ASSERT_MSG(SUCCEEDED(hr1), "MainColorDuped hr1");
-      //          }
-      //
-      //          // log
-      //          reshade::log::message(reshade::log::level::info, std::format("XeGTAO::Resource::Create() Created resources for size {}x{}", size.x, size.y).c_str());
-      //       }
-      //    }
-      //
-      //    namespace FoundResource
-      //    {
-      //       
-      //    }
-      //
-      //    void Reset()
-      //    {
-      //       state = Unknown;
-      //    }
-      // }
-
       namespace HR
       {
          namespace FoundResources
@@ -972,14 +800,15 @@ namespace
          
          // set new Indirect Upgrades hashes
          auto_texture_format_upgrade_shader_hashes[0x5B190892] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00
-         auto_texture_format_upgrade_shader_hashes[0x3CC502A9] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00 subsequent downsamples
+         auto_texture_format_upgrade_shader_hashes[0x3CC502A9] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blurdown00 subsequent blurring
          auto_texture_format_upgrade_shader_hashes[0xF207E935] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blur settings 0
          auto_texture_format_upgrade_shader_hashes[0xE45B4EB7] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //ui blur settings subsequent downsample
          switch (curr)
          {
             case Halo1Classic:
                auto_texture_format_upgrade_shader_hashes[0xB70CC18B] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
-               if (!best_resource_unorm_disallow) best_resource_unorm = true; //TODO: Luma needs this or something better for core.hpp!
+               // if (!best_resource_unorm_disallow) best_resource_unorm = true; //TODO: Luma needs this or something better for core.hpp!
+               WarmupDirectAndIndirectHandler::Start();
                break;
             case Halo1Anniversary:
                // auto_texture_format_upgrade_shader_hashes[0xDCC32775] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //transparency combine
@@ -1023,6 +852,7 @@ namespace
                auto_texture_format_upgrade_shader_hashes[0x6A2F1FE6] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //downsample
                auto_texture_format_upgrade_shader_hashes[0xC1FF277A] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
                auto_texture_format_upgrade_shader_hashes[0x363648B2] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01
+               auto_texture_format_upgrade_shader_hashes[0x924D7B98] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t02
                auto_texture_format_upgrade_shader_hashes[0x0EFB2B17] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
                auto_texture_format_upgrade_shader_hashes[0xBD7AE2AF] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //health pickup fx: down
                auto_texture_format_upgrade_shader_hashes[0x270131A1] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //health pickup fx: kernel blur
@@ -1265,7 +1095,7 @@ public:
 
             // create our own SRV to normals
             const static std::unordered_map<uint32_t, int8_t> normals_using_shaders = { //hash to SRV index (if >= 0) or RTV index (if < 0, -1 = RTV0, -2 = RTV1, etc.)
-               {0x4C8A0B12, -1 - 1}, // texture-less rock world geo
+               {0x4C8A0B12, -1 - 1},
                {0x04719B4D, -1 - 1},
                {0x2CE86C20, -1 - 1},
                {0x3649837C, -1 - 1},
@@ -1310,7 +1140,6 @@ public:
                      for (int j = 0; j < amount; j++) if (rtvs[j]) rtvs[j]->Release();
                   }
                   ASSERT_MSG(res, "HaloReach Failed to get WorldNormals Resource < 0");
-                  // reshade::log::message(reshade::log::level::info, std::format("HaloReach Found WorldNormalsResource for PS 0x{:X}, res handle {}", ps, reinterpret_cast<uint64_t>(res.get())).c_str());
 
                   // SRV
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
@@ -1327,6 +1156,9 @@ public:
          {
             if (ps == 0x90E0D303)
             {
+               // Depth Prepass
+               
+               
                // pass in CB -> 6 & SRV -> 2
                native_device_context->PSSetConstantBuffers(6, 1, &XeGTAOHandler::HR::FoundResources::viewvs_cb);
                native_device_context->PSSetShaderResources(2, 1, &XeGTAOHandler::HR::FoundResources::worldnormals_srv);

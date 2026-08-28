@@ -92,15 +92,16 @@ void main(
 
   if (IsGame_Halo3()) { //TODO: detect if before tonemap, which is when this is useful
     float y = GetLuminance(r0.xyz);
-    const float p = 0.3;
+    const float p = 2;
     #if HALO3_BLOOM == 0
-      r0.xyz *= safeDivision(Neupow(r0.xyz, 1, 3), y);
+      r0.xyz *= safeDivision(Neutwo(r0.xyz, p), y);
       // r0.xyz = saturate(r0.xyz);
     #else
-      r0.xyz = Neupow(r0.xyz, p, 3);
+      r0.xyz = Neutwo(r0.xyz, p);
     #endif
     r0.w = Neutwo(r0.w, p);
   }
+  r0 = max(0, r0);
 
   o0 = r0;
   return;

@@ -1,20 +1,12 @@
-// ---- Created with 3Dmigoto v1.3.16 on Wed Aug 05 17:39:42 2026
+// ---- Created with 3Dmigoto v1.3.16 on Wed Aug 05 17:40:06 2026
 
-cbuffer ViewPS : register(b0)
-{
-  float3 Camera_Position_PS : packoffset(c0);
-  float Camera_Position_PS_pad : packoffset(c0.w);
-  float4 depth_constants : packoffset(c1);
-  bool shadow_mask_enabled : packoffset(c2);
-}
-
-cbuffer ExposurePS : register(b1)
+cbuffer ExposurePS : register(b0)
 {
   float4 g_exposure : packoffset(c0);
   float4 g_alt_exposure : packoffset(c1);
 }
 
-cbuffer FinalCompositePS : register(b2)
+cbuffer FinalCompositePS : register(b1)
 {
   float4 tone_curve_constants : packoffset(c0);
   float4 player_window_constants : packoffset(c1);
@@ -26,13 +18,11 @@ cbuffer FinalCompositePS : register(b2)
 
 SamplerState GlobalSampler_surface_sampler_s : register(s0);
 SamplerState GlobalSampler_bloom_sampler_s : register(s2);
-SamplerState GlobalSampler_depth_sampler_s : register(s3);
-SamplerState GlobalSampler_blur_sampler_s : register(s4);
+SamplerState GlobalSampler_blur_grade_sampler_s : register(s5);
 SamplerState GlobalSampler_noise_sampler_s : register(s7);
 Texture2D<float4> GlobalTexture_surface_sampler : register(t0);
 Texture2D<float4> GlobalTexture_bloom_sampler : register(t2);
-Texture2D<float4> GlobalTexture_depth_sampler : register(t3);
-Texture2D<float4> GlobalTexture_blur_sampler : register(t4);
+Texture2D<float4> GlobalTexture_blur_grade_sampler : register(t5);
 Texture2D<float4> GlobalTexture_noise_sampler : register(t7);
 
 
@@ -46,29 +36,16 @@ void main(
   float4 v2 : TEXCOORD1,
   out float4 o0 : SV_Target0)
 {
-  float4 r0,r1;
+  float4 r0,r1,r2,r3;
   uint4 bitmask, uiDest;
   float4 fDest;
 
-  r0.x = GlobalTexture_depth_sampler.Sample(GlobalSampler_depth_sampler_s, v1.xy).x;
-  r0.x = r0.x * depth_constants.y + depth_constants.x;
-  r0.x = 1 / r0.x;
-  r0.x = -depth_constants.z + r0.x;
-  r0.x = -depth_constants2.x + abs(r0.x);
-  r0.x = max(0, r0.x);
-  r0.x = depth_constants.w * r0.x;
-  r0.x = min(depth_constants2.y, r0.x);
-  r0.x = r0.x * r0.x;
-  r0.yzw = GlobalTexture_blur_sampler.Sample(GlobalSampler_blur_sampler_s, v1.xy).xyz;
-    r0.yzw = max(r0.yzw, 0);
-  r1.xyz = GlobalTexture_surface_sampler.Sample(GlobalSampler_surface_sampler_s, v1.xy).xyz;
-  r0.yzw = -r1.xyz * g_exposure.yyy + r0.yzw;
-  r1.xyz = g_exposure.yyy * r1.xyz;
-  r0.xyz = r0.xxx * r0.yzw + r1.xyz;
+  r0.xyz = GlobalTexture_surface_sampler.Sample(GlobalSampler_surface_sampler_s, v1.xy).xyz;
+  r0.xyz = g_exposure.yyy * r0.xyz;
 
-  // r1.xyz = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy).xyz;
+  // r1.xyzw = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy).xyzw;
   {
-    float3 C = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy).xyz;
+    float4 C = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy);
     float3 N = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy, int2(0,-1)).xyz;
     float3 S = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy, int2(0,1)).xyz;
     float3 W = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy, int2(-1,0)).xyz;
@@ -80,9 +57,23 @@ void main(
     x += E.xyz;
     x /= 5;
     r1.xyz = x * GS.Bloom;
-    r1.xyz = max(0, r1.xyz);
+    r1.w = C.w;
+    r1 = max(0, r1);
   }
-  r0.xyz = r1.xyz * float3(8,8,8) + r0.xyz;
+  r2.xyzw = float4(8,8,8,8) * r1.xyzw;
+  r0.xyz = r0.xyz * r2.www + r2.xyz;
+  
+  r3.xy = -player_window_constants.xy + v1.xy;
+  r3.xy = r3.xy / player_window_constants.zw;
+  r0.w = GlobalTexture_blur_grade_sampler.Sample(GlobalSampler_blur_grade_sampler_s, r3.xy).z;
+  r2.w = cmp(0.00999999978 < r0.w);
+  if (r2.w != 0) {
+    r1.w = r1.w * 8 + 1;
+    r2.xyz = r2.xyz * r1.www + -r0.xyz;
+    r2.xyz = r0.www * r2.xyz + r0.xyz;
+    r1.xyz = r1.xyz * float3(8,8,8) + -r2.xyz;
+    r0.xyz = r0.www * r1.xyz + r2.xyz;
+  }
 
   // Gamma Encode
   r0.xyz = max(r0.xyz, 0);
@@ -92,6 +83,7 @@ void main(
   r1.x = /* saturate */(dot(r0.xyzw, color_matrix._m00_m10_m20_m30));
   r1.y = /* saturate */(dot(r0.xyzw, color_matrix._m01_m11_m21_m31));
   r1.z = /* saturate */(dot(r0.xyzw, color_matrix._m02_m12_m22_m32));
+  r1.xyz = max(r1.xyz, 0);
 
   // HDR Tonemap
   r1.xyz = sRGB_Decode(r1.xyz);
@@ -105,7 +97,7 @@ void main(
 
   // o0.w = dot(r0.xyz, float3(0.298999995,0.587000012,0.114));
   o0.w = GetLuminance(r0.xyz, CS_BT709);
-
+  
   o0.xyz = r0.xyz;
   return;
 }

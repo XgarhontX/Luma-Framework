@@ -1,18 +1,17 @@
 // ---- Created with 3Dmigoto v1.3.16 on Wed Aug 05 17:40:06 2026
 
-cbuffer HDAOPS : register(b0)
-{
-  float4 pixel_size : packoffset(c0);
-  float4 scale : packoffset(c1);
-  float4 corner_params : packoffset(c2);
-  float4 bounds_params : packoffset(c3);
-  float4 curve_params : packoffset(c4);
-  float4 fade_params : packoffset(c5);
-  float4 channel_scale : packoffset(c6);
-  float4 channel_offset : packoffset(c7);
-}
+// cbuffer HDAOPS : register(b0)
+// {
+//   float4 pixel_size : packoffset(c0);
+//   float4 scale : packoffset(c1);
+//   float4 corner_params : packoffset(c2);
+//   float4 bounds_params : packoffset(c3);
+//   float4 curve_params : packoffset(c4);
+//   float4 fade_params : packoffset(c5);
+//   float4 channel_scale : packoffset(c6);
+//   float4 channel_offset : packoffset(c7);
+// }
 
-// In XeGTAO.hlsl
 // cbuffer SSAOLocalDepthPS : register(b1)
 // {
 //   float4 local_depth_constants : packoffset(c0);
@@ -75,7 +74,7 @@ SamplerState GlobalSampler_depth_low_sampler_s : register(s1);
 // SamplerState GlobalTexture_normal_sampler_s : register(s2); // unbound from prev
 Texture2D<float4> GlobalTexture_depth_sampler : register(t0);
 Texture2D<float4> GlobalTexture_depth_low_sampler : register(t1);
-Texture2D<float4> GlobalTexture_normal_sampler : register(t2); // unbound from prev
+Texture2D<float4> GlobalTexture_normal_sampler : register(t2); // unbound from prev (now guarenteed by Luma)
 
 
 // 3Dmigoto declarations
@@ -102,7 +101,7 @@ void main(
   c.ViewportSize = LumaSettings.SwapchainSize;
   c.ViewportPixelSize = LumaSettings.SwapchainInvSize;
 
-  // // NDC to View (current placeholder test)
+  // // NDC to View (placeholder test)
   // float tanHalfFOV = tan(50 * XE_GTAO_PI_OVER_360);
   // float aspect = c.ViewportSize.x / c.ViewportSize.y;
   // c.NDCToViewMul = float2(2.0, -2.0) * float2(aspect * tanHalfFOV, tanHalfFOV);
@@ -110,7 +109,7 @@ void main(
   // c.NDCToViewMul_x_PixelSize = c.NDCToViewMul * c.ViewportPixelSize;
 
   // NDC to View (from constructed Projection mat)
-  float4x4 View_Projection_t = transpose(View_Projection);
+  float4x4 View_Projection_t = transpose(View_Projection); //bruh https://github.com/halohlsl/HaloReach-Shader-Source/blob/5928a1f385a167e5faba9d66dcd1f966b887e331/source/omaha/rasterizer/hlsl/hlsl_constant_global_list.fx#L22
   float4x4 Projection = mul(View_Projection_t, Camera_To_World);
   float tanHalfFovX = 1.0 / abs(Projection[0][0]);
   float tanHalfFovY = 1.0 / abs(Projection[1][1]);

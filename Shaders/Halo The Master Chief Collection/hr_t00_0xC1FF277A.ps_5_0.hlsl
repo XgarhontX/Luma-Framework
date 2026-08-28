@@ -65,7 +65,6 @@ void main(
   r1.xyz = float3(8,8,8) * r1.xyz;
 
   r2.xyz = GlobalTexture_surface_sampler.Sample(GlobalSampler_surface_sampler_s, v1.xy).xyz;
-    r2.xyz = max(r2.xyz, 0);
   r1.xyz = r2.xyz * g_exposure.yyy + r1.xyz;
   
   // Gamma Encode

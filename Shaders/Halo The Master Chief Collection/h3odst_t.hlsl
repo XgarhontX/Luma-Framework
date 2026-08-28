@@ -46,7 +46,8 @@ void SetColor(float3 x) {
 
 float ContrastPower(float3 x, float y, float c) {
   if (!HDR_ENABLED) return pow(y, c);
-  return lerp(pow(y, c), y, !HDR_ENABLED ? 0 : smoothstep(0, 0.87, GetLuminance(x) * min(1, c))) * max(1, InverseLerp(0.25, 0.01, c)); //when c < 1, flashbang fx
+  return lerp(pow(y, c), y, smoothstep(0, 0.87, GetLuminance(x) * min(1, c))) * max(1, InverseLerp(0.1, 0.05, c)); //when c < 1, flashbang fx
+
 }
 
 float Rolloff_Root(float4 c) {

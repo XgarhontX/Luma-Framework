@@ -88,8 +88,11 @@ void Rolloff() {
   ext = LinearPiecewiseExtension(sdr, ext, 0.13, 0.200400533755, 0.0295591208569);
 
 #if 1
+  // extYOrig
+  float extYOrig = GetLuminance(ext);
+
   // in B709
-  float3 hdr709 = Neupow(ext, tmi.p * 0.8, GS.WhiteClip); 
+  float3 hdr709 = Neupow(ext, HDR_STOPS * 2, GS.WhiteClip); 
 
   // in BT2020 to generate more blowout naturally
   ext = BT709_To_BT2020(ext); 
@@ -101,16 +104,17 @@ void Rolloff() {
   sdr *= safeDivision(extY / GetLuminance(sdr), 1.0);
 
   // blend HDR and SDR (aka Hue Correction and Additional Blowout)
-  sdr = UCS_Encode(sdr);
-  ext = UCS_Encode(ext);
-  hdr709 = UCS_Encode(hdr709);
-  ext = RestoreHueAndChrominanceUcs(ext, hdr709, 0.33, 0.67, 0);
-  ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.8, 0.826, 0.9);
-  ext = UCS_Decode(ext);
+  sdr = /* UCS_Encode */JzAzBz::rgbToJzazbz(sdr);
+  ext = /* UCS_Encode */JzAzBz::rgbToJzazbz(ext);
+  hdr709 = /* UCS_Encode */JzAzBz::rgbToJzazbz(hdr709);
+  ext = RestoreHueAndChrominanceUcs(ext, hdr709, 0.702, 0.822, 0);
+  ext = RestoreHueAndChrominanceUcs(ext, sdr, 0.701, 0.802, 0.926);
+  ext = PragMap2::hueShiftBezoldBrucke(ext, extYOrig * 0.717, 0.018, false);
+  ext = /* UCS_Decode */JzAzBz::jzazbzToRgb(ext);
   ext = max(ext, 0); //clean
 
   // highlights sat boost makeup
-  ext = CorrectPerChannelTonemapHiglightsDesaturationCurved(ext, tmi.p, 2., 0.867, CS_BT709);
+  ext = CorrectPerChannelTonemapHiglightsDesaturationCurved(ext, tmi.p, 1.87, 0.826, CS_BT709);
   ext = max(ext, 0); // clean
 #else 
   ext = PragMap2::pragmap2_BT709(ext, tmi.p, GamePaperWhiteNits, true, 0.75, 1, 0.5);

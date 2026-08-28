@@ -310,7 +310,7 @@ SPIRV_Cross_Output main(SPIRV_Cross_Input stage_input)
         x = max(x, 0);
         x = RenderIntermediatePass_Decode(x);
 
-        x = NeupowHQ(x, HDR_PEAK, 4 * GS.WhiteClip);
+        x = NeupowHQ(x, HDR_PEAK, 5.5 * GS.WhiteClip);
 
         x *= HDR_INTSCALING;
         x = RenderIntermediatePass_Encode(x);
