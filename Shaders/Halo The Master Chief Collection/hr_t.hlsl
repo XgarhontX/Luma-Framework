@@ -6,6 +6,7 @@
 #include "../Includes/ColorGradingLUT.hlsl"
 
 #define HALO3_TONEMAP 0
+#define BLOOM_MAKEUP 1.36
 
 struct ToneMapInfo {
   float3 x;   // HDR output
@@ -18,6 +19,19 @@ struct TexTuple {
   Texture3D<float4> t;
   SamplerState s;
 };
+
+float2 FilmGrainUV(float2 uv) {
+#if HALOR_FILMGRAIN_SCALE == 0
+  //noop
+#elif HALOR_FILMGRAIN_SCALE == 1
+  uv *= (720.f / LumaSettings.SwapchainSize.x);
+#elif HALOR_FILMGRAIN_SCALE == 2
+  uv *= (1080.f / LumaSettings.SwapchainSize.x);
+#elif HALOR_FILMGRAIN_SCALE == 3
+  uv *= (1440.f / LumaSettings.SwapchainSize.x);
+#endif
+  return uv;
+}
 
 float3 Rolloff(float3 hdr) {
   // SDR early out

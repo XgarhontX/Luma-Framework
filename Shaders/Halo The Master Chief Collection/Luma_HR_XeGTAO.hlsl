@@ -12,8 +12,24 @@
 // Defines //
 /////////////
 
-#define SLICE_COUNT 3.0
-#define STEPS_PER_SLICE 3.0
+#if HALOR_AO == 0
+    LET_THIS_BREAK;
+#elif HALOR_AO == 1
+    #define SLICE_COUNT 3.0
+    #define STEPS_PER_SLICE 3.0
+#elif HALOR_AO == 2
+    #define SLICE_COUNT 4.0
+    #define STEPS_PER_SLICE 3.0
+#elif HALOR_AO == 3
+    #define SLICE_COUNT 8.0
+    #define STEPS_PER_SLICE 3.0
+#elif HALOR_AO == 4
+    #define SLICE_COUNT 16.0
+    #define STEPS_PER_SLICE 3.0
+#elif HALOR_AO == 5
+    #define SLICE_COUNT 24.0
+    #define STEPS_PER_SLICE 3.0
+#endif
 
 #define EFFECT_RADIUS 1 // Default 0.5
 #define RADIUS_MULTIPLIER 0.4 // Default 1.457
@@ -21,7 +37,7 @@
 #define EFFECT_RADIUS_DISTANCE_SCALE 0.0558
 #define SAMPLE_DISTRIBUTION_POWER 1.0 // Default 2.0
 #define THIN_OCCLUDER_COMPENSATION 0.0 // Default 0.0 
-#define FINAL_VALUE_POWER 3.5 // Default 2.2
+#define FINAL_VALUE_POWER 3.5 * GS.AmbientOcclusion // Default 2.2
 #define DEPTH_MIP_SAMPLING_OFFSET 2 // Default 3.3
 #define DENOISE_BLUR_BETA 1.2 // Default 1.2
 

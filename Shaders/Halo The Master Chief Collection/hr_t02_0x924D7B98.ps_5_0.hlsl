@@ -56,7 +56,7 @@ void main(
     x += W.xyz;
     x += E.xyz;
     x /= 5;
-    r1.xyz = x * GS.Bloom;
+    r1.xyz = x * (GS.Bloom * BLOOM_MAKEUP);
     r1.w = C.w;
     r1 = max(0, r1);
   }
@@ -90,8 +90,9 @@ void main(
   r1.xyz = Rolloff(r1.xyz);
   r1.xyz = sRGB_Encode(r1.xyz);
 
-  r0.x = GlobalTexture_noise_sampler.Sample(GlobalSampler_noise_sampler_s, v2.zw).z;
+  r0.x = GlobalTexture_noise_sampler.Sample(GlobalSampler_noise_sampler_s, FilmGrainUV(v2.zw)).z;
   r0.xy = r0.xx * noise_params.xy + noise_params.zw;
+  r0.y *= GS.FilmGrain;
   r0.xyz = r1.xyz * r0.xxx + r0.yyy;
   r0.xyz = max(r0.xyz, 0);
 

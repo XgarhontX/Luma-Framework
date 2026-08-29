@@ -77,6 +77,7 @@ cbuffer cb0_buf : register(b0)
 
 SamplerState s4 : register(s4);
 Texture2D<float4> t0 : register(t0);
+Texture2D<float4> bloom : register(t1);
 
 static float2 TEXCOORD;
 static float4 TEXCOORD1;
@@ -309,6 +310,15 @@ SPIRV_Cross_Output main(SPIRV_Cross_Input stage_input)
         float3 x = SV_Target.xyz;
         x = max(x, 0);
         x = RenderIntermediatePass_Decode(x);
+
+        #if HALO1_BLOOM > 0
+            float3 b = sqrt(bloom.SampleLevel(s4, TEXCOORD.xy, 0).xyz) * (0.333 * GS.Bloom);
+        #endif
+        #if HALO1_BLOOM == 1
+            x += b;
+        #elif HALO1_BLOOM == 2
+            x = b;
+        #endif
 
         x = NeupowHQ(x, HDR_PEAK, 5.5 * GS.WhiteClip);
 
