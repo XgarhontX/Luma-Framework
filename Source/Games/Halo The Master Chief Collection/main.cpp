@@ -255,8 +255,7 @@ namespace
       constexpr const char* Luma_H2A_XeGTAO_DenoisePass2 = "XeGTAO H2A Denoise Pass 2 CS";
 
       constexpr const char* Luma_H3_XeGTAO = "Luma_H3_XeGTAO"; //file name
-
-
+      
       constexpr size_t DEPTH_MIP_LEVELS = 5;
       constexpr UINT NUMTHREADS_X = 8;
       constexpr UINT NUMTHREADS_Y = 8;
@@ -997,13 +996,13 @@ namespace
                ignore_upgraded_samplers = false;
                break;
             case Halo3:
+               // 0x01262530: color diffuse copy (SRV0 is used by regular opaque. RTV0 is used by small and cutout stuff (vegetation))
                auto_texture_format_upgrade_shader_hashes[0xEEB815BC] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00 
                auto_texture_format_upgrade_shader_hashes[0x7D41B2E6] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
                WarmupDirectAndIndirectHandler::Start();
                break;
             case Halo3ODST:
-               // 0x01262530: color diffuse copy (SRV0 is used by regular opaque. RTV0 is used by small and cutout stuff (vegetation))
                auto_texture_format_upgrade_shader_hashes[0xADADBE3D] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t00
                auto_texture_format_upgrade_shader_hashes[0x2193CAB5] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //t01 
                auto_texture_format_upgrade_shader_hashes[0x9EC6DFC8] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
@@ -1071,6 +1070,9 @@ namespace
    // allow_pause_screen
    bool allow_pause_screen = true;
    bool allow_pause_screen_skiptoken = false;
+
+   // seen_readme
+   bool seen_readme = false;
    
    ///////////////////////////////////////////////
 
@@ -1096,8 +1098,8 @@ public:
    void OnInit(bool async) override
    {
       // cb
-      luma_settings_cbuffer_index = 9;  //though conflict, no problem
-      luma_data_cbuffer_index     = 10; //though conflict, no problem
+      luma_settings_cbuffer_index = 9;  //though conflict H2A, no problem
+      luma_data_cbuffer_index     = 10; //though conflict H2A, no problem
 
       // cb init
       default_luma_global_game_settings.Bloom = cb_luma_global_settings.GameSettings.Bloom = 1.f;
@@ -1250,6 +1252,14 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
+      // Halo4: FXAA
+      if (!device_data.has_drawn_main_post_processing && ps == 0xCCC24837)
+      {
+         device_data.has_drawn_main_post_processing = true;
+         SubGameHandler::Enqueue(Halo4);
+         return DrawOrDispatchOverrideType::None;
+      }
+
       ////////////////////////////////////////////////////////////
 
       // Pause Screen
@@ -1359,6 +1369,12 @@ public:
       // XeGTAOHandler & BloomHandler
       XeGTAOHandler::OnLoadConfigs();
       BloomHandler::OnLoadConfigs();
+
+      //try force 400 nits
+      if (!reshade::get_config_value(nullptr, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite)) cb_luma_global_settings.ScenePeakWhite = 400.f;
+
+      // seen_readme
+      reshade::get_config_value(nullptr, NAME, "seen_readme", seen_readme);
    }
    
    void PrintImGuiAbout() override
@@ -1373,22 +1389,48 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      // GameDeviceDataHaloTMCC* game_device_data = static_cast<GameDeviceDataHaloTMCC*>(device_data.game);
-
-      // SWAPCHAIN_TEST_PEAK
-      ShaderDefines::UIToggleCheckmark(ShaderDefines::SWAPCHAIN_TEST_PEAK, "Display Peak Test Pattern", "3 rectangles within a bigger one.\n- Left: Invisible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak).\nSo whatever you do, don't let Middle disappear!");
-
-      ImGui::Separator();
-      
       auto DrawColoredSubHeader = [](const char* label, const ImVec4& color = ImColor(128, 255, 255, 255))
       {
          ImGui::PushStyleColor(ImGuiCol_Text, color);
          ImGui::Text("[%s]", label);
          ImGui::PopStyleColor();
       };
+      
+      // GameDeviceDataHaloTMCC* game_device_data = static_cast<GameDeviceDataHaloTMCC*>(device_data.game);
 
+      // SWAPCHAIN_TEST_PEAK
+      ShaderDefines::UIToggleCheckmark(ShaderDefines::SWAPCHAIN_TEST_PEAK, std::format("Display Test Peak (+{:.2f} HDR Stops)", std::log2f(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite)).c_str(),
+         "3 rectangles within a bigger one.\n- Left: Invisible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak).\nSo whatever you do, don't let Middle disappear/clip!");
+
+      ImGui::Separator();
+
+      if (!seen_readme)
+      {
+         ImGui::PushID("###README");
+         
+         DrawColoredSubHeader("README: About HDR Stops");
+         ImGui::PushStyleColor(ImGuiCol_Text, GetPulsingColor(ImColor(128, 255, 128, 255), 0.05));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This mod is designed for +1 HDR Stops. (e.g. 400 Peak / 200 Paper, 600 Peak / 300 Paper, etc.).");
+         ImGui::PopStyleColor();
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For Halo 3/ODST & Reach: White clip is faithful to original, and sparse extreme highlights are prevented from ruining luminance composition.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For Halo 2 Anniversary: Sunny outdoors are designed to be compressed to blow out, becoming awkwardly forced/blinding otherwise.");
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("TLDR, don't validate: \"Ewww! The pipeline is designed for SDR, and HDR is just a trash blinding contrast filter!\"");
+         ImGui::PopStyleColor();
+
+         if (ImGui::Button("Dismiss"))
+         {
+            seen_readme = true;
+            reshade::set_config_value(nullptr, NAME, "seen_readme", seen_readme);
+         }
+
+         ImGui::Separator();
+         ImGui::PopID();
+      }
+      
       // Anti-Aliasing
-      if (ImGui::CollapsingHeader("Anti-Aliasing"))
+      static const bool seen_readme_init = seen_readme;
+      if (ImGui::CollapsingHeader("Anti-Aliasing", !seen_readme_init ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None))
       {
          DrawColoredSubHeader("Turn it on!");
          ImGui::PushStyleColor(ImGuiCol_Text, GetPulsingColor(ImColor(255, 255, 128, 255), 0.05));
@@ -1401,8 +1443,9 @@ public:
       if (ImGui::CollapsingHeader("Gamma"))
       {
          DrawColoredSubHeader("In-Game Gamma Sliders");
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("If allowed, any value besides 6.0 will shift Peak (just like SDR)!");
-         // ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("\"Reset Gamma Ramp\" above can fully neutralize the game's use of hardware gamma ramp.");
+         ImGui::PopStyleColor();
 
          if (ImGui::Checkbox("Allow In-Game Gamma Sliders", &allow_gamma_slider))
             reshade::set_config_value(nullptr, NAME, "allow_gamma_slider", allow_gamma_slider);
@@ -1440,7 +1483,7 @@ public:
          // XBOX360_CURVE
          DrawColoredSubHeader("Xbox 360 Gamma Curve");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Emulate the Xbox 360's more aggressive gamma curve.");
-         ShaderDefines::UIDropDown(ShaderDefines::XBOX360_CURVE, "Perceptual Emulation", { "Off", "If Applicable" }, "This is emulation as the actual curve is a wonky jagged piecewise curve for performance reasons.\nThis is also perceptual, keeping dark colors from being overly saturated).");
+         ShaderDefines::UIDropDown(ShaderDefines::XBOX360_CURVE, "Perceptual Emulation", { "Off", "If Applicable" }, "This is emulation as the actual curve is a wonky jagged piecewise curve for performance reasons.\nThis is also perceptual, keeping dark colors from being overly saturated & hue shifted).");
       }
       ShaderDefines::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0); // Forced
 
@@ -1615,14 +1658,27 @@ public:
          ImGui::NewLine();
          
          // SubGameUserSettingsHandler
-         DrawColoredSubHeader("Settings Override Upon Switch");
+         DrawColoredSubHeader("Settings Override On Change");
          SubGameUserSettingsHandler::OnImGui(SubGameHandler::curr);
       }
+
+      ImGui::Separator();
 
       // Reset button
       if (ImGui::Button("Panic Reset")) SubGameHandler::Reinit();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("If anything is wonky (black screen, AO not same res, SDR clamping) click this!\n(Full reset Sub Game detection, clearing all HDR upgraded resources.)");
+
+      // Unhide README
+      if (seen_readme)
+      {
+         ImGui::SameLine();
+         if (ImGui::Button("Show README"))
+         {
+            seen_readme = false;
+            reshade::set_config_value(nullptr, NAME, "seen_readme", seen_readme);
+         }
+      }
 
       if (DEVELOPMENT) ImGui::Separator();
    }
@@ -1640,7 +1696,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          swapchain_format_upgrade_type  = TextureFormatUpgradesType::AllowedEnabled;
          swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
 
+         // swapchain compatibility/safety
          prevent_fullscreen_state = false;
+         force_borderless = false;
 
          // resources
          texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled; //see SubGameHandler::SetSubGame()

@@ -2,7 +2,6 @@
 // #define UCS_MODE 1
 #include "./Includes/Common.hlsl"
 #include "./Includes/PragMap.hlsl"
-#include "./Includes/PragMap2.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
 
 #define HALO3_TONEMAP 0

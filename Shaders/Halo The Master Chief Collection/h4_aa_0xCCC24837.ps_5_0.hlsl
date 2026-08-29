@@ -82,7 +82,6 @@ void main(
 #endif
 
     o0.xyz = max(o0.xyz, 0);
-    o0.xyz = sRGB_Encode(o0.xyz);
     if (HDR_ENABLED) {
         o0.xyz = RenderIntermediatePass_Decode(o0.xyz);
     }
@@ -95,7 +94,6 @@ void main(
         o0.xyz *= HDR_INTSCALING;
         o0.xyz = RenderIntermediatePass_Encode(o0.xyz);
     }
-    o0.xyz = sRGB_Decode(o0.xyz);
 
   return;
 }

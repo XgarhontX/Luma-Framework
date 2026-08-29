@@ -1,6 +1,8 @@
 #define LUT_3D 1
 #include "./Includes/Common.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
+#include "./Includes/PragMap.hlsl"
+// #include "./Includes/PragMap2.hlsl"
 
 struct ToneMapInfo {
   float3 x;      // HDR output
@@ -38,12 +40,16 @@ void Rolloff(float4 c[5]) {
   }
 
   float3 x = tmi.x; // TODO: extension needs 100% playthrough test
+  float y0 = GetLuminance(x);
   float3 num = (x * (x * c[0].xyz + c[1].xyz));
   float3 den = ((((x * x * c[2].xyz) / tmi.p) + x * c[3].xyz) + c[4].xyz);
   x = safeDivision(num, den, 0);
+  x = max(x, 0);
+
+  if (HDR_ENABLED) x = PragMap::hueShiftBezoldBrucke(x, y0 * 0.717, 0.018);
 
   x = max(x, 0);
-  if (HDR_ENABLED) x = min(x, tmi.p); //white clip
+  x = min(x, tmi.p);
   tmi.x = x;
 }
 
