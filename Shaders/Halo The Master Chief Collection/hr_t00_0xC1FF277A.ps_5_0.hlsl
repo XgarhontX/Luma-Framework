@@ -43,7 +43,7 @@ void main(
   // Noise calculate
   r0.x = GlobalTexture_noise_sampler.Sample(GlobalSampler_noise_sampler_s, FilmGrainUV(v2.zw)).z;
   r0.xy = r0.xx * noise_params.xy + noise_params.zw;
-  r0.y *= GS.FilmGrain;
+  r0.y *= 0.5 * GS.FilmGrain;
 
   // r1.xyz = GlobalTexture_bloom_sampler.Sample(GlobalSampler_bloom_sampler_s, v2.xy).xyz * GS.Bloom;
   {

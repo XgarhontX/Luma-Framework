@@ -50,11 +50,12 @@ float3 SampleBloom(float2 uv, float4 r0) {
   if (r0.x != 0) {
     r3.xy = uv * ps_global_viewport_res_multipliers.xy + r0.yz;
     r3.xy = max(ps_global_viewport_bounds_uv.xy, r3.xy);
-    r2.xy = min(ps_global_viewport_bounds_uv.zw, r3.xy);
+    uv = min(ps_global_viewport_bounds_uv.zw, r3.xy);
   }
-  r3.xyz = LocalTexture_dark_source_sampler.Sample(LocalSampler_dark_source_sampler_s, r2.xy).xyz;
+  r3.xyz = LocalTexture_dark_source_sampler.Sample(LocalSampler_dark_source_sampler_s, uv).xyz;
   return r3.xyz;
 }
+
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
@@ -130,61 +131,47 @@ void main(
   r0.x = r2.z ? r0.x : r0.y;
   r1.z = r0.x * r0.x;
 
-//   float o = 1;
+//   const float o = 2;
 //   r1.xyz = 0;
 // 
 //   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, 0) + v1.xy, r0);
-//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o, 0) + v1.xy, r0);
-//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(-o, 0) + v1.xy, r0);
-//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o) + v1.xy, r0);
-//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, -o) + v1.xy, r0);
-//   r1.xyz *= 4 / 5.f;
+// 
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o * -3) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o * -2) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o * -1) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o *  1) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o *  2) + v1.xy, r0);
+//   r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o *  3) + v1.xy, r0);
+// 
+//   // r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -3, 0) + v1.xy, r0);
+//   // r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -2, 0) + v1.xy, r0);
+//   // r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -1, 0) + v1.xy, r0);
+//   // r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -1, 0) + v1.xy, r0);
+//   // r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o *  2, 0) + v1.xy, r0);
+//   // r1.xyz += SampleBloom(ps_postprocess_pixel_size.xy * float2(o *  3, 0) + v1.xy, r0);
+//   
+//   r1.xyz *= 4.f / (1 + 6 /* + 6 */);
+//   r1.xyz *= r1.xyz;
+// 
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, 0) + v1.xy, r0));
+// // 
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o * -3) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o * -2) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o * -1) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o *  1) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o *  2) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o *  3) + v1.xy, r0));
+// // 
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -3, 0) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -2, 0) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -1, 0) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o * -1, 0) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o *  2, 0) + v1.xy, r0));
+// //   r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o *  3, 0) + v1.xy, r0));
+// 
+//   r1.xyz *= 4.f;
 //   r1.xyz *= r1.xyz;
 
-  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, 0) + v1.xy, r0));
-  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(o, 0) + v1.xy, r0));
-  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(-o, 0) + v1.xy, r0));
-  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, o) + v1.xy, r0));
-  // r1.xyz = max(r1.xyz, SampleBloom(ps_postprocess_pixel_size.xy * float2(0, -o) + v1.xy, r0));
-  // r1.xyz *= 4;
-  // r1.xyz *= r1.xyz;
-
-  // r1.xyz = 0;
-  // int2 pixCoord = v0.xy * 4;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,0), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,1), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,2), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,3), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,0), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,1), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,2), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,3), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,0), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,1), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,2), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,3), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,0), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,1), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,2), 0)).xyz;
-  // r1.xyz += LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,3), 0)).xyz;
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,0), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,1), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,2), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(0,3), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,0), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,1), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,2), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(1,3), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,0), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,1), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,2), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(2,3), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,0), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,1), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,2), 0)).xyz);
-  // r1.xyz = max(r1.xyz, LocalTexture_dark_source_sampler.Load(int3(pixCoord + int2(3,3), 0)).xyz);
-  // r1.xyz *= 4;
-  // r1.xyz *= r1.xyz;
 
   r0.xyz = g_exposure.yyy * r1.xyz;
   r0.w = dot(r0.xyz, intensity_vector.xyz);
@@ -192,13 +179,15 @@ void main(
   r1.y = -ps_postprocess_scale.x + r0.w;
   r1.x = max(r1.x, r1.y);
   r1.x = r1.x / r0.w;
-  o0.xyz = r1.xxx * r0.xyz;
+  o0.xyz = r1.xxx * r0.xyz; 
+    o0.xyz = max(0, o0.xyz);
   o0.w = r0.w;
 
   // if (IsGame_Halo3ODST()) {
     o0.xyz = Neutwo(o0.xyz, 32);
     o0.w = Neutwo(o0.w, 32); //luma for auto exposure
   // }
+  // r1.xyz = sqrt(r1.xyz);
 
   return;
 }
