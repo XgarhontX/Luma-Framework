@@ -119,6 +119,7 @@ cbuffer Scene : register(b0)
   float4 g_light_face_diff : packoffset(c30);
   float4 g_chara_color0 : packoffset(c31);
   float4 g_chara_color1 : packoffset(c32);
+    // if w == 1 full tint? (Systematic Love)
   float4 g_chara_f_dir : packoffset(c33);
   float4 g_chara_f_ambient : packoffset(c34);
   float4 g_chara_f_diffuse : packoffset(c35);
@@ -378,7 +379,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord,
 
     // skip sky
     [branch]
-    if (centerZ > DEPTH_LINEAR_MAX)
+    if (centerZ > DEPTH_LINEAR_MAX || (g_chara_color1.w >= 0.9999 /* && g_chara_color0.w <= 0.0001 */))
     {
         outputNormal[pixCoord] = float4(centerNormal, 1.0);
         return;
@@ -659,7 +660,7 @@ void XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, Texture2D sourceViewsp
 
     // skip sky
     [branch]
-    if (viewspaceZ > DEPTH_LINEAR_MAX) 
+    if (viewspaceZ > DEPTH_LINEAR_MAX || (g_chara_color1.w >= 0.9999 /* && g_chara_color0.w <= 0.0001 */)) 
     {
         outWorkingAOTermAndEdges[pixCoord] = float2(1, 1); 
         return;
