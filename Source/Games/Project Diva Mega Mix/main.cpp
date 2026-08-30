@@ -1516,7 +1516,6 @@ public:
       
       // Def
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         
          {"GAMMA_CORRECTION_RANGE_TYPE", '0', true, !DEVELOPMENT, "0 - Full range.\n1 - 0-1 only.", 1},
          {"SWAPCHAIN_SKIPALL", '0', true, false, "Skip majority of the swapchain proxy shader (DisplayComposite.hlsl).\nWill not decode gamma if shaders are disabled/unloaded.", 1},
          // {"SWAPCHAIN_CLAMP_PEAK", '0', true, false, "Clamp the absolute final color.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).", 2},
@@ -1950,7 +1949,7 @@ public:
       reshade::api::effect_runtime* runtime = nullptr;
 
       //try force 400 nits
-      if (!reshade::get_config_value(runtime, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite)) cb_luma_global_settings.ScenePeakWhite = 1000.f;
+      if (!reshade::get_config_value(runtime, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite)) cb_luma_global_settings.ScenePeakWhite = 400.f;
       
       // TonemapHDRStops
       cb_luma_global_settings.GameSettings.TonemapHDRStops = log2(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite);
@@ -2053,7 +2052,7 @@ public:
 
       //SWAPCHAIN_TEST_USER_PEAK
       std::string test_peak_label = std::format("Test Display Peak (HDR Stops: +{:.2f})", cb_luma_global_settings.GameSettings.TonemapHDRStops);
-      if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles.\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nWhatever you do, don't let Middle fully disappear!");
+      if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles.\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nSo whatever you do, don't let Middle fully disappear/clip!");
 
       if (!GlobalsMegaMix::UIIsReadmeDone)
       {
@@ -2065,8 +2064,11 @@ public:
          ImGui::NewLine();
          
          DrawColoredSubHeader("HDR README");
+
+         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(1.f, 1.f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This mod is most consistent at +1 stops (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.).\nFor many PVs, going higher looks exceptional!\nBut for many others, intentional blowout & white clip will be lost.");
+         ImGui::PopStyleColor();
          
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This mod is most consistent at +1 stops (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.).\nFor many PVs, going higher looks exceptional!\nBut for many others, intentional blowout dynamics & white clip will be lost.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Unfortunately, UI elems of PV (e.g. lens flare) can be after HDR tonemap, affected by UI Brightness slider.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon shading (Non-Physical Rendering) is clamped to SDR unless changed otherwise.");
 
@@ -2260,7 +2262,7 @@ public:
          ImGui::NewLine();
          DrawColoredSubHeader("Parameters");
          
-         if (ImGui::SliderFloat("Final Power", &cb_luma_global_settings.GameSettings.XeGTAOFinalPower, 0.f, 2.f))
+         if (ImGui::SliderFloat("Final Power", &cb_luma_global_settings.GameSettings.XeGTAOFinalPower, 0.f, 3.f))
             reshade::set_config_value(runtime, NAME, "XeGTAOFinalPower", cb_luma_global_settings.GameSettings.XeGTAOFinalPower);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Final power of the AO effect, after sample accumulation.");
          DrawResetButton(cb_luma_global_settings.GameSettings.XeGTAOFinalPower, default_luma_global_game_settings.XeGTAOFinalPower, "XeGTAOFinalPower", runtime);
@@ -2666,7 +2668,10 @@ public:
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("I found unclamping purely beneficial, allowing for fast UI navigation, and decreasing load times (warming phase)!");
       
             if (ImGui::SliderInt("High FPS: Limit", &HighFPS::limit, 0, 1000))
+            {
+               if (HighFPS::limit > 0 && HighFPS::limit < 15) HighFPS::limit = 15; //minimum 15 FPS
                reshade::set_config_value(runtime, NAME, "HighFPS_limit", HighFPS::limit);
+            }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The new limit.\nSet 0 for none.");
          }
          if (is_disabled) ImGui::EndDisabled();
