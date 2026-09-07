@@ -302,21 +302,23 @@ float3 DrawRect(float2 uv, float4 rect, float3 color, float3 rectColor)
 #if CUSTOM_SDR == 1
   #ifdef CUSTOM_GAMMACORRECT22
     #undef CUSTOM_GAMMACORRECT22
-    #define CUSTOM_GAMMACORRECT22 0
   #endif
+  #define CUSTOM_GAMMACORRECT22 0
+
   #ifdef CUSTOM_FAKEBT2020
     #undef CUSTOM_FAKEBT2020
-    #define CUSTOM_FAKEBT2020 0
   #endif
+  #define CUSTOM_FAKEBT2020 0
+
   #ifdef CUSTOM_COLORGRADE_SATORDER
     #undef CUSTOM_COLORGRADE_SATORDER
-    #define CUSTOM_COLORGRADE_SATORDER 0
   #endif
+  #define CUSTOM_COLORGRADE_SATORDER 0
 #endif
 
 #ifdef POST_PROCESS_SPACE_TYPE
-#undef POST_PROCESS_SPACE_TYPE
-#define POST_PROCESS_SPACE_TYPE 1
+	#undef POST_PROCESS_SPACE_TYPE
+	#define POST_PROCESS_SPACE_TYPE 1
 #endif
 float3 BRUHHHAll(float3 x, float2 v1) 
 {
@@ -386,7 +388,7 @@ float3 BRUHHHAll(float3 x, float2 v1)
       x.yz *= GS.CGSaturation;
       x = UCSFrom(x, CS_BT2020);
     #else
-      x = BT709_To_BT2020(x);
+      // x = BT709_To_BT2020(x);
     #endif
   #elif CUSTOM_GAMMACORRECT22 == 1 && CUSTOM_FAKEBT2020 == 0
     x *= gcScale;
@@ -480,14 +482,12 @@ float3 BRUHHHAll(float3 x, float2 v1)
     #error Invalid CUSTOM_GAMMACORRECT22 & CUSTOM_FAKEBT2020 configuration
   #endif
 
-  // x = UCSFrom(xBack, CS_BT2020);
-
-  //clamp BT2020
+  //clamp
   x = max(0, x);
 
   // to DisplayComposition
   x *= HDR_INTSCALING;
-	#if !(CUSTOM_GAMMA_CORRECTION_MODE == 0 && CUSTOM_COLORGRADE_SATORDER != 2)
+	#if !(CUSTOM_GAMMA_CORRECTION_MODE == 0 && CUSTOM_FAKEBT2020 == 0 && CUSTOM_COLORGRADE_SATORDER != 2)
   	x = BT2020_To_BT709(x);
 	#endif
 
