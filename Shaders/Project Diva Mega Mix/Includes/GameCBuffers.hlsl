@@ -102,6 +102,8 @@ namespace CB
       float ProgressBarRatio;
 
       float XeGTAOFinalPower;
+
+      float SSSRadius;
    };
    
    struct LumaGameData

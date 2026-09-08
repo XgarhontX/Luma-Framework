@@ -14,6 +14,14 @@ namespace
       ImGui::Text("[%s]", label);
       ImGui::PopStyleColor();
    }
+
+   bool DrawCollapsingHeaderEnabledColored(const char* label, bool enabled, bool is_default_open = false)
+   {
+      if (enabled) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.8f, 1.f));
+      bool is_open = ImGui::CollapsingHeader(label, is_default_open ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None);
+      if (enabled) ImGui::PopStyleColor();
+      return is_open;
+   }
    
    float GetPulseMultiplier(float speed = 0.1f, float amount = 0.25f)
    {
@@ -54,6 +62,8 @@ namespace TonemapInfo
    int GetIndex(int v) { return v & IndexBitMask; }
    int GetIndexOnlyIfDrawn(int v) { return GetDrawnTonemap(v) ? v & IndexBitMask : -1; }
 
+   bool GetIsDrawnTonemapOrFinal(int v) { return v & (FlagDrawnTonemap | FlagDrawnFinal); }
+      
    const char* const TonemapDebugInfo[] = {
       "Complex", //0
       "Complex, BGSprites", //1
@@ -362,7 +372,7 @@ namespace ShaderDefineInfo
 namespace AutoExposureFix
 {
    int rate_replacement = 60;
-   constexpr auto reshade_save = "AutoExposureFix";
+   constexpr auto reshadesave = "AutoExposureFix";
 
    int vp_curr_i = 0;
 
@@ -855,17 +865,17 @@ namespace SeparateUIBrightness
 namespace XeGTAO
 {
    bool is_enabled = false; //TODO: user settings
-      constexpr const char* reshade_save_enabled = "XeGTAOEnabled";
+      constexpr const char* reshadesave_enabled = "XeGTAOEnabled";
 
    PUBLISHING_CONSTEXPR bool is_fog_dodge = true; // use fog dodging variant
 
    int denoise_count = 3; // denoise the AO result
-      constexpr const char* reshade_save_denoise = "XeGTAODenoise";
+      constexpr const char* reshadesave_denoise = "XeGTAODenoise";
 
    PUBLISHING_CONSTEXPR int debug_mode = 0;
 
    PUBLISHING_CONSTEXPR bool debug_late = false;
-   PUBLISHING_CONSTEXPR bool debug_skip_smooth = false;
+   PUBLISHING_CONSTEXPR bool debug_skipsmooth = false;
 
    enum DebugOut : uint8_t
    {
@@ -1486,7 +1496,7 @@ namespace XeGTAO
 
       if (debug_mode == 7) return false;
       
-      if (!debug_skip_smooth)
+      if (!debug_skipsmooth)
       {
          // NormalsSmooth 1 bind and draw
          {
@@ -1706,13 +1716,288 @@ namespace XeGTAO
 
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
-      reshade::get_config_value(runtime, NAME, reshade_save_enabled, is_enabled);
-      reshade::get_config_value(runtime, NAME, reshade_save_denoise, denoise_count);
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, is_enabled);
+      reshade::get_config_value(runtime, NAME, reshadesave_denoise, denoise_count);
    }
 
    void OnInitSwapchain(bool is_resolution_changed)
    {
       if (is_resolution_changed) HardReset();
+   }
+}
+
+namespace SSS
+{
+   bool enabled = false;
+      constexpr const char* reshadesave_enabled = "SSSEnabled";
+
+   enum State : uint8_t
+   {
+      Unknown, // start
+      Setup,  // Setup skin surface buffer 0x93881580 drawn
+      Downsample0, // Downsampling pass
+      Downsample1, // Downsampling pass
+      Resolve, // actual SSS computation
+      Using, // forward render using SSS result // TODO: del
+      Done, // done for this frame
+   };
+   State state = Unknown;
+
+   namespace Resources
+   {
+      struct Item
+      {
+         ComPtr<ID3D11Resource> original_res; // original full res setup RES
+         ComPtr<ID3D11Resource> replacement_res = 0; // SRV16 to replace
+         uint2 size = { 0, 0 };
+
+         ComPtr<ID3D11ShaderResourceView> original_srv; // our own created to original
+         ComPtr<ID3D11Texture2D> new_tex;
+         ComPtr<ID3D11ShaderResourceView> new_srv;
+         ComPtr<ID3D11RenderTargetView> new_rtv;
+
+         uint64_t GetOriginalResHandle() const { return reinterpret_cast<uint64_t>(original_res.get()); }
+         uint64_t GetReplacementResHandle() const { return reinterpret_cast<uint64_t>(replacement_res.get()); }
+         
+         bool IsValid() const { return original_res.get(); }
+         void Reset()
+         {
+            original_res.reset(); replacement_res.reset();
+            new_tex.reset(); new_srv.reset(); new_rtv.reset();
+         }
+      };
+
+      std::array<Item, 2> items = { };
+      uint8_t item_count = 0;
+
+      bool InsertItem(Item&& item)
+      {
+         for (auto& i : items)
+         {
+            if (!i.IsValid())
+            {
+               i = std::move(item);
+               return true;
+            }
+         }
+         item_count++;
+         return false;
+      }
+
+      Item* TryGetItemForOriginal(uint64_t original_res_handle)
+      {
+         for (auto& item : items)
+            if (reinterpret_cast<uint64_t>(item.original_res.get()) == original_res_handle)
+               return &item;
+         return nullptr;
+      }
+
+      Item* TryGetItemForReplace(uint64_t replacement_res_handle)
+      {
+         for (auto& item : items)
+            if (reinterpret_cast<uint64_t>(item.replacement_res.get()) == replacement_res_handle)
+               return &item;
+         return nullptr;
+      }
+
+      Item* TryGetEmptyItem()
+      {
+         for (auto& item : items)
+            if (!item.IsValid())
+               return &item;
+         return nullptr;
+      }
+
+      void Reset()
+      {
+         for (auto& item : items) item.Reset();
+         item_count = 0;
+      }
+   }
+
+   // return only Skip or None (continues normal exec)
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (!enabled) return DrawOrDispatchOverrideType::None;
+
+      // if SSS setup shader, force state
+      if (ps == 0x93881580) state = Setup;
+
+      static Resources::Item* current_item = nullptr; //acts like token
+      
+      switch (state)
+      {
+         case Unknown: break;
+         case Setup:
+         {
+            if (ps == 0x26AF16B8) // "sprite simple"
+            {
+               state = Downsample0;
+               return DrawOrDispatchOverrideType::Skip; // allow this draw to continue
+            }
+            
+            if (!current_item) // do only once per set
+            {
+               // get RTV0
+               ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() rtv0 is nullptr");
+
+               // get RES from RTV0
+               ComPtr<ID3D11Resource> res0 = nullptr;
+               rtv0->GetResource(res0.put());
+
+               // RES handle
+               auto res_handle = reinterpret_cast<uint64_t>(res0.get());
+
+               // get item
+               current_item = Resources::TryGetItemForOriginal(res_handle);
+
+               // create new
+               if (!current_item)
+               {
+                  // query TEX
+                  ComPtr<ID3D11Texture2D> tex0 = nullptr;
+                  auto hr0 = res0->QueryInterface(tex0.put());
+                  ASSERT_MSG(SUCCEEDED(hr0), "SSS::OnDrawOrDispatchOverride() res0->QueryInterface(tex0) failed");
+
+                  // get DESC for size
+                  D3D11_TEXTURE2D_DESC tex_desc = {};
+                  tex0->GetDesc(&tex_desc);
+                  uint2 size = { tex_desc.Width, tex_desc.Height };
+                  
+                  // create
+                  {
+                     current_item = Resources::TryGetEmptyItem();
+                     ASSERT_MSG(current_item != nullptr, "SSS::Resources::CreateItem() no empty item slot");
+         
+                     D3D11_TEXTURE2D_DESC tex_desc = {};
+                     tex_desc.Width = size.x;
+                     tex_desc.Height = size.y;
+                     tex_desc.MipLevels = 1;
+                     tex_desc.ArraySize = 1;
+                     tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                     tex_desc.SampleDesc.Count = 1;
+                     tex_desc.SampleDesc.Quality = 0;
+                     tex_desc.Usage = D3D11_USAGE_DEFAULT;
+                     tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                     tex_desc.CPUAccessFlags = 0;
+                     tex_desc.MiscFlags = 0;
+
+                     current_item->size = size;
+                     current_item->original_res.attach(res0.detach()); // save original RES
+
+                     auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, current_item->new_tex.put());
+                     ASSERT_MSG(SUCCEEDED(hr0), "SSS::Resources::CreateItem() hr0");
+         
+                     auto hr1 = native_device->CreateShaderResourceView(current_item->new_tex.get(), nullptr, current_item->new_srv.put());
+                     ASSERT_MSG(SUCCEEDED(hr1), "SSS::Resources::CreateItem() hr1");
+         
+                     auto hr2 = native_device->CreateRenderTargetView(current_item->new_tex.get(), nullptr, current_item->new_rtv.put());
+                     ASSERT_MSG(SUCCEEDED(hr2), "SSS::Resources::CreateItem() hr2");
+
+                     auto hr3 = native_device->CreateShaderResourceView(current_item->original_res.get(), nullptr, current_item->original_srv.put());
+                     ASSERT_MSG(SUCCEEDED(hr3), "SSS::Resources::CreateItem() hr3");
+
+                     current_item->original_res = res0; // save original RES
+                  }
+               }
+            }
+            
+            return DrawOrDispatchOverrideType::None;
+         }
+         case Downsample0:
+         {
+            if (ps == 0xF2254A92) state = Downsample1;
+            return DrawOrDispatchOverrideType::Skip;
+         }
+         case Downsample1:
+         {
+            if (ps == 0x54415551)
+            {
+               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() current_item is nullptr");
+
+               // get RTV0
+               ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+
+               // get RES from RTV0
+               rtv0->GetResource(current_item->replacement_res.put());
+
+               // set SRV0 as full res
+               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv);
+
+               // set RTV0 as our new
+               native_device_context->OMSetRenderTargets(1, &current_item->new_rtv, nullptr);
+
+               // set viewport to new size
+               D3D11_VIEWPORT viewport;
+               viewport.TopLeftX = 0;
+               viewport.TopLeftY = 0;
+               viewport.Width = current_item->size.x;
+               viewport.Height = current_item->size.y;
+               viewport.MinDepth = 0;
+               viewport.MaxDepth = 1;
+               native_device_context->RSSetViewports(1, &viewport);
+            
+               // next state
+               current_item = nullptr; // consume
+               state = Resolve;
+               return DrawOrDispatchOverrideType::None;
+            }
+            
+            return DrawOrDispatchOverrideType::Skip;
+         }
+         case Resolve:
+         {
+            // done?
+            if (TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
+            {
+               state = Done;
+               break;
+            }
+            
+            // get SRV16
+            ComPtr<ID3D11ShaderResourceView> srv16 = nullptr;
+            native_device_context->PSGetShaderResources(16, 1, srv16.put());
+
+            // skip: null SRV16
+            if (!srv16) break;
+
+            // get RES from SRV16
+            ComPtr<ID3D11Resource> res16 = nullptr;
+            srv16->GetResource(res16.put());
+
+            // replace?
+            Resources::Item* item = Resources::TryGetItemForReplace(reinterpret_cast<uint64_t>(res16.get()));
+            if (item)
+            {
+               // set SRV16 as our new
+               native_device_context->PSSetShaderResources(16, 1, &item->new_srv);
+            }
+
+            // TODO: Project X guarantees "swapchain final" shader to draw for HQ mirrored world reflections before switching sides
+            
+            return DrawOrDispatchOverrideType::None;
+         }
+         case Using: // TODO: del
+         case Done:
+         default:
+            break;
+      }
+      
+      return DrawOrDispatchOverrideType::None;
+   }
+      
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
+      state = Unknown;
    }
 }
 
@@ -1800,6 +2085,8 @@ public:
       default_luma_global_game_settings.CGShadowsMidGray = cb_luma_global_settings.GameSettings.CGShadowsMidGray = 36.f;
       
       default_luma_global_game_settings.XeGTAOFinalPower = cb_luma_global_settings.GameSettings.XeGTAOFinalPower = 1.f;
+      
+      default_luma_global_game_settings.SSSRadius = cb_luma_global_settings.GameSettings.SSSRadius = 1.f;
    }
    
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -1826,6 +2113,9 @@ public:
       // XeGTAO
       XeGTAO::OnInitSwapchain(is_resolution_changed);
 
+      // SSS
+      SSS::HardReset();
+
       // // UISeparation
       // UISeparation::ResetOnSwapchain();
       
@@ -1845,6 +2135,11 @@ public:
       // XeGTAO ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
       XeGTAO::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+
+      // SSS ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+      if (SSS::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps) != DrawOrDispatchOverrideType::None)
+         return DrawOrDispatchOverrideType::Skip;
       
       // AUTO EXPOSURE FIX ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       if (AutoExposureFix::rate_replacement > 0 &&
@@ -2167,12 +2462,14 @@ public:
       
       reshade::get_config_value(runtime, NAME, "XeGTAOFinalPower", cb_luma_global_settings.GameSettings.XeGTAOFinalPower);
       
+      reshade::get_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
+      
       reshade::get_config_value(runtime, NAME, "IsUI", GlobalsMegaMix::IsUI);
       reshade::get_config_value(runtime, NAME, "IsSkipTextAfterFinal", GlobalsMegaMix::IsSkipTextAfterFinal);
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", GlobalsMegaMix::UIIsAdvanced);
       reshade::get_config_value(runtime, NAME, "UIIsReadmeDone", GlobalsMegaMix::UIIsReadmeDone);
-      reshade::get_config_value(runtime, NAME, AutoExposureFix::reshade_save, AutoExposureFix::rate_replacement);
+      reshade::get_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
 
       reshade::get_config_value(runtime, NAME, "HighFPS_enabled", HighFPS::enabled);
       reshade::get_config_value(runtime, NAME, "HighFPS_limit", HighFPS::limit);
@@ -2185,6 +2482,8 @@ public:
       SeparateUIBrightness::OnLoad(runtime);
 
       XeGTAO::OnLoad(runtime);
+
+      SSS::OnLoad(runtime);
       
       // if (custom_sdr_gamma == 0) custom_sdr_gamma = 2.2f;
       // reshade::get_config_value(runtime, NAME, "EOTFGammaCorrection", custom_sdr_gamma);
@@ -2318,19 +2617,16 @@ public:
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      if (!is_sdr)
+      
+      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Separate UI Brightness", SeparateUIBrightness::enabled))
       {
-         if (SeparateUIBrightness::enabled) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.8f, 1.f));
-         if (ImGui::CollapsingHeader("Separate UI Brightness"))
-         {
-            DrawColoredSubHeader("Detects when in gameplay to change UI Brightness accordingly.");
-            SeparateUIBrightness::OnUI(runtime);
-         }
-         if (SeparateUIBrightness::enabled) ImGui::PopStyleColor();
+         DrawColoredSubHeader("Detects when in gameplay to change UI Brightness accordingly.");
+         SeparateUIBrightness::OnUI(runtime);
       }
-         
+      
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      if (ImGui::CollapsingHeader("Individual UI Brightness"))
+      
+      if (DrawCollapsingHeaderEnabledColored("Individual UI Brightness", ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_HUDBRIGHTNESS) > 0))
       {
          DrawColoredSubHeader("Specifically target certain UI elements that are too bright when unclamped to HDR.");
 
@@ -2385,21 +2681,17 @@ public:
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      
+      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Individual PV Tuning", IndividualPVTuning::current_pv.item != nullptr))
       {
-         bool has_pv_tuning = IndividualPVTuning::current_pv.item != nullptr;
-         if (has_pv_tuning) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.8f, 1.f));
-         if (!is_sdr && ImGui::CollapsingHeader("Individual PV Tuning"))
-         {
-            IndividualPVTuning::OnUI(runtime);
-         }
-         if (has_pv_tuning) ImGui::PopStyleColor();
+         IndividualPVTuning::OnUI(runtime);
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      if (ImGui::CollapsingHeader("Simple PV Progress Bar"))
+      if (DrawCollapsingHeaderEnabledColored("Progress Bar", ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) > 0))
       {
-         DrawColoredSubHeader("OSU looking ahh progress bar.");
+         DrawColoredSubHeader("OSU looking ahh progress bar for PVs.");
 
          ProgressBar::OnUI(runtime);
       }
@@ -2414,17 +2706,14 @@ public:
          ShaderDefineInfo::Set(ShaderDefineInfo::XEGTAO_MANUALSIZE, !isSwapchainSized);
       }
 
-      if (XeGTAO::is_enabled) ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.4f, 0.4f, 0.8f, 1.f));
-      auto is_xegtao_header_open = ImGui::CollapsingHeader("XeGTAO");
-      if (XeGTAO::is_enabled) ImGui::PopStyleColor();
-      if (is_xegtao_header_open)
+      ImGui::PushID("###XeGTAO");
+      if (DrawCollapsingHeaderEnabledColored("XeGTAO", XeGTAO::is_enabled))
       {
-         ImGui::PushID("###XeGTAO");
          
          DrawColoredSubHeader("Ground Truth Ambient Occlusion");
 
          if (ImGui::Checkbox("Enabled", &XeGTAO::is_enabled))
-            reshade::set_config_value(runtime, NAME, XeGTAO::reshade_save_enabled, XeGTAO::is_enabled);
+            reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_enabled, XeGTAO::is_enabled);
          
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
@@ -2450,10 +2739,10 @@ public:
             ImGui::SliderInt("Denoise", &XeGTAO::denoise_count, 0, !ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD) ? 8 : 2, "%d");
             XeGTAO::denoise_count = max(XeGTAO::denoise_count, 0);
             if (ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD) && XeGTAO::denoise_count > 2) XeGTAO::denoise_count = 2;
-            if (XeGTAO::denoise_count != denoise_prev) reshade::set_config_value(runtime, NAME, XeGTAO::reshade_save_denoise, XeGTAO::denoise_count);
+            if (XeGTAO::denoise_count != denoise_prev) reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_denoise, XeGTAO::denoise_count);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                ImGui::SetTooltip("After AO, do denoising passes.");
-            DrawResetButton(XeGTAO::denoise_count, 3, XeGTAO::reshade_save_denoise, runtime);
+            DrawResetButton(XeGTAO::denoise_count, 3, XeGTAO::reshadesave_denoise, runtime);
          }
 
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_NOISE, "Noise", { "Unclamped Phases", "Static", "2 Phases", "3 Phases", "4 Phases", "5 Phases", "6 Phases", "7 Phases", "8 Phases (Better for 120 FPS?)" }, "Noise allow samples to evenly shoot out in all direction.\nInstead of staying static, allow noise to jitter so that it can perceptually mask individual grains.");
@@ -2517,13 +2806,44 @@ public:
          DrawColoredSubHeader("DEVELOPMENT");
          ImGui::SliderInt("Debug Break", &XeGTAO::debug_mode, 0, 14);
          ImGui::Checkbox("Debug Late", &XeGTAO::debug_late);
-         ImGui::Checkbox("debug_skip_smooth", &XeGTAO::debug_skip_smooth);
+         ImGui::Checkbox("debug_skip_smooth", &XeGTAO::debug_skipsmooth);
          ImGui::Checkbox("Fog Dodge", &XeGTAO::is_fog_dodge);
 #endif
-
-         ImGui::PopID();
       }
+      ImGui::PopID();
 
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###SSS");
+      if (DrawCollapsingHeaderEnabledColored("SSS", SSS::enabled))
+      {
+         DrawColoredSubHeader("Higher Quality Sub-Surface Scattering Results");
+
+         // enabled checkbox
+         if (ImGui::Checkbox("Enabled", &SSS::enabled))
+            reshade::set_config_value(runtime, NAME, SSS::reshadesave_enabled, SSS::enabled);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Replace the input and output of the game's SSS pass with a higher quality resource.");
+
+         if (ImGui::SliderFloat("SSS Radius", &cb_luma_global_settings.GameSettings.SSSRadius, 0.8f, 1.2f))
+            reshade::set_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Radius / reach of the SSS effect.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.SSSRadius, default_luma_global_game_settings.SSSRadius, "SSSRadius", runtime);
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            ImGui::NewLine();
+            DrawColoredSubHeader("Auxiliary Resources");
+            
+            for (int i = 0; i < SSS::Resources::items.size(); i++)
+            {
+               SSS::Resources::Item* item = &SSS::Resources::items[i];
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("%d. %dx%d", i, item->size.x, item->size.y);
+            }
+         }
+      }
+      ImGui::PopID();
+      
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       //show advanced
@@ -2537,7 +2857,8 @@ public:
          ImGui::Separator();
 #endif
          return;
-      } else
+      }
+      else
       {
          ImGui::Separator();
       }
@@ -2582,6 +2903,7 @@ public:
       }
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      
       if (ImGui::CollapsingHeader("Upgraded Vanilla Tonemap & Color Grading"))
       {
          DrawColoredSubHeader("Miscellaneous Settings for Color Grading");
@@ -2592,9 +2914,9 @@ public:
          DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
          
          if (ImGui::SliderInt("Auto-Exposure: History Write Rate", &AutoExposureFix::rate_replacement, 0, 120, "%d FPS"))
-            reshade::set_config_value(runtime, NAME, AutoExposureFix::reshade_save, AutoExposureFix::rate_replacement);
+            reshade::set_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Auto-Exposure history (32px ring buffer) is done per-frame.\nOn high FPS, this cause rapid exposure changes as older history is rapidly overriden.\n\nThis feature will limit Auto-Exposure rate (60 FPS default),\nwhile still allowing history clearing on camera cut.");
-         DrawResetButton(AutoExposureFix::rate_replacement, 60, AutoExposureFix::reshade_save, runtime);
+         DrawResetButton(AutoExposureFix::rate_replacement, 60, AutoExposureFix::reshadesave, runtime);
          
          // ImGui::NewLine(); ///////////
 
@@ -2772,7 +3094,7 @@ public:
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      if (!is_sdr && ImGui::CollapsingHeader("Fake BT2020 (Gamut Expansion)"))
+      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Fake BT2020 (Gamut Expansion)", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_FAKEBT2020)))
       {
          DrawColoredSubHeader("Fake saturation to decrease BT.709 chrominance clipping.");
 
@@ -2797,7 +3119,7 @@ public:
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      if (!is_sdr && ImGui::CollapsingHeader("HDR Color Grading"))
+      if (!is_sdr && DrawCollapsingHeaderEnabledColored("HDR Color Grading", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_COLORGRADE)))
       {
          DrawColoredSubHeader("RenoDX luminance color grading, kinda like an audio equalizer but for luminance.");
 
@@ -2853,7 +3175,7 @@ public:
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      if (ImGui::CollapsingHeader("FPS Limiter"))
+      if (DrawCollapsingHeaderEnabledColored("FPS Limiter", HighFPS::enabled))
       {
          DrawColoredSubHeader("Remove/Replace FPS limit.");
          
@@ -2884,6 +3206,7 @@ public:
       }
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      
       if (!is_sdr && ImGui::CollapsingHeader("Fake/Auto HDR (DEPRECATED)"))
       {
          DrawColoredSubHeader("Now deprecated, this fakes HDR extension for some SDR content.");
