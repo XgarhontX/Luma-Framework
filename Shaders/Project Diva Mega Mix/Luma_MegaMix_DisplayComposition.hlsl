@@ -365,7 +365,7 @@ float3 BRUHHHAll(float3 x, float2 v1)
 
   //legacy Tonemap Identify
   #if CUSTOM_TONEMAP_IDENTIFY > 0
-    o0.xyz = DrawBinary(TonemapInfo::GetIndexOnlyIfDrawn(GS.TonemapInfo), o0.xyz, v1.xy);
+    x = DrawBinary(TonemapInfo::GetIndexOnlyIfDrawn(GS.TonemapInfo), x, v1.xy);
   #endif
 
   //intermediate decode
