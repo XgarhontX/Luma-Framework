@@ -2,6 +2,7 @@
 
 #define ALLOW_SHADERS_DUMPING 0
 #define DISABLE_AUTO_DEBUGGER 1
+#define ENABLE_BLOOM 1
 // #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 0
 // #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
 #include "..\..\Core\core.hpp"
@@ -27,6 +28,8 @@ namespace
    {
       return (1.f-amount/2) + amount/2 * sinf(cb_luma_global_settings.FrameIndex * speed);
    }
+
+   bool IsModEnabled() {return custom_shaders_enabled || !ignore_indirect_upgraded_textures || !ignore_upgraded_samplers;}
    
 namespace TonemapInfo
 {
@@ -258,7 +261,7 @@ namespace ShaderDefineInfo
          {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, false, "XeGTAO compute shader thread groups.", 1},
          {"XEGTAO_THREADS_AO", '1', true, false, "XeGTAO compute shader thread groups.", 1},
          {"XEGTAO_THREADS_DENOISE", '0', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"CUSTOM_SDR", '0', true, false, "(Automatically managed) Compile shader without HDR upgrades.", 2},
+         {"BLOOM_IMPROVE", '0', true, false, "Improve bloom blurring.", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       auto_recompile_defines = true; //force
@@ -864,7 +867,7 @@ namespace SeparateUIBrightness
 
 namespace XeGTAO
 {
-   bool is_enabled = false; //TODO: user settings
+   bool enabled = false; //TODO: user settings
       constexpr const char* reshadesave_enabled = "XeGTAOEnabled";
 
    PUBLISHING_CONSTEXPR bool is_fog_dodge = true; // use fog dodging variant
@@ -1658,7 +1661,7 @@ namespace XeGTAO
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
       // gatekeep: not enabled
-      if (!is_enabled) return DrawOrDispatchOverrideType::None;
+      if (!enabled) return DrawOrDispatchOverrideType::None;
 
       /*
        * Super irrelevant shaders that doesn't use depth, or uses some other depth (e.g. shadows)
@@ -1716,7 +1719,7 @@ namespace XeGTAO
 
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
-      reshade::get_config_value(runtime, NAME, reshadesave_enabled, is_enabled);
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
       reshade::get_config_value(runtime, NAME, reshadesave_denoise, denoise_count);
    }
 
@@ -1741,7 +1744,7 @@ namespace SSS
       Using, // forward render using SSS result // TODO: del
       Done, // done for this frame
    };
-   State state = Unknown;
+   State state = Unknown; // denotes which shader has drawn previously, to know what to do next
 
    namespace Resources
    {
@@ -1854,6 +1857,7 @@ namespace SSS
                current_item = Resources::TryGetItemForOriginal(res_handle);
 
                // create new
+               [[unlikely]]
                if (!current_item)
                {
                   // query TEX
@@ -2001,9 +2005,569 @@ namespace SSS
    }
 }
 
+namespace Bloom
+{
+   constexpr const char* reshadesave_enabled = "BloomEnabled";
+      bool enabled = false;
+
+   constexpr const char* reshadesave_sigma = "BloomSigma";
+   constexpr float sigma_def = 1.26f;
+      float sigma = sigma_def;
+
+   constexpr const char* Bloom_Combine_PS = "Bloom Combine PS";
+
+   enum State : uint8_t
+   {
+      // Unknown, // start
+      Downsample0, // 0x68722F15
+      Downsample1, // 0x41C419EE
+      // Downsample2, // 0x68722F15
+      // Downsample3, // 0x68722F15
+      // Downsample4, // 0x68722F15
+      // Downsample5, // 0x543E9A5B
+      BloomDown0, // 0x7B4E4533
+      // BloomDown1, // 0x7B4E4533
+      // BloomDown2, // 0x7B4E4533
+      // BloomDown3, // 0x7B4E4533
+      // BloomDown4, // 0x7B4E4533
+      // BloomDown5, // 0x7B4E4533
+      BloomBlur0, // 0x466D68A8
+      BloomCombine, // 0xCD83E95E
+      // AutoExposure0, // 0xA58C1868
+      // AutoExposure1, // 0xDF1AC023
+      Tonemap,
+      Done,
+   };
+   State state = Downsample0; // denotes which shader is being drawn next.
+      
+   constexpr int nmips = 3; // downsample mips for bloom
+
+   namespace Resources
+   {
+      uint2 size_full = { 0, 0 };
+      uint2 size_down0 = { 0, 0 };
+      
+      ComPtr<ID3D11ShaderResourceView> orig_full_srv = nullptr;
+
+      std::vector<ID3D11RenderTargetView*> rtv_mips_x(nmips); // width is one level higher than height
+      std::vector<ID3D11ShaderResourceView*> srv_mips_x(nmips);
+      
+      std::vector<ID3D11RenderTargetView*> rtv_mips_y(nmips); // also used as bloom upsample outputs
+      std::vector<ID3D11ShaderResourceView*> srv_mips_y(nmips);
+      
+      ComPtr<ID3D11RenderTargetView> rtv_mip0 = nullptr; // for whatever reason where we need 2nd buffer to alternate
+      ComPtr<ID3D11ShaderResourceView> srv_mip0 = nullptr;
+
+      // bool IsValid() { return rtv_mips_x[0]; }
+
+      void Reset()
+      {
+         ResetCOMArray(rtv_mips_x);
+         ResetCOMArray(srv_mips_x);
+         ResetCOMArray(rtv_mips_y);
+         ResetCOMArray(srv_mips_y);
+         rtv_mip0.reset();
+         srv_mip0.reset();
+      }
+   }
+
+   // None allows continuing execution
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (!enabled) return DrawOrDispatchOverrideType::None;
+      if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
+
+      switch (state)
+      {
+         case Downsample0:
+         {
+            // SRV0 is full res
+            // RTV0 is 0.5x downsampled
+            if (ps != 0x68722F15) break;
+            
+            // SRV0 orig_full_srv
+            native_device_context->PSGetShaderResources(0, 1, Resources::orig_full_srv.put());
+            
+            // next state
+            state = Downsample1;
+            break;
+         }
+         case Downsample1:
+         {
+            // SRV0 is 0.5x downsampled
+            // RTV0 is forced 256x144 downsampled
+            if (ps != 0x41C419EE)
+            {
+               state = Done;
+               break;
+            }
+
+            // Draw Bloom
+            {
+               // constexpr float sigmas[nmips] = { 1.46f, 1.f, 1.f };
+               auto& managed_resources = device_data.managed_resources;
+            
+               // Backup IA.
+               D3D11_PRIMITIVE_TOPOLOGY primitive_topology_original;
+               native_device_context->IAGetPrimitiveTopology(&primitive_topology_original);
+            
+               // Backup VS.
+               ComPtr<ID3D11VertexShader> vs_original;
+               native_device_context->VSGetShader(vs_original.put(), nullptr, nullptr);
+            
+               // Backup PS.
+               ComPtr<ID3D11PixelShader> ps_original;
+               native_device_context->PSGetShader(ps_original.put(), nullptr, nullptr);
+               ComPtr<ID3D11Buffer> cb_orginal;
+               native_device_context->PSGetConstantBuffers(11, 1, cb_orginal.put());
+               ComPtr<ID3D11SamplerState> ps_sampler_original;
+               native_device_context->PSGetSamplers(0, 1, ps_sampler_original.put());
+               ComPtr<ID3D11ShaderResourceView> ps_srv_original;
+               native_device_context->PSGetShaderResources(0, 1, ps_srv_original.put());
+            
+               // Backup Viewports.
+               UINT num_viewports;
+               native_device_context->RSGetViewports(&num_viewports, nullptr);
+               std::vector<D3D11_VIEWPORT> viewports_original(num_viewports);
+               native_device_context->RSGetViewports(&num_viewports, viewports_original.data());
+            
+               // Backup Rasterizer.
+               ComPtr<ID3D11RasterizerState> rasterizer_original;
+               native_device_context->RSGetState(rasterizer_original.put());
+            
+               // Backup Blend.
+               ComPtr<ID3D11BlendState> blend_original;
+               FLOAT blend_factor_original[4];
+               UINT sample_mask_original;
+               native_device_context->OMGetBlendState(blend_original.put(), blend_factor_original, &sample_mask_original);
+            
+               // Backup RTs.
+               std::array<ID3D11RenderTargetView*, 1> rtvs_original = {};
+               ComPtr<ID3D11DepthStencilView> dsv_original;
+               native_device_context->OMGetRenderTargets(rtvs_original.size(), rtvs_original.data(), dsv_original.put());
+            
+               // Get the scene resource and texture description from the SRV.
+               static UINT scene_width   = 0;
+               static UINT scene_height  = 0;
+               static UINT x_mip0_width  = 0;
+               static UINT x_mip0_height = 0;
+               static UINT y_mip0_width  = 0;
+               static UINT y_mip0_height = 0;
+                  
+               [[unlikely]] if (!Resources::rtv_mips_y[0])
+               {
+                  // Setup
+                  D3D11_TEXTURE2D_DESC tex_desc;
+                  ComPtr<ID3D11Texture2D> tex;
+                  ComPtr<ID3D11Resource> resource;
+                  
+                  Resources::orig_full_srv->GetResource(resource.put());
+                  ensure(resource->QueryInterface(tex.put()), >= 0);
+                  tex->GetDesc(&tex_desc);
+            
+                  scene_width  = tex_desc.Width;
+                  scene_height = tex_desc.Height;
+               
+                  x_mip0_width  = tex_desc.Width / 2;
+                  x_mip0_height = tex_desc.Height;
+               
+                  y_mip0_width  = tex_desc.Width / 2;
+                  y_mip0_height = tex_desc.Height / 2;
+               
+                  Resources::size_full = { scene_width, scene_height }; // for outside use
+                  Resources::size_down0 = { y_mip0_width, y_mip0_height };
+               
+                  // Create Y MIPs and views.
+                  tex_desc.Width = y_mip0_width;
+                  tex_desc.Height = y_mip0_height;
+                  tex_desc.MipLevels = nmips;
+                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+                  auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr0), "Bloom hr0");
+            
+                  D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+                  rtv_desc.Format = tex_desc.Format;
+                  rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+            
+                  D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+                  srv_desc.Format = tex_desc.Format;
+                  srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                  srv_desc.Texture2D.MipLevels = 1;
+            
+                  for (int i = 0; i < nmips; ++i)
+                  {
+                     rtv_desc.Texture2D.MipSlice = i;
+                     auto hr1 = native_device->CreateRenderTargetView(tex.get(), &rtv_desc, &Resources::rtv_mips_y[i]);
+                     ASSERT_MSG(SUCCEEDED(hr1), "Bloom hr1");
+                     srv_desc.Texture2D.MostDetailedMip = i;
+                     auto hr2 = native_device->CreateShaderResourceView(tex.get(), &srv_desc, &Resources::srv_mips_y[i]);
+                     ASSERT_MSG(SUCCEEDED(hr2), "Bloom hr2");
+                  }
+
+                  // Create extra for alternating MIP0 and views.
+                  tex_desc.MipLevels = 1;
+                  rtv_desc.Texture2D.MipSlice = 0;
+                  srv_desc.Texture2D.MostDetailedMip = 0;
+                  auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr3), "Bloom hr3");
+                  auto hr4 = native_device->CreateRenderTargetView(tex.get(), &rtv_desc, Resources::rtv_mip0.put());
+                  ASSERT_MSG(SUCCEEDED(hr4), "Bloom hr4");
+                  auto hr5 = native_device->CreateShaderResourceView(tex.get(), &srv_desc, Resources::srv_mip0.put());
+                  ASSERT_MSG(SUCCEEDED(hr5), "Bloom hr5");
+                  
+                  // Create X MIP0 and views.
+                  tex_desc.Width = x_mip0_width;
+                  tex_desc.Height = x_mip0_height;
+                  tex_desc.MipLevels = 1;
+                  auto hr6 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr6), "Bloom hr6");
+                  auto hr7 = native_device->CreateRenderTargetView(tex.get(), nullptr, &Resources::rtv_mips_x[0]);
+                  ASSERT_MSG(SUCCEEDED(hr7), "Bloom hr7");
+                  auto hr8 = native_device->CreateShaderResourceView(tex.get(), nullptr, &Resources::srv_mips_x[0]);
+                  ASSERT_MSG(SUCCEEDED(hr8), "Bloom hr8");
+            
+                  // Create rest of X MIPs and views.
+                  for (UINT i = 1; i < nmips; ++i)
+                  {
+                     tex_desc.Width = max(1u, x_mip0_width >> i);
+                     tex_desc.Height = max(1u, x_mip0_height >> i);
+                     auto hr9 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+                     ASSERT_MSG(SUCCEEDED(hr9), "Bloom hr9");
+                     auto hr10 = native_device->CreateRenderTargetView(tex.get(), nullptr, &Resources::rtv_mips_x[i]);
+                     ASSERT_MSG(SUCCEEDED(hr10), "Bloom hr10");
+                     auto hr11 = native_device->CreateShaderResourceView(tex.get(), nullptr, &Resources::srv_mips_x[i]);
+                     ASSERT_MSG(SUCCEEDED(hr11), "Bloom hr11");
+                  }
+               }
+            
+               // Create bloom CB.
+               //
+            
+               [[unlikely]] if (!managed_resources.buffers["luma_bloom_cb"_h])
+               {
+                  D3D11_BUFFER_DESC buffer_desc = {};
+                  buffer_desc.ByteWidth = sizeof(CBLumaBloomData);
+                  buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
+                  buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+                  buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+                  auto hr = native_device->CreateBuffer(&buffer_desc, nullptr, managed_resources.buffers["luma_bloom_cb"_h].put());
+                  ASSERT_MSG(SUCCEEDED(hr), "Bloom hr bloom_cb");
+               }
+            
+               CBLumaBloomData cb_data;
+            
+               auto update_constant_buffer = [&]()
+               {
+                  D3D11_MAPPED_SUBRESOURCE mapped_subresource;
+                  auto hr = native_device_context->Map(managed_resources.buffers["luma_bloom_cb"_h].get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_subresource);
+                  ASSERT_MSG(SUCCEEDED(hr), "Bloom hr bloom_cb map");
+                  std::memcpy(mapped_subresource.pData, &cb_data, sizeof(CBLumaBloomData));
+                  native_device_context->Unmap(managed_resources.buffers["luma_bloom_cb"_h].get(), 0);
+               };
+            
+               //
+            
+               // Prefilter + downsample pass
+               //
+            
+               D3D11_VIEWPORT viewport_x = {};
+               viewport_x.Width = x_mip0_width;
+               viewport_x.Height = x_mip0_height;
+            
+               // Update CB.
+               cb_data.src_size = float2(scene_width, scene_height);
+               cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+               cb_data.axis = float2(1.0f, 0.0f);
+               cb_data.sigma = sigma/*sigmas[0]*/;
+               update_constant_buffer();
+            
+               // Bindings.
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_x[0], nullptr);
+               native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+               native_device_context->VSSetShader(device_data.native_vertex_shaders.at(Math::CompileTimeStringHash("Bloom VS")).get(), nullptr, 0);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(Math::CompileTimeStringHash("Bloom Downsample PS")).get(), nullptr, 0);
+               native_device_context->PSSetConstantBuffers(11, 1, &managed_resources.buffers["luma_bloom_cb"_h]);
+               const std::array ps_samplers = { device_data.sampler_state_linear.get() };
+               native_device_context->PSSetSamplers(0, ps_samplers.size(), ps_samplers.data());
+               native_device_context->PSSetShaderResources(0, 1, &Resources::orig_full_srv);
+               native_device_context->RSSetViewports(1, &viewport_x);
+               native_device_context->RSSetState(nullptr);
+            
+               // Draw X pass.
+               native_device_context->Draw(3, 0);
+            
+               std::vector<D3D11_VIEWPORT> viewports_y(nmips);
+               viewports_y[0].Width = y_mip0_width;
+               viewports_y[0].Height = y_mip0_height;
+            
+               // Update CB.
+               cb_data.src_size = float2(x_mip0_width, x_mip0_height);
+               cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+               cb_data.axis = float2(0.0f, 1.0f);
+               update_constant_buffer();
+            
+               // Bindings.
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[0], nullptr);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Prefilter PS"_h).get(), nullptr, 0);
+               native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_x[0]);
+               native_device_context->RSSetViewports(1, &viewports_y[0]);
+            
+               // Draw Y pass.
+               native_device_context->Draw(3, 0);
+            
+               //
+            
+               // Downsample passes
+               //
+            
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Downsample PS"_h).get(), nullptr, 0);
+            
+               // Render downsample passes.
+               for (UINT i = 1; i < nmips; ++i)
+               {
+                  viewport_x.Width = max(1u, x_mip0_width >> i);
+                  viewport_x.Height = max(1u, x_mip0_height >> i);
+            
+                  // Update CB.
+                  cb_data.src_size = float2(viewports_y[i - 1].Width, viewports_y[i - 1].Height);
+                  cb_data.axis = float2(1.0f, 0.0f);
+                  cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+                  cb_data.sigma = sigma/*sigmas[i]*/;
+                  update_constant_buffer();
+            
+                  // Bindings.
+                  native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_x[i], nullptr);
+                  native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i - 1]);
+                  native_device_context->RSSetViewports(1, &viewport_x);
+            
+                  // Draw X pass.
+                  native_device_context->Draw(3, 0);
+            
+                  viewports_y[i].Width = max(1u, y_mip0_width >> i);
+                  viewports_y[i].Height = max(1u, y_mip0_height >> i);
+            
+                  // Update CB.
+                  cb_data.src_size = float2(viewport_x.Width, viewport_x.Height);
+                  cb_data.axis = float2(0.0f, 1.0f);
+                  cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+                  update_constant_buffer();
+            
+                  // Bindings.
+                  native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i], nullptr);
+                  native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_x[i]);
+                  native_device_context->RSSetViewports(1, &viewports_y[i]);
+            
+                  // Draw Y pass.
+                  native_device_context->Draw(3, 0);
+               }
+            
+               //
+            
+               // Upsample passes
+               //
+            
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Upsample PS"_h).get(), nullptr, 0);
+               
+               [[unlikely]] if (!managed_resources.blends["luma_bloom_blend"_h])
+               {
+                  CD3D11_BLEND_DESC blend_desc(D3D11_DEFAULT);
+                  blend_desc.RenderTarget[0].BlendEnable = TRUE;
+                  blend_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_BLEND_FACTOR;
+                  blend_desc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
+                  ensure(native_device->CreateBlendState(&blend_desc, managed_resources.blends["luma_bloom_blend"_h].put()), >= 0);
+               }
+               
+               for (int i = nmips - 1; i > 0; --i)
+               {
+                  // If both dst and src are D3D10_BLEND_BLEND_FACTOR
+                  // factor of 0.5 will be enegrgy preserving.
+                  static constexpr FLOAT blend_factor[] = { 0.5f, 0.5f, 0.5f, 0.0f };
+            
+                  // Update CB.
+                  cb_data.src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
+                  cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+                  update_constant_buffer();
+            
+                  native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i - 1], nullptr);
+                  native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i]);
+                  native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
+                  native_device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
+            
+                  native_device_context->Draw(3, 0);
+               }
+            
+               //
+            
+               // // Return the final bloom.
+               // *srv_bloom = Resources::srv_mips_y[0];
+               // (*srv_bloom)->AddRef();
+            
+               // Restore.
+               native_device_context->OMSetBlendState(blend_original.get(), blend_factor_original, sample_mask_original);
+               native_device_context->OMSetRenderTargets(rtvs_original.size(), rtvs_original.data(), dsv_original.get());
+               native_device_context->IASetPrimitiveTopology(primitive_topology_original);
+               native_device_context->VSSetShader(vs_original.get(), nullptr, 0);
+               native_device_context->PSSetShader(ps_original.get(), nullptr, 0);
+               native_device_context->PSSetConstantBuffers(11, 1, &cb_orginal);
+               native_device_context->PSSetSamplers(0, 1, &ps_sampler_original);
+               native_device_context->PSSetShaderResources(0, 1, &ps_srv_original);
+               native_device_context->RSSetViewports(viewports_original.size(), viewports_original.data());
+               native_device_context->RSSetState(rasterizer_original.get());
+            
+               // Release com arrays.
+               ResetCOMArray(rtvs_original);
+            
+               // auto reset_mips = [&]()
+               // {
+               //     ResetCOMArray(Resources::rtv_mips_x);
+               //     ResetCOMArray(Resources::srv_mips_x);
+               //     ResetCOMArray(Resources::rtv_mips_y);
+               //     ResetCOMArray(Resources::srv_mips_y);
+               // };
+               //
+               // LumaCallbacks::on_destroy_device.try_emplace("luma_bloom"_h, reset_mips);
+               // LumaCallbacks::on_init_swapchain.try_emplace("luma_bloom"_h, reset_mips);
+            }
+
+            // debug: set SRV1 as our new bloom output
+            if (DEVELOPMENT) native_device_context->PSSetShaderResources(1, 1, &Resources::srv_mips_y[0]);
+            
+            // next state
+            state = /*Downsample2*/ BloomDown0;
+            // return DrawOrDispatchOverrideType::Replaced; // skip, already done.
+            break;
+         }
+         // case Downsample2:
+         //    if (ps != 0x68722F15) state = Done; break;
+         // case Downsample3:
+         //    if (ps != 0x68722F15) state = Done; break;
+         // case Downsample4:
+         //    if (ps != 0x68722F15) state = Done; break;
+         // case Downsample5:
+         //    if (ps != 0x543E9A5B) state = Done; break;
+         case BloomDown0:
+         {
+            if (ps != 0x7B4E4533)
+            {
+               // state = Done;
+               break;
+            }
+
+            // set SRV0 as out new bloom output
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[nmips - 1]);
+
+            state = BloomBlur0;
+            break;
+         }
+         // case BloomDown1:
+         //    if (ps != 0x7B4E4533) state = Done; break;
+         // case BloomDown2:
+         //    if (ps != 0x7B4E4533) state = Done; break;
+         // case BloomDown3:
+         //    if (ps != 0x7B4E4533) state = Done; break;
+         // case BloomDown4:
+         //    if (ps != 0x7B4E4533) state = Done; break;
+         // case BloomDown5:
+         //    if (ps != 0x7B4E4533) state = Done; break;
+         case BloomBlur0:
+         {
+            if (ps != 0x466D68A8)
+            {
+               // state = Done;
+               break;
+            }
+
+            // // set SRV0 as out new bloom output
+            // native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[0]);
+            //
+            // // set RTV0 as our buffer
+            // native_device_context->OMSetRenderTargets(1, &Resources::rtv_mip0[0], nullptr);
+            //
+            // // viewport to size of mip0
+            // D3D11_VIEWPORT viewport;
+            // viewport.TopLeftX = 0;
+            // viewport.TopLeftY = 0;
+            // viewport.Width = Resources::size_down0.x;
+            // viewport.Height = Resources::size_down0.y;
+            // viewport.MinDepth = 0;
+            // viewport.MaxDepth = 1;
+            // native_device_context->RSSetViewports(1, &viewport);
+            
+            state = BloomCombine;
+            return DrawOrDispatchOverrideType::Skip; // redundant to blur again
+         }
+         case BloomCombine:
+         {
+            if (ps != 0xCD83E95E)
+            {
+               // state = Done;
+               break;
+            }
+
+            // set SRV0 as out new bloom output
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[0]);
+
+            // set RTV0 as our buffer
+            native_device_context->OMSetRenderTargets(1, &Resources::rtv_mip0, nullptr);
+
+            // set our combine shader
+            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Bloom_Combine_PS)).get(), nullptr, 0);
+            
+            // viewport to size of mip0
+            D3D11_VIEWPORT viewport;
+            viewport.TopLeftX = 0;
+            viewport.TopLeftY = 0;
+            viewport.Width = Resources::size_down0.x;
+            viewport.Height = Resources::size_down0.y;
+            viewport.MinDepth = 0;
+            viewport.MaxDepth = 1;
+            native_device_context->RSSetViewports(1, &viewport);
+
+            state = Tonemap;
+            break;
+         }
+         case Tonemap:
+         case Done:
+            break;
+      }
+
+      return DrawOrDispatchOverrideType::None;
+   }
+
+   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      if (state != Tonemap) return;
+
+      // set SRV1 as out new bloom output
+      native_device_context->PSSetShaderResources(1, 1, &Resources::srv_mip0);
+      
+      state = Done;
+   }
+
+   void OnPresent()
+   {
+      state = Downsample0;
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
+   }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
+      reshade::get_config_value(runtime, NAME, reshadesave_sigma, sigma);
+   }
+
+   void OnInit()
+   {
+      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Combine_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_combine_ps"));
+   }
+}
+
 } // unnamed namespace
-
-
 
 class ProjectDivaMegaMix final : public Game
 {
@@ -2027,6 +2591,9 @@ public:
 
       // XeGTAO
       XeGTAO::OnInit();
+
+      // Bloom
+      Bloom::OnInit();
 
       // Global default
       use_os_reference_white_level = false;
@@ -2116,6 +2683,9 @@ public:
       // SSS
       SSS::HardReset();
 
+      // Bloom
+      Bloom::HardReset();
+
       // // UISeparation
       // UISeparation::ResetOnSwapchain();
       
@@ -2137,10 +2707,15 @@ public:
       XeGTAO::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
 
       // SSS ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-      if (SSS::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps) != DrawOrDispatchOverrideType::None)
-         return DrawOrDispatchOverrideType::Skip;
-      
+      {
+         auto r = SSS::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+         if (r != DrawOrDispatchOverrideType::None) return r;
+      }
+      // Bloom ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      {
+         auto r = Bloom::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+         if (r != DrawOrDispatchOverrideType::None) return r;
+      }
       // AUTO EXPOSURE FIX ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       if (AutoExposureFix::rate_replacement > 0 &&
          !DrawingState::IsDrawnAutoExposure0 &&
@@ -2181,13 +2756,15 @@ public:
          int ti = cb_luma_global_settings.GameSettings.TonemapInfo;
 
          // set?
-         if (ShaderHashesLists::Tonemaps.contains(ps))
+         auto it = ShaderHashesLists::Tonemaps.find(ps);
+         if (it != ShaderHashesLists::Tonemaps.end())
          {
-            uint8_t index = ShaderHashesLists::Tonemaps.at(ps);
-            ti = TonemapInfo::SetIndexAndDrawnTonemapTrue(ti, index);
+            ti = TonemapInfo::SetIndexAndDrawnTonemapTrue(ti, it->second);
             
             cb_luma_global_settings.GameSettings.TonemapInfo = ti;
             device_data.cb_luma_global_settings_dirty = true; //reupload for later shaders
+
+            Bloom::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             
             return DrawOrDispatchOverrideType::None;
          }
@@ -2388,6 +2965,9 @@ public:
       // HighFPS
       HighFPS::Patch();
 
+      // Bloom
+      Bloom::OnPresent();
+
       // ProgressBar
       ProgressBar::OnPresent();
 
@@ -2484,6 +3064,8 @@ public:
       XeGTAO::OnLoad(runtime);
 
       SSS::OnLoad(runtime);
+
+      Bloom::OnLoad(runtime);
       
       // if (custom_sdr_gamma == 0) custom_sdr_gamma = 2.2f;
       // reshade::get_config_value(runtime, NAME, "EOTFGammaCorrection", custom_sdr_gamma);
@@ -2516,8 +3098,9 @@ public:
 
       //SWAPCHAIN_TEST_USER_PEAK
       std::string test_peak_label = std::format("Test Display Peak (HDR Stops: +{:.2f})", cb_luma_global_settings.GameSettings.TonemapHDRStops);
-      if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles.\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nSo whatever you do, don't let Middle fully disappear/clip!");
-
+      if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles within a bigger one.\nTo calibrate to display maximum, set to:\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\nOtherwise, just don't let Middle fully disappear/clip!");
+      else ShaderDefineInfo::Set(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, 0); //force off in SDR
+      
       if (!GlobalsMegaMix::UIIsReadmeDone)
       {
          ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
@@ -2631,7 +3214,7 @@ public:
          DrawColoredSubHeader("Specifically target certain UI elements that are too bright when unclamped to HDR.");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("By needing to sample the texture to identify, this may spike VRAM usage.\nThe best solution is to download some UI texture mod.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("By needing to sample the texture multiple times to identify, this may spike VRAM usage.\nThe best solution is to download some UI texture mod.");
          ImGui::PopStyleColor();
 
          {
@@ -2707,25 +3290,29 @@ public:
       }
 
       ImGui::PushID("###XeGTAO");
-      if (DrawCollapsingHeaderEnabledColored("XeGTAO", XeGTAO::is_enabled))
+      if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion (XeGTAO)", XeGTAO::enabled))
       {
          
-         DrawColoredSubHeader("Ground Truth Ambient Occlusion");
+         DrawColoredSubHeader("Insert a Ground Truth Ambient Occlusion pass for indirect shading.");
 
-         if (ImGui::Checkbox("Enabled", &XeGTAO::is_enabled))
-            reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_enabled, XeGTAO::is_enabled);
+         if (ImGui::Checkbox("Enabled", &XeGTAO::enabled))
+            reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_enabled, XeGTAO::enabled);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("");
          
-         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.f));
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon (Non-Physical Rendering) is untested.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon (Non-Physical Rendering) doesn't benefit and is untested.");
          ImGui::PopStyleColor();
+
+         // TODO: presets
 
          ImGui::NewLine();
          DrawColoredSubHeader("Parameters");
          
          if (ImGui::SliderFloat("Final Power", &cb_luma_global_settings.GameSettings.XeGTAOFinalPower, 0.f, 2.f))
             reshade::set_config_value(runtime, NAME, "XeGTAOFinalPower", cb_luma_global_settings.GameSettings.XeGTAOFinalPower);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Final power of the AO effect, after sample accumulation.\n\n(Increasing this will reveal noise, so you will prob need to increase quality.)");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Final power of the AO effect, after sample accumulation.\n\n(Increasing this will reveal noise, so you will probably need to increase quality.)");
          DrawResetButton(cb_luma_global_settings.GameSettings.XeGTAOFinalPower, default_luma_global_game_settings.XeGTAOFinalPower, "XeGTAOFinalPower", runtime);
          
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_SLICECOUNT, "Slice Count", { "(3) Easy", "(6) Normal", "(8) Hard (Worth for 4K?)", "(12) Extreme", "(16) Extra Extreme", "(24) Uhhh", "(32) ..." }, "More samples = less noise.\n\n(Perhaps more denoise passes can achieve similar results?)");
@@ -2769,15 +3356,18 @@ public:
          {
             ImGui::NewLine();
             DrawColoredSubHeader("Thread Groups");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_NORMALSGEN, "Threads: Normals Generation", { "8", "16" }, "Thread groups for compute shaders.");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_NORMALSSMOOTH, "Threads: Normals Smoothing", { "8", "16" }, "Thread groups for compute shaders.");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_AO, "Threads: GTAO", { "8", "16" }, "Thread groups for compute shaders.");
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_DENOISE, "Threads: Denoise", { "8", "16" }, "Thread groups for compute shaders.");
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_NORMALSGEN, "Threads: Normals Generation", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_NORMALSSMOOTH, "Threads: Normals Smoothing", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_AO, "Threads: GTAO", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_THREADS_DENOISE, "Threads: Denoise", { "8", "16" }, "Thread groups for compute shaders.\nDefault should be fastest.");
          }
          
          ImGui::NewLine();
          DrawColoredSubHeader("Auxiliary Resources");
+         
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("These are created when Tonemap & skin Sub-Surface Scattering pass is found.");
+         ImGui::PopStyleColor();
          
          ImGui::PushStyleColor(ImGuiCol_Text, XeGTAO::FoundResource::IsSizeValid() ? ImVec4(0.4f, 0.8f, 0.4f, 1.f) : ImVec4(0.8f, 0.4f, 0.4f, 1.f));
          std::string status;
@@ -2815,17 +3405,17 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       ImGui::PushID("###SSS");
-      if (DrawCollapsingHeaderEnabledColored("SSS", SSS::enabled))
+      if (DrawCollapsingHeaderEnabledColored("Skin Rendering (Sub-Surface Scattering)", SSS::enabled))
       {
-         DrawColoredSubHeader("Higher Quality Sub-Surface Scattering Results");
+         DrawColoredSubHeader("Allow Sub-Surface Scattering to compute at full render resolution.");
 
          // enabled checkbox
-         if (ImGui::Checkbox("Enabled", &SSS::enabled))
+         if (ImGui::Checkbox("Full Resolution", &SSS::enabled))
             reshade::set_config_value(runtime, NAME, SSS::reshadesave_enabled, SSS::enabled);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Replace the input and output of the game's SSS pass with a higher quality resource.");
+            ImGui::SetTooltip("Replace the input and output of the game's SSS pass with a higher quality resource/buffer.");
 
-         if (ImGui::SliderFloat("SSS Radius", &cb_luma_global_settings.GameSettings.SSSRadius, 0.8f, 1.2f))
+         if (ImGui::SliderFloat("SSS Radius", &cb_luma_global_settings.GameSettings.SSSRadius, 0.5f, 1.5f))
             reshade::set_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Radius / reach of the SSS effect.");
          DrawResetButton(cb_luma_global_settings.GameSettings.SSSRadius, default_luma_global_game_settings.SSSRadius, "SSSRadius", runtime);
@@ -2843,6 +3433,83 @@ public:
          }
       }
       ImGui::PopID();
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###Bloom");
+      if (DrawCollapsingHeaderEnabledColored("Bloom", Bloom::enabled))
+      {
+         DrawColoredSubHeader("Bloom Customization");
+
+         if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom strength.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
+
+         if (ImGui::Checkbox("Higher Quality", &Bloom::enabled))
+            reshade::set_config_value(runtime, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Help reduce flickering and blockiness by using gaussian blur to downsample and better upsample filtering.\nThere's slight inefficiency decoupling from Auto-Exposure downsampling.");
+         DrawResetButton(Bloom::enabled, false, Bloom::reshadesave_enabled, runtime);
+
+         if (!Bloom::enabled) ImGui::BeginDisabled();
+         if (ImGui::SliderFloat("Bloom Gaussian Sigma", &Bloom::sigma, 0.5f, 3.f))
+            reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur.\nHigher = more blur, where minor highlights are ignored, but more cost as texture sampling count increases.");
+         DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
+         if (!Bloom::enabled) ImGui::EndDisabled();
+         
+         ImGui::NewLine();
+      }
+      ImGui::PopID();
+      
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      if (ImGui::CollapsingHeader("Miscellaneous"))
+      {
+         DrawColoredSubHeader("Miscellaneous Settings for Post FXs");
+         
+         if (ImGui::SliderInt("Auto-Exposure: History Write Rate", &AutoExposureFix::rate_replacement, 0, 120, "%d FPS"))
+            reshade::set_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Auto-Exposure history (32px ring buffer) is done per-frame.\nOn high FPS, this cause rapid exposure changes as older history is rapidly overriden.\n\nThis feature will limit Auto-Exposure rate (60 FPS default),\nwhile still allowing history clearing on camera cut.");
+         DrawResetButton(AutoExposureFix::rate_replacement, 60, AutoExposureFix::reshadesave, runtime);
+         
+         // ImGui::NewLine(); ///////////
+         
+         if (is_sdr) goto AfterVanillaColorGrade; //skip if SDR
+         
+         if (ImGui::SliderFloat("MLAA Weights", &cb_luma_global_settings.GameSettings.AAMultiplier, 1.f, 5.f))
+            reshade::set_config_value(runtime, NAME, "AAMultiplier", cb_luma_global_settings.GameSettings.AAMultiplier);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on the input color into MLAA.\nIncrease to have it detect more edges, but may cause false positives.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.AAMultiplier, default_luma_global_game_settings.AAMultiplier, "AAMultiplier", runtime);
+         
+         ImGui::NewLine(); ///////////
+         
+         is_disabled = !ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN, "LUT Gaussian Blur Sampling", "Sample the YCbCr LUT in charged of causing blowout with a gaussian blur,\nbiased towards higher chrominance, helping reduce steep chrominance falloff.");
+         if (is_disabled) ImGui::BeginDisabled();
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS, "LUT Gaussian Blur: Respond to HDR Stops", "Increases step size as HDR stops increases.");
+            
+            if (ImGui::SliderFloat("LUT Gaussian Blur: Step", &cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, 1.f, 80.f, "%.1f"))
+               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurStep", cb_luma_global_settings.GameSettings.LUTGaussianBlurStep);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The step size for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will be recover and smooth out chrominance falloff.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, default_luma_global_game_settings.LUTGaussianBlurStep, "LUTGaussianBlurStep", runtime);
+            
+            if (ImGui::SliderFloat("LUT Gaussian Blur: Bias", &cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, 0.f, 10.f, "%.4f"))
+               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurBias", cb_luma_global_settings.GameSettings.LUTGaussianBlurBias);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The bias for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will bias the sampling towards higher chrominance, which recovers chrominance.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, default_luma_global_game_settings.LUTGaussianBlurBias, "LUTGaussianBlurBias", runtime); 
+         }
+         if (is_disabled) ImGui::EndDisabled();
+         
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            if (ImGui::SliderFloat("LUT Scaling & Makeup: Multiplier", &cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, 0.8f, 1.0f, "%.4f"))
+               reshade::set_config_value(runtime, NAME, "LUTScalingAndMakeUp", cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on LUT results and the makeup gain (reciprocal) afterwards.\nLower to give LUT lookup just a bit of headroom, increasing saturation from the YCbCr tonemap, which is usable by Per-Channel Blowout.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, default_luma_global_game_settings.LUTScalingAndMakeUp, "LUTScalingAndMakeUp", runtime);
+         }
+      } AfterVanillaColorGrade:
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
@@ -2866,14 +3533,10 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       //HDR Tonemapper Settings
-      if (!is_sdr && ImGui::CollapsingHeader("HDR Tonemapper & Clamping"))
+      if (!is_sdr && ImGui::CollapsingHeader("HDR Display-mapping"))
       {
-         DrawColoredSubHeader("HDR Tonemapping parameters.");
+         DrawColoredSubHeader("Miscellaneous Settings for HDR Display-mapping");
 
-         is_disabled = false;
-
-         // is_disabled = !(tonemap_def == 1 /*|| tonemap_index == 2*/ || tonemap_def == 3 /*|| tonemap_index == 4*/);
-         if (!is_disabled)
          {
             if (ImGui::SliderFloat("HDR Tonemapper Expected Max", &CachedCB::white_clip, 0.f, 0.2f, "%.4f"))
                reshade::set_config_value(runtime, NAME, "TonemapperMaxExpected", CachedCB::white_clip);
@@ -2882,15 +3545,28 @@ public:
          }
 
          // is_disabled = tonemap_def == 0;
-         if (!is_disabled)
          {
             ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_TONEMAP_SCALING, "HDR Tonemapper Scaling",
                { "Luminance (Natural / Vanilla)", "Max Channel (Unnatural Saturation Preserve?)" },
                "The pivot for the tonemapper to use and scale color.");
          }
 
+         {
+            //CUSTOM_PCC_QUALITY
+            bool def = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PCC_QUALITY, "Per-Channel Blowout: Quality", { "Normal (Luminance Revert)", "High (UCS Blend)" }, "Low simply reverts luminance to maintain hue/chrominance change.\nHigh will use UCS to blend to new hue/chrominance.");
+         }
+
+         //CUSTOM_PERCHANNELLUMAEMULATE
+         {
+            if (ImGui::SliderFloat("Per-Channel Luminance Reduction: Strength", &cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength, 0.f, 1.f, "%.4f"))
+               reshade::set_config_value(runtime, NAME, "PerChannelLuminanceReductionEmulateStrength", cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Emulate the luminance loss from LDR per-channel tonemapping on bright single channel colors.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength, default_luma_global_game_settings.PerChannelLuminanceReductionEmulateStrength, "PerChannelLuminanceReductionEmulateStrength", runtime);
+
+            ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_PERCHANNELLUMAEMULATE, cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength > 0);
+         }
+
          // is_disabled = tonemap_def == 0 || scaling_def != 0;
-         if (!is_disabled)
          {
             ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_TONEMAP_CLAMP, "HDR Tonemapper Clamp",
                { "Unclamped (Up to Display)", "Per-Channel Clamp (Blows Out / Vanilla)", "Max Channel Clamp (Unnatural Saturation Preserve?)" },
@@ -2900,197 +3576,8 @@ public:
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_CLAMP_PEAK, "Output Clamp Peak",
             { "Unclamped (Up to Display)", "Per-Channel Clamp (Blows Out / Vanilla)", "Max Channel Clamp (Unnatural Saturation Preserve?)", "Per-Channel Rolloff Slightly Above Peak (Blows Out / Vanilla+)" },
             "Clamp of the very final output color to display.");
+         
       }
-      
-      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      
-      if (ImGui::CollapsingHeader("Upgraded Vanilla Tonemap & Color Grading"))
-      {
-         DrawColoredSubHeader("Miscellaneous Settings for Color Grading");
-         
-         if (ImGui::SliderFloat("Bloom", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom strength.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
-         
-         if (ImGui::SliderInt("Auto-Exposure: History Write Rate", &AutoExposureFix::rate_replacement, 0, 120, "%d FPS"))
-            reshade::set_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Auto-Exposure history (32px ring buffer) is done per-frame.\nOn high FPS, this cause rapid exposure changes as older history is rapidly overriden.\n\nThis feature will limit Auto-Exposure rate (60 FPS default),\nwhile still allowing history clearing on camera cut.");
-         DrawResetButton(AutoExposureFix::rate_replacement, 60, AutoExposureFix::reshadesave, runtime);
-         
-         // ImGui::NewLine(); ///////////
-
-         // ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_MLAA_PQ, "MLAA PQ Encode", "Encode input in Perceptual Quantizer (PQ) before MLAA to maybe let it better detect edges.");
-
-         if (is_sdr) goto AfterVanillaColorGrade; //skip if SDR
-         
-         if (ImGui::SliderFloat("MLAA Weights", &cb_luma_global_settings.GameSettings.AAMultiplier, 1.f, 5.f))
-            reshade::set_config_value(runtime, NAME, "AAMultiplier", cb_luma_global_settings.GameSettings.AAMultiplier);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on the input color into MLAA.\nIncrease to have it detect more edges, but may cause false positives.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.AAMultiplier, default_luma_global_game_settings.AAMultiplier, "AAMultiplier", runtime);
-         
-         ImGui::NewLine(); ///////////
-
-         // ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_REDUCTION, "LUT Look Back (Fast)", "Sample the YCbCr LUT at a less blown out point to reduce blowout.");
-         //
-         // if (ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_REDUCTION) > 0) {
-         //    ImGui::PushID("LUT BR: 0");
-         //    ImGui::SameLine(); if (ImGui::Button("(Low)"))
-         //    {
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReduction = 0.085f;
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack = default_luma_global_game_settings.LUTBlowoutReductionLookBack;
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReduction", cb_luma_global_settings.GameSettings.LUTBlowoutReduction);
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReductionLookBack", cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack);
-         //    }
-         //    ImGui::PopID();
-         //
-         //    ImGui::PushID("LUT BR: 1");
-         //    ImGui::SameLine(); if (ImGui::Button("(Normal / Recommended)"))
-         //    {
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReduction = default_luma_global_game_settings.LUTBlowoutReduction;
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack = default_luma_global_game_settings.LUTBlowoutReductionLookBack;
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReduction", cb_luma_global_settings.GameSettings.LUTBlowoutReduction);
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReductionLookBack", cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack);
-         //    }
-         //    ImGui::PopID();
-         //
-         //    ImGui::PushID("LUT BR: 2");
-         //    ImGui::SameLine(); if (ImGui::Button("(High)"))
-         //    {
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReduction = 0.25f;
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack = 0.45f;
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReduction", cb_luma_global_settings.GameSettings.LUTBlowoutReduction);
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReductionLookBack", cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack);
-         //    }
-         //    ImGui::PopID();
-         //
-         //    ImGui::PushID("LUT BR: 3");
-         //    ImGui::SameLine(); if (ImGui::Button("(Extreme)"))
-         //    {
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReduction = 0.33f;
-         //       cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack = 0.35f;
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReduction", cb_luma_global_settings.GameSettings.LUTBlowoutReduction);
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReductionLookBack", cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack);
-         //    }
-         //    ImGui::PopID();
-         // }
-         // is_disabled = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_REDUCTION) == 0;
-         // if (is_disabled) ImGui::BeginDisabled(); 
-         // {
-         //    if (ImGui::SliderFloat("LUT Look Back", &cb_luma_global_settings.GameSettings.LUTBlowoutReduction, 0.f, 1.0f, "%.4f"))
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReduction", cb_luma_global_settings.GameSettings.LUTBlowoutReduction);
-         //    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("YCbCr LUT blowout reduction.\nToo high/strong will lead to coloring things that should be blown out white.");
-         //    DrawResetButton(cb_luma_global_settings.GameSettings.LUTBlowoutReduction, default_luma_global_game_settings.LUTBlowoutReduction, "LUTBlowoutReduction", runtime);
-         //
-         //    if (ImGui::SliderFloat("LUT Look Back: Luma Multiplier", &cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack, 0.f, 1.0f, "%.4f"))
-         //       reshade::set_config_value(runtime, NAME, "LUTBlowoutReductionLookBack", cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack);
-         //    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on luminance to sample the YCbCr LUT at a less blown out spot.\nToo low/far will lead to coloring things that should be blown out white!");
-         //    DrawResetButton(cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack, default_luma_global_game_settings.LUTBlowoutReductionLookBack, "LUTBlowoutReductionLookBack", runtime);
-         // }
-         // if (is_disabled) ImGui::EndDisabled();
-         //
-         // ImGui::NewLine(); ///////////
-         
-         is_disabled = !ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN, "LUT Gaussian Blur Sampling", "Sample the YCbCr LUT with a gaussian blur,\nbiased towards higher chrominance,\nhelping reduce steep chrominance falloff.");
-         if (is_disabled) ImGui::BeginDisabled(); 
-         {
-            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS, "LUT Gaussian Blur: Respond to HDR Stops", "Increases step size as HDR stops increases.");
-            
-            if (ImGui::SliderFloat("LUT Gaussian Blur: Step", &cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, 1.f, 80.f, "%.1f"))
-               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurStep", cb_luma_global_settings.GameSettings.LUTGaussianBlurStep);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The step size for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will be recover and smooth out chrominance falloff.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, default_luma_global_game_settings.LUTGaussianBlurStep, "LUTGaussianBlurStep", runtime);
-            
-            if (ImGui::SliderFloat("LUT Gaussian Blur: Bias", &cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, 0.f, 10.f, "%.4f"))
-               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurBias", cb_luma_global_settings.GameSettings.LUTGaussianBlurBias);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The bias for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will bias the sampling towards higher chrominance, which recovers chrominance.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, default_luma_global_game_settings.LUTGaussianBlurBias, "LUTGaussianBlurBias", runtime); 
-         }
-         if (is_disabled) ImGui::EndDisabled();
-
-         // ImGui::NewLine(); ///////////
-         
-         // if (ImGui::SliderFloat("LUT Luminance Neutralize", &cb_luma_global_settings.GameSettings.LUTNeutralize, 0.f, 1.f))
-         //    reshade::set_config_value(runtime, NAME, "LUTNeutralize", cb_luma_global_settings.GameSettings.LUTNeutralize);
-         // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Neutralize upper luminance change and shoulder from LUT.\nUseful to better preserve the linear-ness of image.\n\nCreated in response to \"Calc.\" from PJD X Song Pack.\nVanilla LUTs are neutral already, and this will not cause a big difference.");
-         // DrawResetButton(cb_luma_global_settings.GameSettings.LUTNeutralize, default_luma_global_game_settings.LUTNeutralize, "LUTNeutralize", runtime);
-
-         if (ImGui::SliderFloat("LUT Scaling & Makeup: Multiplier", &cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, 0.8f, 1.0f, "%.4f"))
-            reshade::set_config_value(runtime, NAME, "LUTScalingAndMakeUp", cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on LUT results and the makeup gain (reciprocal) afterwards.\nLower to give LUT lookup just a bit of headroom, increasing saturation from the YCbCr tonemap, which is usable by Per-Channel Blowout.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, default_luma_global_game_settings.LUTScalingAndMakeUp, "LUTScalingAndMakeUp", runtime);
-         
-         ImGui::NewLine(); ///////////
-         
-         {
-            //CUSTOM_PCC_QUALITY
-            bool def = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PCC_QUALITY, "Per-Channel Blowout: Quality", { "Normal (Luminance Revert)", "High (UCS Blend)" }, "Low simply reverts luminance to maintain hue/chrominance change.\nHigh will use UCS to blend to new hue/chrominance.");
-            
-            // //red
-            // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.7f, 1.f));
-            // ImGui::Text("(Extra Extreme Settings! Changing these will shift important hues like skin tones.)");
-            // ImGui::PopStyleColor();
-            //
-            // if (ImGui::SliderFloat("Per-Channel Blowout: Luminance Rolloff Peak", &cb_luma_global_settings.GameSettings.PCBlowoutLumaEnd, 1.f, 5.f, "%.5f"))
-            //    reshade::set_config_value(runtime, NAME, "PCBlowoutLumaEnd", cb_luma_global_settings.GameSettings.PCBlowoutLumaEnd);
-            // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("After upgrade, rolloff luminance to shape input into the per-channel tonemapper.");
-            // DrawResetButton(cb_luma_global_settings.GameSettings.PCBlowoutLumaEnd, default_luma_global_game_settings.PCBlowoutLumaEnd, "PCBlowoutLumaEnd", runtime);
-            //
-            // if (ImGui::SliderFloat("Per-Channel Blowout: Per-Channel Rolloff Clip", &cb_luma_global_settings.GameSettings.PCBlowoutPerChannelClip, 1.f, 20.f, "%.5f"))
-            //    reshade::set_config_value(runtime, NAME, "PCBlowoutPerChannelClip", cb_luma_global_settings.GameSettings.PCBlowoutPerChannelClip);
-            // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Controls the shoulder white clippiness of the per-channel tonemapper.");
-            // DrawResetButton(cb_luma_global_settings.GameSettings.PCBlowoutPerChannelClip, default_luma_global_game_settings.PCBlowoutPerChannelClip, "PCBlowoutPerChannelClip", runtime);
-            //
-            //             
-            // if (ImGui::SliderFloat("Per-Channel Blowout: Per-Channel Rolloff Peak", &cb_luma_global_settings.GameSettings.PCBlowoutPerChannelEnd, 1.f, 5.f, "%.5f"))
-            //    reshade::set_config_value(runtime, NAME, "PCBlowoutPerChannelEnd", cb_luma_global_settings.GameSettings.PCBlowoutPerChannelEnd);
-            // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Controls the peak of the per-channel tonemapper.");
-            // DrawResetButton(cb_luma_global_settings.GameSettings.PCBlowoutPerChannelEnd, default_luma_global_game_settings.PCBlowoutPerChannelEnd, "PCBlowoutPerChannelEnd", runtime);
-            //
-            // if (ImGui::SliderFloat("Per-Channel Blowout 2nd: Start Ratio", &cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndStartRatio, 0.f, 1.f, "%.4f"))
-            //    reshade::set_config_value(runtime, NAME, "PCBlowoutPerChannel2ndStartRatio", cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndStartRatio);
-            // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("A 2nd extremely aggressive pass.\nFrom 0 to peak, when should the shoulder start for the per-channel tonemapper?");
-            // DrawResetButton(cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndStartRatio, default_luma_global_game_settings.PCBlowoutPerChannel2ndStartRatio, "PCBlowoutPerChannel2ndStartRatio", runtime);
-            //
-            // if (ImGui::SliderFloat("Per-Channel Blowout 2nd: Peak", &cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndEnd, 1.f, 6.f, "%.5f"))
-            //    reshade::set_config_value(runtime, NAME, "PCBlowoutPerChannel2ndEnd", cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndEnd);
-            // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("A 2nd extremely aggressive pass.\nThe peak of the per-channel tonemapper.");
-            // DrawResetButton(cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndEnd, default_luma_global_game_settings.PCBlowoutPerChannel2ndEnd, "PCBlowoutPerChannel2ndEnd", runtime);
-
-            ImGui::NewLine(); //////////
-
-            //CUSTOM_PERCHANNELLUMAEMULATE
-            {
-               auto def = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_PERCHANNELLUMAEMULATE, "Per-Channel Luminance Reduction Emulate", "Emulate the luminance loss from LDR per-channel tonemapping on bright single channel colors.");
-            
-               is_disabled = !def;
-               if (is_disabled) ImGui::BeginDisabled(); 
-               {
-                  // cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength
-                  if (ImGui::SliderFloat("Per-Channel Luminance Reduction: Strength", &cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength, 0.f, 1.f, "%.4f"))
-                     reshade::set_config_value(runtime, NAME, "PerChannelLuminanceReductionEmulateStrength", cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength);
-                  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Emulate the luminance loss from LDR per-channel tonemapping on bright single channel colors.");
-                  DrawResetButton(cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength, default_luma_global_game_settings.PerChannelLuminanceReductionEmulateStrength, "PerChannelLuminanceReductionEmulateStrength", runtime);
-               }
-               if (is_disabled) ImGui::EndDisabled();
-            }
-         }
-         
-
-         // ImGui::NewLine(); ///////////
-         //
-         // if (ImGui::SliderFloat("Toe: Strength", &cb_luma_global_settings.GameSettings.SDRTonemapToeStrength, 0.0f, 4.f))
-         //    reshade::set_config_value(runtime, NAME, "SDRTonemapToeStrength", cb_luma_global_settings.GameSettings.SDRTonemapToeStrength);
-         // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Controls the amount of influence of SDR toe (shadows) on HDR luminance.");
-         // DrawResetButton(cb_luma_global_settings.GameSettings.SDRTonemapToeStrength, default_luma_global_game_settings.SDRTonemapToeStrength, "SDRTonemapToeStrength", runtime);
-         //
-         // if (ImGui::SliderFloat("Toe: Low Pass", &cb_luma_global_settings.GameSettings.SDRTonemapToeLowPass, 0.0f, 5.0f))
-         //    reshade::set_config_value(runtime, NAME, "SDRTonemapToeLowPass", cb_luma_global_settings.GameSettings.SDRTonemapToeLowPass);
-         // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Increase to tighten the low pass and target only darker shadows.");
-         // DrawResetButton(cb_luma_global_settings.GameSettings.SDRTonemapToeLowPass, default_luma_global_game_settings.SDRTonemapToeLowPass, "SDRTonemapToeLowPass", runtime);
-      }
-
-      AfterVanillaColorGrade:
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       

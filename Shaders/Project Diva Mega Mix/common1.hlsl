@@ -395,7 +395,74 @@ float3 PerChannelTonemapLuminanceReductionEmulatation(float3 color_upgraded, flo
   //apply
   return color_upgraded * ratio;
 }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+float4 BloomUpsample1(float2 position, Texture2D tex, SamplerState smp, float sizeScale) {
+  uint2 texSize;
+  tex.GetDimensions(texSize.x, texSize.y);
+  float2 pixSize = 1.f / texSize;
+  float2 texcoord = position * pixSize;
 
+  float2 coord_grid = texcoord * (texSize / sizeScale) - 0.5;
+  float2 index = floor(coord_grid);
+  float2 fraction = coord_grid - index;
+  float2 one_frac = 1.0 - fraction;
+  float2 one_frac2 = one_frac * one_frac;
+  float2 fraction2 = fraction * fraction;
+  float2 w0 = 1.0 / 6.0 * one_frac2 * one_frac;
+  float2 w1 = 2.0 / 3.0 - 0.5 * fraction2 * (2.0 - fraction);
+  float2 w2 = 2.0 / 3.0 - 0.5 * one_frac2 * (2.0 - one_frac);
+  float2 w3 = 1.0 / 6.0 * fraction2 * fraction;
+  float2 g0 = w0 + w1;
+  float2 g1 = w2 + w3;
+
+  // h0 = w1/g0 - 1, move from [-0.5, extent-0.5] to [0, extent]
+  float2 h0 = (w1 / g0) - 0.5 + index;
+  float2 h1 = (w3 / g1) + 1.5 + index;
+
+  // fetch the four linear interpolations
+  float4 tex00 = tex.SampleLevel(smp, float2(h0.x, h0.y) * pixSize, 0.0);
+  float4 tex10 = tex.SampleLevel(smp, float2(h1.x, h0.y) * pixSize, 0.0);
+  float4 tex01 = tex.SampleLevel(smp, float2(h0.x, h1.y) * pixSize, 0.0);
+  float4 tex11 = tex.SampleLevel(smp, float2(h1.x, h1.y) * pixSize, 0.0);
+
+  // weigh along the y-direction
+  tex00 = lerp(tex01, tex00, g0.y);
+  tex10 = lerp(tex11, tex10, g0.y);
+
+  // weigh along the x-direction
+  return lerp(tex10, tex00, g0.x);
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+float3 Tonemap_BloomSample(Texture2D<float4> t, SamplerState s, float2 uv) {
+    // uint w;
+    // uint h;
+    // t.GetDimensions(w, h);
+    // float2 pixSize = 1.f / uint2(w, h);
+
+    float3 x = 0;
+
+    // x += t.Sample(s, uv + (pixSize * int2(-1,  0))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 1,  0))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 0,  0))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 0, -1))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 0, 1))).xyz;
+    // x *= (1.f/5.f) * GS.BloomStrength;
+
+    // x += t.Sample(s, uv + (pixSize * int2(-1, -1))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2(-1,  0))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2(-1,  1))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 0, -1))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 0,  0))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 0,  1))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 1, -1))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 1,  0))).xyz;
+    // x += t.Sample(s, uv + (pixSize * int2( 1,  1))).xyz;
+    // x *= (1.f/9.f) * GS.BloomStrength;
+
+    x = t.Sample(s, uv).xyz /* * GS.BloomStrength */;
+
+    return x;
+}
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 float3 Tonemap_SaveSprites_UpgradeSpritesOnly(float3 sprites) {
   #if CUSTOM_TESTSDR == 1

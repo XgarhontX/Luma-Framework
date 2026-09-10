@@ -48,7 +48,8 @@ void main(
   //color + bloom
   r0.xyzw = g_textures_0_.Sample(g_samplers_0__s, v1.xy).xyzw;
 
-  r1.xyz = g_textures_1_.Sample(g_samplers_1__s, v1.zw).xyz * GS.BloomStrength;
+  // r1.xyz = g_textures_1_.Sample(g_samplers_1__s, v1.zw).xyz * GS.BloomStrength;
+    r1.xyz = Tonemap_BloomSample(g_textures_1_, g_samplers_1__s, v1.zw);
 
   r1.w = cmp(0 < v3.z);
   r1.xyz = r1.xyz + r0.xyz;
