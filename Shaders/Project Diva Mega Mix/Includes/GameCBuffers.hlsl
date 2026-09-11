@@ -51,7 +51,6 @@ namespace CB
       float TonemapperPeakCached;
       float TonemapperMaxExpectedCached;
       float TonemapHDRStops;
-      float BloomStrength;
       float AAMultiplier;
       float PerChannelLuminanceReductionEmulateStrength;
 
@@ -62,6 +61,9 @@ namespace CB
 
       // float SDRTonemapToeStrength;
       // float SDRTonemapToeLowPass;
+
+      float4 BloomStrengths;
+      float BloomStrength;
 
       float LUTScalingAndMakeUp;
       float LUTGaussianBlurStep;

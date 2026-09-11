@@ -337,7 +337,6 @@ void XeGTAO_PrefilterDepths16x16CS(uint2 dispatchThreadID, uint2 groupThreadID, 
     float depth3 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.y));
 #else
     // basically skip original mip0
-
     // float2 pixSize = consts.ViewportPixelSize;
     // #if XEGTAO_MANUALSIZE == 1
     //     pixSize *= 2;

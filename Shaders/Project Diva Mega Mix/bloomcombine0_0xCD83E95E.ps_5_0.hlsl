@@ -72,19 +72,18 @@ void main(
     r0.xyz = r1.xyz + r0.xyz;
     r1.xyz = g_textures_3_.Sample(g_sampler_s, v2.zw).xyz;
     r0.xyz = r1.xyz + r0.xyz;
-    r0.xyz = g_color.www * r0.xyz;
+    r0.xyz = (g_color.w * GS.BloomStrengths.w) * r0.xyz;
     
     r1.xyzw = g_textures_0_.Sample(g_sampler_s, v3.xy).xyzw;
-    r1.xyz = g_color.xxx * r1.xyz;
+    r1.xyz = (g_color.x * GS.BloomStrengths.x) * r1.xyz;
     o0.w = r1.w;
 
     r0.xyz = r0.xyz * float3(0.25,0.25,0.25) + r1.xyz;
     
     r1.xyz = g_textures_1_.Sample(g_sampler_s, v3.xy).xyz;
-    r0.xyz = r1.xyz * g_color.yyy + r0.xyz;
-
+    r0.xyz = r1.xyz * (g_color.y * GS.BloomStrengths.y) + r0.xyz;
     r1.xyz = g_textures_2_.Sample(g_sampler_s, v3.xy).xyz;
-    o0.xyz = r1.xyz * g_color.zzz + r0.xyz;
+    o0.xyz = r1.xyz * (g_color.z * GS.BloomStrengths.z) + r0.xyz; 
 // #else
 //     uint2 texSize1; 
 //     g_textures_1_.GetDimensions(texSize1.x, texSize1.y);

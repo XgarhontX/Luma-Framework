@@ -24,33 +24,6 @@ cbuffer Quad : register(b0)
 SamplerState smp : register(s0);
 Texture2D tex : register(t0);
 
-// User configurable
-//
-
-// Allows you to define a custom threshold funcion that takes one float3 argument (color).
-#ifndef LUMA_BLOOM_THRESHOLD_FUNCTION
-#define LUMA_BLOOM_THRESHOLD_FUNCTION(color) quadratic_threshold(color)
-#endif
-
-// Only used in the default threshold function. 
-#ifndef LUMA_BLOOM_THRESHOLD
-#define LUMA_BLOOM_THRESHOLD 1.0
-#endif
-
-// Only used in the default threshold function.
-#ifndef LUMA_BLOOM_SOFT_KNEE
-#define LUMA_BLOOM_SOFT_KNEE 1.0
-#endif
-
-#ifndef LUMA_BLOOM_TINT
-#define LUMA_BLOOM_TINT float3(1.0, 1.0, 1.0)
-#endif
-
-#ifndef LUMA_BLOOM_SCALE
-#define LUMA_BLOOM_SCALE 1.0
-#endif
-
-//
 
 // Fullscreen triangle VS.
 void bloom_main_vs(uint vid : SV_VertexID, out float4 pos : SV_Position, out float2 texcoord : TEXCOORD)
@@ -59,6 +32,9 @@ void bloom_main_vs(uint vid : SV_VertexID, out float4 pos : SV_Position, out flo
     pos = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 }
 
+
+#define LUMA_BLOOM_THRESHOLD 1.0
+#define LUMA_BLOOM_SOFT_KNEE 1.0
 float3 quadratic_threshold(float3 color)
 {
     const float epsilon = 1e-6;
@@ -97,6 +73,7 @@ float4 bloom_prefilter_ps(float4 pos : SV_Position, float2 texcoord : TEXCOORD) 
 
     for (float i = 1.0 - radius; i <= radius; ++i) {
         const float weight = get_gaussian_weight(i - f, SUGMA);
+        // csum += tex.SampleLevel(smp, tc + i * inv_src_size * axis, 0.0).rgb * weight;
         csum += tex.SampleLevel(smp, tc + i * inv_src_size * axis, 0.0).rgb * weight;
         wsum += weight;
     }
@@ -105,15 +82,18 @@ float4 bloom_prefilter_ps(float4 pos : SV_Position, float2 texcoord : TEXCOORD) 
     csum *= rcp(wsum);
 
     // Apply threshold.
-    float3 color = /* LUMA_BLOOM_THRESHOLD_FUNCTION */(csum);
+    float3 color = /* quadratic_threshold */(csum);
 
-    // // Apply tint.
-    // const float luma = GetLuminance(color);
-    // color *= LUMA_BLOOM_TINT;
-    // color *= luma * rcp(max(1e-6, GetLuminance(color)));
+    // boost
+    // float y = GetLuminance(color);
+    // float y1 = y;
+    // y1 = RenoDX_Shadows(y1, DVS1, DVS2);
+    // y1 *= DVS3;
+    // color *= safeDivision(y1, y, 0);
+    // color *= 1.053;
+    // color *= 1.088;
 
-    color *= LUMA_BLOOM_SCALE;
-
+    // Threshold
     color -= g_color.xyz;
     color = max(0, color);
 
@@ -196,7 +176,7 @@ Texture2D<float4> g_textures_2_ : register(t2); // 64x36   (1/4)
 Texture2D<float4> g_textures_3_ : register(t3); // 32x18   (1/8)
 // out: 255x144
 
-float3 BloomUpsample2(Texture2D tex, SamplerState smp, float2 texcoord, float2 texSize, float2 pixSize) {
+float4 BloomUpsample2(Texture2D tex, SamplerState smp, float2 texcoord, float2 texSize, float2 pixSize) {
   float2 coord_grid = texcoord * texSize - 0.5;
   float2 index = floor(coord_grid);
   float2 fraction = coord_grid - index;
@@ -215,10 +195,10 @@ float3 BloomUpsample2(Texture2D tex, SamplerState smp, float2 texcoord, float2 t
   float2 h1 = (w3 / g1) + 1.5 + index;
 
   // fetch the four linear interpolations
-  float3 tex00 = tex.SampleLevel(smp, float2(h0.x, h0.y) * pixSize, 0.0).xyz;
-  float3 tex10 = tex.SampleLevel(smp, float2(h1.x, h0.y) * pixSize, 0.0).xyz;
-  float3 tex01 = tex.SampleLevel(smp, float2(h0.x, h1.y) * pixSize, 0.0).xyz;
-  float3 tex11 = tex.SampleLevel(smp, float2(h1.x, h1.y) * pixSize, 0.0).xyz;
+  float4 tex00 = tex.SampleLevel(smp, float2(h0.x, h0.y) * pixSize, 0.0).xyzw;
+  float4 tex10 = tex.SampleLevel(smp, float2(h1.x, h0.y) * pixSize, 0.0).xyzw;
+  float4 tex01 = tex.SampleLevel(smp, float2(h0.x, h1.y) * pixSize, 0.0).xyzw;
+  float4 tex11 = tex.SampleLevel(smp, float2(h1.x, h1.y) * pixSize, 0.0).xyzw;
 
   // weigh along the y-direction
   tex00 = lerp(tex01, tex00, g0.y);
@@ -240,25 +220,48 @@ void bloom_combine_ps(
   float4 fDest;
   o0.w = 1;
 
-  uint2 texSize1; 
-  g_textures_1_.GetDimensions(texSize1.x, texSize1.y);
+//   uint2 texSize1; 
+//   g_textures_1_.GetDimensions(texSize1.x, texSize1.y);
+//   float2 texSize2 = texSize1 * 0.5f;
+//   float2 texSize3 = texSize2 * 0.5f;
+// 
+//   float2 pixSize1 = rcp(texSize1);
+//   float2 pixSize2 = rcp(texSize2);
+//   float2 pixSize3 = rcp(texSize3);
+// 
+//   float4 b0 = g_textures_0_.Sample(g_sampler_s, v3.xy).xyzw; 
+//   float3 b1 = BloomUpsample2(g_textures_1_, g_sampler_s, v3.xy, texSize1, pixSize1);
+//   float3 b2 = BloomUpsample2(g_textures_2_, g_sampler_s, v3.xy, texSize2, pixSize2);
+//   float3 b3 = BloomUpsample2(g_textures_3_, g_sampler_s, v3.xy, texSize3, pixSize3);
+
+  // float4 b0 = g_textures_0_.Sample(g_sampler_s, v3.xy).xyzw;
+  // float3 b1 = g_textures_1_.Sample(g_sampler_s, v3.xy).xyz;
+  // float3 b2 = g_textures_2_.Sample(g_sampler_s, v3.xy).xyz;
+  // float3 b3 = g_textures_3_.Sample(g_sampler_s, v3.xy).xyz;
+
+  uint2 texSize0; 
+  g_textures_0_.GetDimensions(texSize0.x, texSize0.y);
+  float2 texSize1 = texSize0 * 0.5f;
   float2 texSize2 = texSize1 * 0.5f;
   float2 texSize3 = texSize2 * 0.5f;
 
+  float2 pixSize0 = rcp(texSize0);
   float2 pixSize1 = rcp(texSize1);
   float2 pixSize2 = rcp(texSize2);
   float2 pixSize3 = rcp(texSize3);
 
-  float4 b0 = g_textures_0_.SampleLevel(g_sampler_s, v3.xy, 0).xyzw; 
-  float3 b1 = BloomUpsample2(g_textures_1_, g_sampler_s, v3.xy, texSize1, pixSize1);
-  float3 b2 = BloomUpsample2(g_textures_2_, g_sampler_s, v3.xy, texSize2, pixSize2);
-  float3 b3 = BloomUpsample2(g_textures_3_, g_sampler_s, v3.xy, texSize3, pixSize3);
+  float4 b0 = BloomUpsample2(g_textures_0_, g_sampler_s, v3.xy, texSize0, pixSize0).xyzw;
+  float3 b1 = BloomUpsample2(g_textures_1_, g_sampler_s, v3.xy, texSize1, pixSize1).xyz;
+  float3 b2 = BloomUpsample2(g_textures_2_, g_sampler_s, v3.xy, texSize2, pixSize2).xyz;
+  float3 b3 = BloomUpsample2(g_textures_3_, g_sampler_s, v3.xy, texSize3, pixSize3).xyz;
 
   o0.w = b0.w;
-  o0.xyz =  b0.xyz * g_color.x;
-  o0.xyz += b1.xyz * g_color.y;
-  o0.xyz += b2.xyz * g_color.z;
-  o0.xyz += b3.xyz * g_color.w;
+  o0.xyz =  b0.xyz * (g_color.x * GS.BloomStrengths.x * /* DVS1 */ 1.320);
+  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y * /* DVS2 */ 1.330);
+  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z * /* DVS3 */ 1.335);
+  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w * /* DVS4 */ 1.340);
+
+//   o0 = b0; //debug
 
   o0.xyz *= GS.BloomStrength;
 

@@ -2011,54 +2011,76 @@ namespace Bloom
       bool enabled = false;
 
    constexpr const char* reshadesave_sigma = "BloomSigma";
-   constexpr float sigma_def = 1.26f;
+   constexpr float sigma_def = 0.5f;
       float sigma = sigma_def;
 
+   constexpr const char* reshadesave_sigma_increase = "BloomSigmaIncrease";
+   constexpr float sigma_increase_def = 0.5f;
+      float sigma_increase = sigma_increase_def;
+   
    constexpr const char* Bloom_Combine_PS = "Bloom Combine PS";
-
+   
    enum State : uint8_t
    {
-      // Unknown, // start
-      Downsample0, // 0x68722F15
+      Downsample0, // 0x68722F15 (can be multiple times)
       Downsample1, // 0x41C419EE
       // Downsample2, // 0x68722F15
       // Downsample3, // 0x68722F15
       // Downsample4, // 0x68722F15
       // Downsample5, // 0x543E9A5B
       BloomDown0, // 0x7B4E4533
-      // BloomDown1, // 0x7B4E4533
-      // BloomDown2, // 0x7B4E4533
-      // BloomDown3, // 0x7B4E4533
-      // BloomDown4, // 0x7B4E4533
-      // BloomDown5, // 0x7B4E4533
+      BloomDown1, // 0x7B4E4533
+      BloomDown2, // 0x7B4E4533
+      BloomDown3, // 0x7B4E4533
+      BloomDown4, // 0x7B4E4533
+      BloomDown5, // 0x7B4E4533
       BloomBlur0, // 0x466D68A8
       BloomCombine, // 0xCD83E95E
       // AutoExposure0, // 0xA58C1868
       // AutoExposure1, // 0xDF1AC023
       Tonemap,
       Done,
+
+      // Downsample0, // 0x68722F15 (can be multiple times)
+      // Downsample1, // 0x41C419EE
+      // BloomBlurring, // 0x7B4E4533
+      // BloomCombine, // 0xCD83E95E
+      // Tonemap,
+      // Done,
    };
    State state = Downsample0; // denotes which shader is being drawn next.
       
-   constexpr int nmips = 3; // downsample mips for bloom
 
    namespace Resources
    {
+      int nmips = 0;
+
       uint2 size_full = { 0, 0 };
       uint2 size_down0 = { 0, 0 };
       
       ComPtr<ID3D11ShaderResourceView> orig_full_srv = nullptr;
 
-      std::vector<ID3D11RenderTargetView*> rtv_mips_x(nmips); // width is one level higher than height
-      std::vector<ID3D11ShaderResourceView*> srv_mips_x(nmips);
+      std::vector<ID3D11RenderTargetView*> rtv_mips_x(10); // width is one level higher than height
+      std::vector<ID3D11ShaderResourceView*> srv_mips_x(10);
       
-      std::vector<ID3D11RenderTargetView*> rtv_mips_y(nmips); // also used as bloom upsample outputs
-      std::vector<ID3D11ShaderResourceView*> srv_mips_y(nmips);
+      std::vector<ID3D11RenderTargetView*> rtv_mips_y(10); // also used as bloom upsample outputs
+      std::vector<ID3D11ShaderResourceView*> srv_mips_y(10);
       
       ComPtr<ID3D11RenderTargetView> rtv_mip0 = nullptr; // for whatever reason where we need 2nd buffer to alternate
       ComPtr<ID3D11ShaderResourceView> srv_mip0 = nullptr;
 
       // bool IsValid() { return rtv_mips_x[0]; }
+
+      void ResetAndResizeVectorsToCurrentMips()
+      {
+         ResetCOMArray(rtv_mips_x);
+         ResetCOMArray(srv_mips_x);
+         ResetCOMArray(rtv_mips_y);
+         ResetCOMArray(srv_mips_y);
+         
+         // rtv_mips_x.resize(nmips);
+         // srv_mips_x.resize(nmips);
+      }
 
       void Reset()
       {
@@ -2068,6 +2090,7 @@ namespace Bloom
          ResetCOMArray(srv_mips_y);
          rtv_mip0.reset();
          srv_mip0.reset();
+         nmips = 0;
       }
    }
 
@@ -2083,6 +2106,8 @@ namespace Bloom
          {
             // SRV0 is full res
             // RTV0 is 0.5x downsampled
+
+            // wait until shader
             if (ps != 0x68722F15) break;
             
             // SRV0 orig_full_srv
@@ -2094,14 +2119,12 @@ namespace Bloom
          }
          case Downsample1:
          {
-            // SRV0 is 0.5x downsampled
-            // RTV0 is forced 256x144 downsampled
-            if (ps != 0x41C419EE)
-            {
-               state = Done;
-               break;
-            }
-
+            // SRV0 is downsampled
+            // RTV0 is forced 255x144
+            
+            // wait until shader
+            if (ps != 0x41C419EE) break;
+            
             // Draw Bloom
             {
                // constexpr float sigmas[nmips] = { 1.46f, 1.f, 1.f };
@@ -2145,7 +2168,7 @@ namespace Bloom
                std::array<ID3D11RenderTargetView*, 1> rtvs_original = {};
                ComPtr<ID3D11DepthStencilView> dsv_original;
                native_device_context->OMGetRenderTargets(rtvs_original.size(), rtvs_original.data(), dsv_original.put());
-            
+               
                // Get the scene resource and texture description from the SRV.
                static UINT scene_width   = 0;
                static UINT scene_height  = 0;
@@ -2154,7 +2177,7 @@ namespace Bloom
                static UINT y_mip0_width  = 0;
                static UINT y_mip0_height = 0;
                   
-               [[unlikely]] if (!Resources::rtv_mips_y[0])
+               [[unlikely]] if (Resources::nmips == 0)
                {
                   // Setup
                   D3D11_TEXTURE2D_DESC tex_desc;
@@ -2162,9 +2185,10 @@ namespace Bloom
                   ComPtr<ID3D11Resource> resource;
                   
                   Resources::orig_full_srv->GetResource(resource.put());
-                  ensure(resource->QueryInterface(tex.put()), >= 0);
+                  ASSERT_MSG(SUCCEEDED(resource->QueryInterface(tex.put())), "Bloom resource->QueryInterface(tex) failed");
                   tex->GetDesc(&tex_desc);
-            
+
+                  // size calc (TODO: merge with below, but honestly whatever)
                   scene_width  = tex_desc.Width;
                   scene_height = tex_desc.Height;
                
@@ -2176,11 +2200,24 @@ namespace Bloom
                
                   Resources::size_full = { scene_width, scene_height }; // for outside use
                   Resources::size_down0 = { y_mip0_width, y_mip0_height };
-               
+
+                  // while loop to find when x <= 32 and resize nmips
+                  Resources::nmips = 0;
+                  {
+                     uint w = y_mip0_width;
+                     while (w > 33)
+                     {
+                        w /= 2;
+                        Resources::nmips++;
+                     }
+                     Resources::nmips = std::clamp(Resources::nmips, 4, static_cast<int>(Resources::rtv_mips_x.size()));
+                  }
+                  Resources::ResetAndResizeVectorsToCurrentMips();
+                  
                   // Create Y MIPs and views.
                   tex_desc.Width = y_mip0_width;
                   tex_desc.Height = y_mip0_height;
-                  tex_desc.MipLevels = nmips;
+                  tex_desc.MipLevels = Resources::nmips;
                   tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
                   tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
                   auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
@@ -2195,7 +2232,7 @@ namespace Bloom
                   srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                   srv_desc.Texture2D.MipLevels = 1;
             
-                  for (int i = 0; i < nmips; ++i)
+                  for (int i = 0; i < Resources::nmips; ++i)
                   {
                      rtv_desc.Texture2D.MipSlice = i;
                      auto hr1 = native_device->CreateRenderTargetView(tex.get(), &rtv_desc, &Resources::rtv_mips_y[i]);
@@ -2228,7 +2265,7 @@ namespace Bloom
                   ASSERT_MSG(SUCCEEDED(hr8), "Bloom hr8");
             
                   // Create rest of X MIPs and views.
-                  for (UINT i = 1; i < nmips; ++i)
+                  for (UINT i = 1; i < Resources::nmips; ++i)
                   {
                      tex_desc.Width = max(1u, x_mip0_width >> i);
                      tex_desc.Height = max(1u, x_mip0_height >> i);
@@ -2279,7 +2316,7 @@ namespace Bloom
                cb_data.src_size = float2(scene_width, scene_height);
                cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
                cb_data.axis = float2(1.0f, 0.0f);
-               cb_data.sigma = sigma/*sigmas[0]*/;
+               cb_data.sigma = sigma;
                update_constant_buffer();
             
                // Bindings.
@@ -2297,7 +2334,7 @@ namespace Bloom
                // Draw X pass.
                native_device_context->Draw(3, 0);
             
-               std::vector<D3D11_VIEWPORT> viewports_y(nmips);
+               std::vector<D3D11_VIEWPORT> viewports_y(Resources::nmips);
                viewports_y[0].Width = y_mip0_width;
                viewports_y[0].Height = y_mip0_height;
             
@@ -2324,7 +2361,7 @@ namespace Bloom
                native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Downsample PS"_h).get(), nullptr, 0);
             
                // Render downsample passes.
-               for (UINT i = 1; i < nmips; ++i)
+               for (UINT i = 1; i < Resources::nmips; ++i)
                {
                   viewport_x.Width = max(1u, x_mip0_width >> i);
                   viewport_x.Height = max(1u, x_mip0_height >> i);
@@ -2333,7 +2370,7 @@ namespace Bloom
                   cb_data.src_size = float2(viewports_y[i - 1].Width, viewports_y[i - 1].Height);
                   cb_data.axis = float2(1.0f, 0.0f);
                   cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
-                  cb_data.sigma = sigma/*sigmas[i]*/;
+                  cb_data.sigma += sigma_increase;
                   update_constant_buffer();
             
                   // Bindings.
@@ -2378,24 +2415,27 @@ namespace Bloom
                   ensure(native_device->CreateBlendState(&blend_desc, managed_resources.blends["luma_bloom_blend"_h].put()), >= 0);
                }
                
-               for (int i = nmips - 1; i > 0; --i)
-               {
-                  // If both dst and src are D3D10_BLEND_BLEND_FACTOR
-                  // factor of 0.5 will be enegrgy preserving.
-                  static constexpr FLOAT blend_factor[] = { 0.5f, 0.5f, 0.5f, 0.0f };
-            
-                  // Update CB.
-                  cb_data.src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
-                  cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
-                  update_constant_buffer();
-            
-                  native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i - 1], nullptr);
-                  native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i]);
-                  native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
-                  native_device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
-            
-                  native_device_context->Draw(3, 0);
-               }
+
+               // // upsample 4 mips up
+               // // for (int i = Resources::nmips - 1; i > 0; --i)
+               // for (int i = Resources::nmips - 1; i > Resources::nmips - 1 - 4; --i)
+               // {
+               //    // If both dst and src are D3D10_BLEND_BLEND_FACTOR
+               //    // factor of 0.5 will be enegrgy preserving.
+               //    static constexpr FLOAT blend_factor[] = { 0.5f, 0.5f, 0.5f, 0.0f };
+               //
+               //    // Update CB.
+               //    cb_data.src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
+               //    cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+               //    update_constant_buffer();
+               //
+               //    native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i - 1], nullptr);
+               //    native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i]);
+               //    native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
+               //    native_device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
+               //
+               //    native_device_context->Draw(3, 0);
+               // }
             
                //
             
@@ -2429,85 +2469,92 @@ namespace Bloom
                // LumaCallbacks::on_destroy_device.try_emplace("luma_bloom"_h, reset_mips);
                // LumaCallbacks::on_init_swapchain.try_emplace("luma_bloom"_h, reset_mips);
             }
-
-            // debug: set SRV1 as our new bloom output
-            if (DEVELOPMENT) native_device_context->PSSetShaderResources(1, 1, &Resources::srv_mips_y[0]);
             
             // next state
-            state = /*Downsample2*/ BloomDown0;
-            // return DrawOrDispatchOverrideType::Replaced; // skip, already done.
+            state = BloomDown0;
             break;
          }
-         // case Downsample2:
-         //    if (ps != 0x68722F15) state = Done; break;
-         // case Downsample3:
-         //    if (ps != 0x68722F15) state = Done; break;
-         // case Downsample4:
-         //    if (ps != 0x68722F15) state = Done; break;
-         // case Downsample5:
-         //    if (ps != 0x543E9A5B) state = Done; break;
          case BloomDown0:
          {
-            if (ps != 0x7B4E4533)
-            {
-               // state = Done;
-               break;
-            }
+            // wait until shader
+            if (ps != 0x7B4E4533) break;
 
-            // set SRV0 as out new bloom output
-            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[nmips - 1]);
+            // SRV0 set to 3rd last mip
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 3]);
+
+            // skip to next
+            state = BloomDown1;
+            break;
+         }
+         case BloomDown1:
+         {
+            // wait until shader
+            if (ps != 0x7B4E4533) break;
+
+            // SRV0 set to 2nd last mip
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 2]);
+
+            // skip to next
+            state = BloomDown2;
+            break;
+         }
+         case BloomDown2:
+         {
+            // wait until shader
+            if (ps != 0x7B4E4533) break;
+            
+            // SRV0 set to last mip
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 1]);
+            
+            // skip to next
+            state = BloomDown3;
+            break;
+         }
+         case BloomDown3:
+         {
+            // wait until shader
+            if (ps != 0x7B4E4533) break;
+
+            // skip to next
+            state = BloomDown4;
+            break;
+         }
+         case BloomDown4:
+         {
+            // wait until shader
+            if (ps != 0x7B4E4533) break;
+
+            state = BloomDown5;
+            break;
+         }
+         case BloomDown5:
+         {
+            // wait until shader
+            if (ps != 0x7B4E4533) break;
 
             state = BloomBlur0;
             break;
          }
-         // case BloomDown1:
-         //    if (ps != 0x7B4E4533) state = Done; break;
-         // case BloomDown2:
-         //    if (ps != 0x7B4E4533) state = Done; break;
-         // case BloomDown3:
-         //    if (ps != 0x7B4E4533) state = Done; break;
-         // case BloomDown4:
-         //    if (ps != 0x7B4E4533) state = Done; break;
-         // case BloomDown5:
-         //    if (ps != 0x7B4E4533) state = Done; break;
          case BloomBlur0:
          {
-            if (ps != 0x466D68A8)
-            {
-               // state = Done;
-               break;
-            }
+            // wait until shader
+            if (ps != 0x466D68A8) break;
 
-            // // set SRV0 as out new bloom output
-            // native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[0]);
-            //
-            // // set RTV0 as our buffer
-            // native_device_context->OMSetRenderTargets(1, &Resources::rtv_mip0[0], nullptr);
-            //
-            // // viewport to size of mip0
-            // D3D11_VIEWPORT viewport;
-            // viewport.TopLeftX = 0;
-            // viewport.TopLeftY = 0;
-            // viewport.Width = Resources::size_down0.x;
-            // viewport.Height = Resources::size_down0.y;
-            // viewport.MinDepth = 0;
-            // viewport.MaxDepth = 1;
-            // native_device_context->RSSetViewports(1, &viewport);
-            
+            // SRV0 set to 4rd last mip
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 4]);
+
             state = BloomCombine;
-            return DrawOrDispatchOverrideType::Skip; // redundant to blur again
+            break;
          }
          case BloomCombine:
          {
-            if (ps != 0xCD83E95E)
-            {
-               // state = Done;
-               break;
-            }
-
-            // set SRV0 as out new bloom output
-            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[0]);
-
+            // skip until shader
+            if (ps != 0xCD83E95E) return DrawOrDispatchOverrideType::Skip;
+            
+            // SRV 0-3 are last 4 mip levels of bloom, descending order (0 is largest, 3 is smallest)
+            // const std::array<ID3D11ShaderResourceView*, 4> bloom_srvs = { Resources::srv_mips_y[Resources::nmips - 1 - 3], Resources::srv_mips_y[Resources::nmips - 1 - 2], Resources::srv_mips_y[Resources::nmips - 1 - 1], Resources::srv_mips_y[Resources::nmips - 1 - 0] };
+            // native_device_context->PSSetShaderResources(0, bloom_srvs.size(), bloom_srvs.data());
+            
             // set RTV0 as our buffer
             native_device_context->OMSetRenderTargets(1, &Resources::rtv_mip0, nullptr);
 
@@ -2601,6 +2648,7 @@ public:
       // GameSettings default
       // default_luma_global_game_settings.TonemapperRolloffStart = cb_luma_global_settings.GameSettings.TonemapperRolloffStart = 36.f;
       default_luma_global_game_settings.BloomStrength = cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
+      default_luma_global_game_settings.BloomStrengths = cb_luma_global_settings.GameSettings.BloomStrengths = float4(1.f, 1.f, 1.f, 1.f);
       default_luma_global_game_settings.AAMultiplier = cb_luma_global_settings.GameSettings.AAMultiplier = 2.f;
       default_luma_global_game_settings.PerChannelLuminanceReductionEmulateStrength = cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength = 0.25f;
       
@@ -2997,6 +3045,10 @@ public:
       //Load custom settings
       reshade::get_config_value(runtime, NAME, "TonemapperMaxExpected", CachedCB::white_clip/*cb_luma_global_settings.GameSettings.TonemapperMaxExpected*/);
       reshade::get_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+      reshade::get_config_value(runtime, NAME, "BloomStrengthsX", cb_luma_global_settings.GameSettings.BloomStrengths.x);
+      reshade::get_config_value(runtime, NAME, "BloomStrengthsY", cb_luma_global_settings.GameSettings.BloomStrengths.y);
+      reshade::get_config_value(runtime, NAME, "BloomStrengthsZ", cb_luma_global_settings.GameSettings.BloomStrengths.z);
+      reshade::get_config_value(runtime, NAME, "BloomStrengthsW", cb_luma_global_settings.GameSettings.BloomStrengths.w);
       reshade::get_config_value(runtime, NAME, "AAMultiplier", cb_luma_global_settings.GameSettings.AAMultiplier);
       reshade::get_config_value(runtime, NAME, "PerChannelLuminanceReductionEmulateStrength", cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength);
       
@@ -3439,26 +3491,63 @@ public:
       ImGui::PushID("###Bloom");
       if (DrawCollapsingHeaderEnabledColored("Bloom", Bloom::enabled))
       {
-         DrawColoredSubHeader("Bloom Customization");
+         DrawColoredSubHeader("Bloom Alternative High Quality Blurring");
 
-         if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom strength.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
-
-         if (ImGui::Checkbox("Higher Quality", &Bloom::enabled))
+         if (ImGui::Checkbox("Enable", &Bloom::enabled))
+         {
             reshade::set_config_value(runtime, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Help reduce flickering and blockiness by using gaussian blur to downsample and better upsample filtering.\nThere's slight inefficiency decoupling from Auto-Exposure downsampling.");
-         DrawResetButton(Bloom::enabled, false, Bloom::reshadesave_enabled, runtime);
+            if (!Bloom::enabled) Bloom::HardReset();
+         }
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Help reduce flickering and blockiness by using gaussian blur to downsample.\nThere's slight inefficiency decoupling from Auto-Exposure downsampling.\nThis will not look 100%% the same to vanilla due to the new blur weights.");
 
          if (!Bloom::enabled) ImGui::BeginDisabled();
-         if (ImGui::SliderFloat("Bloom Gaussian Sigma", &Bloom::sigma, 0.5f, 3.f))
-            reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur.\nHigher = more blur, where minor highlights are ignored, but more cost as texture sampling count increases.");
-         DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
+         {
+            if (ImGui::SliderFloat("Gaussian Sigma", &Bloom::sigma, 0.1f, 2.f))
+               reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur, where higher = more blur.\nIncreasing will suppresses tiny highlights that cause bloom flickering, but also cost a bit of performance as texture sampling count increases.");
+            DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
+
+            if (ImGui::SliderFloat("Gaussian Sigma Increase", &Bloom::sigma_increase, 0.f, 1.f))
+               reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma_increase, Bloom::sigma_increase);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Additional sigma increase per deeper mipmap level.");
+            DrawResetButton(Bloom::sigma_increase, Bloom::sigma_increase_def, Bloom::reshadesave_sigma_increase, runtime);
+         }
          if (!Bloom::enabled) ImGui::EndDisabled();
          
+         if (Bloom::enabled && GlobalsMegaMix::UIIsAdvanced)
+         {
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Mipmap Levels: %d", Bloom::Resources::nmips);
+         }
+
          ImGui::NewLine();
+         
+         DrawColoredSubHeader("Bloom Multipliers");
+
+         // BloomStrengths float4
+         if (ImGui::SliderFloat("Level 0", &cb_luma_global_settings.GameSettings.BloomStrengths.x, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "BloomStrengthsX", cb_luma_global_settings.GameSettings.BloomStrengths.x);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 0 Strength: Tightest blur level/radius.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.x, default_luma_global_game_settings.BloomStrengths.x, "BloomStrengthsX", runtime);
+         
+         if (ImGui::SliderFloat("Level 1", &cb_luma_global_settings.GameSettings.BloomStrengths.y, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "BloomStrengthsY", cb_luma_global_settings.GameSettings.BloomStrengths.y);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 1 Strength: Medium blur level/radius.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.y, default_luma_global_game_settings.BloomStrengths.y, "BloomStrengthsY", runtime);
+         
+         if (ImGui::SliderFloat("Level 2", &cb_luma_global_settings.GameSettings.BloomStrengths.z, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "BloomStrengthsZ", cb_luma_global_settings.GameSettings.BloomStrengths.z);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 2 Strength: Wide blur level/radius.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.z, default_luma_global_game_settings.BloomStrengths.z, "BloomStrengthsZ", runtime);
+         
+         if (ImGui::SliderFloat("Level 3", &cb_luma_global_settings.GameSettings.BloomStrengths.w, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "BloomStrengthsW", cb_luma_global_settings.GameSettings.BloomStrengths.w);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 3 Strength: Widest blur level/radius.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.w, default_luma_global_game_settings.BloomStrengths.w, "BloomStrengthsW", runtime);
+
+         if (ImGui::SliderFloat("Final", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom final multiplier.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
       }
       ImGui::PopID();
       
