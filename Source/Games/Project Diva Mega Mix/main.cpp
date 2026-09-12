@@ -1992,7 +1992,7 @@ namespace SSS
       
       return DrawOrDispatchOverrideType::None;
    }
-      
+   
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
       reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
@@ -2015,7 +2015,7 @@ namespace Bloom
       float sigma = sigma_def;
 
    constexpr const char* reshadesave_sigma_increase = "BloomSigmaIncrease";
-   constexpr float sigma_increase_def = 0.5f;
+   constexpr float sigma_increase_def = 0.46f;
       float sigma_increase = sigma_increase_def;
    
    constexpr const char* Bloom_Combine_PS = "Bloom Combine PS";
@@ -2049,8 +2049,7 @@ namespace Bloom
       // Done,
    };
    State state = Downsample0; // denotes which shader is being drawn next.
-      
-
+   
    namespace Resources
    {
       int nmips = 0;
@@ -2099,7 +2098,7 @@ namespace Bloom
    {
       if (!enabled) return DrawOrDispatchOverrideType::None;
       if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
-
+      
       switch (state)
       {
          case Downsample0:
@@ -2185,7 +2184,8 @@ namespace Bloom
                   ComPtr<ID3D11Resource> resource;
                   
                   Resources::orig_full_srv->GetResource(resource.put());
-                  ASSERT_MSG(SUCCEEDED(resource->QueryInterface(tex.put())), "Bloom resource->QueryInterface(tex) failed");
+                  auto hr = resource->QueryInterface(tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr), "Bloom resource->QueryInterface(tex) failed");
                   tex->GetDesc(&tex_desc);
 
                   // size calc (TODO: merge with below, but honestly whatever)
@@ -2201,6 +2201,8 @@ namespace Bloom
                   Resources::size_full = { scene_width, scene_height }; // for outside use
                   Resources::size_down0 = { y_mip0_width, y_mip0_height };
 
+                  reshade::log::message(reshade::log::level::info, std::format("Bloom: scene size {}x{}, downsample0 size {}x{}, x_mip0 size {}x{}, y_mip0 size {}x{}", scene_width, scene_height, Resources::size_down0.x, Resources::size_down0.y, x_mip0_width, x_mip0_height, y_mip0_width, y_mip0_height).c_str());
+
                   // while loop to find when x <= 32 and resize nmips
                   Resources::nmips = 0;
                   {
@@ -2213,6 +2215,8 @@ namespace Bloom
                      Resources::nmips = std::clamp(Resources::nmips, 4, static_cast<int>(Resources::rtv_mips_x.size()));
                   }
                   Resources::ResetAndResizeVectorsToCurrentMips();
+
+                  reshade::log::message(reshade::log::level::info, std::format("Bloom: mips {}", Resources::nmips).c_str());
                   
                   // Create Y MIPs and views.
                   tex_desc.Width = y_mip0_width;
@@ -2276,6 +2280,8 @@ namespace Bloom
                      auto hr11 = native_device->CreateShaderResourceView(tex.get(), nullptr, &Resources::srv_mips_x[i]);
                      ASSERT_MSG(SUCCEEDED(hr11), "Bloom hr11");
                   }
+
+                  reshade::log::message(reshade::log::level::info, std::format("Bloom: created textures and views for {} mips", Resources::nmips).c_str());
                }
             
                // Create bloom CB.
@@ -2290,6 +2296,7 @@ namespace Bloom
                   buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
                   auto hr = native_device->CreateBuffer(&buffer_desc, nullptr, managed_resources.buffers["luma_bloom_cb"_h].put());
                   ASSERT_MSG(SUCCEEDED(hr), "Bloom hr bloom_cb");
+                  reshade::log::message(reshade::log::level::info, "Bloom: created constant buffer");
                }
             
                CBLumaBloomData cb_data;
@@ -2474,13 +2481,15 @@ namespace Bloom
             state = BloomDown0;
             break;
          }
-         case BloomDown0:
+         case BloomDown0: 
          {
             // wait until shader
             if (ps != 0x7B4E4533) break;
 
             // SRV0 set to 3rd last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 3]);
+
+            //TODO: RTV too
 
             // skip to next
             state = BloomDown1;
@@ -2493,6 +2502,8 @@ namespace Bloom
 
             // SRV0 set to 2nd last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 2]);
+            
+            //TODO: RTV too
 
             // skip to next
             state = BloomDown2;
@@ -2505,7 +2516,9 @@ namespace Bloom
             
             // SRV0 set to last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 1]);
-            
+
+            //TODO: RTV too
+
             // skip to next
             state = BloomDown3;
             break;
@@ -2515,6 +2528,8 @@ namespace Bloom
             // wait until shader
             if (ps != 0x7B4E4533) break;
 
+            //TODO: SRV & RTV
+
             // skip to next
             state = BloomDown4;
             break;
@@ -2523,6 +2538,8 @@ namespace Bloom
          {
             // wait until shader
             if (ps != 0x7B4E4533) break;
+            
+            //TODO: SRV & RTV
 
             state = BloomDown5;
             break;
@@ -2531,6 +2548,8 @@ namespace Bloom
          {
             // wait until shader
             if (ps != 0x7B4E4533) break;
+            
+            //TODO: SRV & RTV
 
             state = BloomBlur0;
             break;
@@ -3498,7 +3517,7 @@ public:
             reshade::set_config_value(runtime, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
             if (!Bloom::enabled) Bloom::HardReset();
          }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Help reduce flickering and blockiness by using gaussian blur to downsample.\nThere's slight inefficiency decoupling from Auto-Exposure downsampling.\nThis will not look 100%% the same to vanilla due to the new blur weights.");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blur to downsample.\nThere's slight inefficiency decoupling from Auto-Exposure downsampling.\nThis will not look 100%% the same to vanilla due to the new blur weights.");
 
          if (!Bloom::enabled) ImGui::BeginDisabled();
          {
@@ -3755,7 +3774,7 @@ public:
       {
          DrawColoredSubHeader("Remove/Replace FPS limit.");
          
-         ImGui::BulletText("Don't use with HighFPS (which is better because high resolution timers?).");
+         ImGui::BulletText("Don't use with HighFPS mod (which is better because high resolution timers?).");
          
          if (ImGui::Checkbox("High FPS: Active", &HighFPS::enabled))
          {

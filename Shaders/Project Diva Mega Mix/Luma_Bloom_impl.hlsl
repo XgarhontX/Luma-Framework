@@ -256,10 +256,10 @@ void bloom_combine_ps(
   float3 b3 = BloomUpsample2(g_textures_3_, g_sampler_s, v3.xy, texSize3, pixSize3).xyz;
 
   o0.w = b0.w;
-  o0.xyz =  b0.xyz * (g_color.x * GS.BloomStrengths.x * /* DVS1 */ 1.320);
-  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y * /* DVS2 */ 1.330);
-  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z * /* DVS3 */ 1.335);
-  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w * /* DVS4 */ 1.340);
+  o0.xyz =  b0.xyz * (g_color.x * GS.BloomStrengths.x * /* DVS1 */ (1.320));
+  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y * /* DVS2 */ (1.330));
+  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z * /* DVS3 */ (1.335));
+  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w * /* DVS4 */ (1.335));
 
 //   o0 = b0; //debug
 
