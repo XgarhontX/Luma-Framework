@@ -371,7 +371,7 @@ namespace
                {
                   depthpre_uavdesc.Texture2D.MipSlice = i;
                   auto hr = native_device->CreateUnorderedAccessView(depthpre_tex.get(), &depthpre_uavdesc, &depthpre_uavs[i]);
-                  ASSERT_MSGF(SUCCEEDED(hr), "depthpre loop hr {}", i);
+                  ASSERT_MSG(SUCCEEDED(hr), "depthpre loop hr");
                }
             
                // srv
@@ -953,7 +953,9 @@ namespace
          
          // reset upgrades params
          enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
+#if DAV_CORE
          best_resource_unorm = false; //TODO: Luma needs this or something better for core.hpp!
+#endif
          ignore_upgraded_samplers = true;
          
          // clear old hashes
@@ -975,11 +977,15 @@ namespace
                // auto_texture_format_upgrade_shader_hashes[0xDCC32775] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //transparency combine
                // auto_texture_format_upgrade_shader_hashes[0x700325CF] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //downsample (exposure)
                // auto_texture_format_upgrade_shader_hashes[0xB70CC18B] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //fxaa
+#if DAV_CORE
                best_resource_unorm = true;
+#endif
                break;
             case Halo2Classic:
                auto_texture_format_upgrade_shader_hashes[0xD39821CB] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //blit
+#if DAV_CORE
                if (!best_resource_unorm_disallow) best_resource_unorm = true; //TODO: Luma needs this or something better for core.hpp!
+#endif
                break;
             case Halo2Anniversary:
                auto_texture_format_upgrade_shader_hashes[0x87F940A3] = std::pair{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; //dof down 0
