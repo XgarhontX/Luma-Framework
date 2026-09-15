@@ -1738,13 +1738,17 @@ namespace SSS
    {
       Unknown, // start
       Setup,  // Setup skin surface buffer 0x93881580 drawn
-      Downsample0, // Downsampling pass
-      Downsample1, // Downsampling pass
-      Resolve, // actual SSS computation
-      Using, // forward render using SSS result // TODO: del
+      PBR_Downsample,
+      PBR_Widen,
+      NPR_Edges,
+      NPR_Downsample,
+      NPR_SSSPrep,
+      SSS,
       Done, // done for this frame
    };
-   State state = Unknown; // denotes which shader has drawn previously, to know what to do next
+   State state = Unknown; // denotes which shader has drawn prev
+
+   constexpr const char* Luma_NPRPreSSS = "Luma_NPRPreSSS";
 
    namespace Resources
    {
@@ -1755,10 +1759,15 @@ namespace SSS
          uint2 size = { 0, 0 };
 
          ComPtr<ID3D11ShaderResourceView> original_srv; // our own created to original
-         ComPtr<ID3D11Texture2D> new_tex;
-         ComPtr<ID3D11ShaderResourceView> new_srv;
-         ComPtr<ID3D11RenderTargetView> new_rtv;
 
+         // dual interchanging ring buffer like usage
+         bool current_new = false;
+         ComPtr<ID3D11ShaderResourceView> new_srv0;
+         ComPtr<ID3D11RenderTargetView> new_rtv0;
+         ComPtr<ID3D11ShaderResourceView> new_srv1;
+         ComPtr<ID3D11RenderTargetView> new_rtv1;
+         void IncrementNew() { current_new = !current_new; }
+         
          uint64_t GetOriginalResHandle() const { return reinterpret_cast<uint64_t>(original_res.get()); }
          uint64_t GetReplacementResHandle() const { return reinterpret_cast<uint64_t>(replacement_res.get()); }
          
@@ -1766,26 +1775,12 @@ namespace SSS
          void Reset()
          {
             original_res.reset(); replacement_res.reset();
-            new_tex.reset(); new_srv.reset(); new_rtv.reset();
+            new_srv0.reset(); new_rtv0.reset();
          }
       };
 
       std::array<Item, 2> items = { };
-      uint8_t item_count = 0;
-
-      bool InsertItem(Item&& item)
-      {
-         for (auto& i : items)
-         {
-            if (!i.IsValid())
-            {
-               i = std::move(item);
-               return true;
-            }
-         }
-         item_count++;
-         return false;
-      }
+      int GetItemCount() { return std::count_if(items.begin(), items.end(), [](const Item& item) { return item.IsValid(); }); }
 
       Item* TryGetItemForOriginal(uint64_t original_res_handle)
       {
@@ -1814,153 +1809,226 @@ namespace SSS
       void Reset()
       {
          for (auto& item : items) item.Reset();
-         item_count = 0;
       }
    }
 
    // return only Skip or None (continues normal exec)
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
+      /*
+         PBR
+         0x93881580: geo setup
+         0x26AF16B8: downsample
+         0xF2254A92: edges wider
+         0x54415551: sss0
+
+         NPR
+         0x93881580: geo setup (with edge outline precompute)
+         0x8E7027B5: edge outline resolve (slightly unrelated)
+         0x26AF16B8: downsample
+         0x086EEB5C: geo setup resolved to sss0 usable
+         0x54415551: sss0
+       */
       if (!enabled) return DrawOrDispatchOverrideType::None;
 
       // if SSS setup shader, force state
       if (ps == 0x93881580) state = Setup;
 
-      static Resources::Item* current_item = nullptr; //acts like token
+      static Resources::Item* current_item = nullptr; // acts like token
+      static int replace_remaining = 0; // acts like token
       
       switch (state)
       {
-         case Unknown: break;
+         case Unknown: return DrawOrDispatchOverrideType::None;
          case Setup:
          {
+            // PBR_Downsample
             if (ps == 0x26AF16B8) // "sprite simple"
             {
-               state = Downsample0;
+               state = PBR_Downsample;
                return DrawOrDispatchOverrideType::Skip; // allow this draw to continue
             }
-            
-            if (!current_item) // do only once per set
+
+            // NPR_Edges
+            if (ps == 0x8E7027B5) // edge outlines
+            {
+               state = NPR_Edges;
+               return DrawOrDispatchOverrideType::None; // allow this draw to continue
+            }
+
+            // init item (only once per set)
+            if (!current_item) 
             {
                // get RTV0
                ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
                native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
                ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() rtv0 is nullptr");
-
+         
                // get RES from RTV0
                ComPtr<ID3D11Resource> res0 = nullptr;
                rtv0->GetResource(res0.put());
-
+         
                // RES handle
                auto res_handle = reinterpret_cast<uint64_t>(res0.get());
-
+         
                // get item
                current_item = Resources::TryGetItemForOriginal(res_handle);
-
+         
                // create new
-               [[unlikely]]
-               if (!current_item)
+               [[unlikely]] if (!current_item)
                {
                   // query TEX
                   ComPtr<ID3D11Texture2D> tex0 = nullptr;
                   auto hr0 = res0->QueryInterface(tex0.put());
                   ASSERT_MSG(SUCCEEDED(hr0), "SSS::OnDrawOrDispatchOverride() res0->QueryInterface(tex0) failed");
-
+         
                   // get DESC for size
                   D3D11_TEXTURE2D_DESC tex_desc = {};
                   tex0->GetDesc(&tex_desc);
                   uint2 size = { tex_desc.Width, tex_desc.Height };
                   
-                  // create
-                  {
-                     current_item = Resources::TryGetEmptyItem();
-                     ASSERT_MSG(current_item != nullptr, "SSS::Resources::CreateItem() no empty item slot");
-         
-                     D3D11_TEXTURE2D_DESC tex_desc = {};
-                     tex_desc.Width = size.x;
-                     tex_desc.Height = size.y;
-                     tex_desc.MipLevels = 1;
-                     tex_desc.ArraySize = 1;
-                     tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                     tex_desc.SampleDesc.Count = 1;
-                     tex_desc.SampleDesc.Quality = 0;
-                     tex_desc.Usage = D3D11_USAGE_DEFAULT;
-                     tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-                     tex_desc.CPUAccessFlags = 0;
-                     tex_desc.MiscFlags = 0;
+                  // create item
+                  current_item = Resources::TryGetEmptyItem();
+                  ASSERT_MSG(current_item != nullptr, "SSS::Resources::CreateItem() no empty item slot");
 
-                     current_item->size = size;
-                     current_item->original_res.attach(res0.detach()); // save original RES
+                  // tex setup
+                  current_item->size = size;
+                  ComPtr<ID3D11Texture2D> replacement_tex = nullptr;
+                  tex_desc.Width = current_item->size.x;
+                  tex_desc.Height = current_item->size.y;
+                  tex_desc.MipLevels = 1;
+                  tex_desc.ArraySize = 1;
+                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  tex_desc.SampleDesc.Count = 1;
+                  tex_desc.SampleDesc.Quality = 0;
+                  tex_desc.Usage = D3D11_USAGE_DEFAULT;
+                  tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                  tex_desc.CPUAccessFlags = 0;
+                  tex_desc.MiscFlags = 0;
+                  
+                  // new 0
+                  /*auto*/ hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr0), "SSS::Resources::Item::CreateReplacement() hr0");
+                  auto hr1 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_srv0.put());
+                  ASSERT_MSG(SUCCEEDED(hr1), "SSS::Resources::Item::CreateReplacement() hr1");
+                  auto hr2 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_rtv0.put());
+                  ASSERT_MSG(SUCCEEDED(hr2), "SSS::Resources::Item::CreateReplacement() hr2");
 
-                     auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, current_item->new_tex.put());
-                     ASSERT_MSG(SUCCEEDED(hr0), "SSS::Resources::CreateItem() hr0");
-         
-                     auto hr1 = native_device->CreateShaderResourceView(current_item->new_tex.get(), nullptr, current_item->new_srv.put());
-                     ASSERT_MSG(SUCCEEDED(hr1), "SSS::Resources::CreateItem() hr1");
-         
-                     auto hr2 = native_device->CreateRenderTargetView(current_item->new_tex.get(), nullptr, current_item->new_rtv.put());
-                     ASSERT_MSG(SUCCEEDED(hr2), "SSS::Resources::CreateItem() hr2");
+                  // new 1
+                  auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr3), "SSS::Resources::Item::CreateReplacement() hr3");
+                  auto hr4 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_srv1.put());
+                  ASSERT_MSG(SUCCEEDED(hr4), "SSS::Resources::Item::CreateReplacement() hr4");
+                  auto hr5 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_rtv1.put());
+                  ASSERT_MSG(SUCCEEDED(hr5), "SSS::Resources::Item::CreateReplacement() hr5");
 
-                     auto hr3 = native_device->CreateShaderResourceView(current_item->original_res.get(), nullptr, current_item->original_srv.put());
-                     ASSERT_MSG(SUCCEEDED(hr3), "SSS::Resources::CreateItem() hr3");
-
-                     current_item->original_res = res0; // save original RES
-                  }
+                  // original RES & SRV
+                  current_item->original_res.attach(res0.detach());
+                  auto hr6 = native_device->CreateShaderResourceView(current_item->original_res.get(), nullptr, current_item->original_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr6), "SSS::Resources::Item::CreateReplacement() hr6");
                }
             }
             
             return DrawOrDispatchOverrideType::None;
          }
-         case Downsample0:
+         case PBR_Downsample:
          {
-            if (ps == 0xF2254A92) state = Downsample1;
-            return DrawOrDispatchOverrideType::Skip;
-         }
-         case Downsample1:
-         {
-            if (ps == 0x54415551)
+            // PBR_Widen
+            if (ps == 0xF2254A92)
             {
-               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() current_item is nullptr");
-
-               // get RTV0
-               ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
-               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-
-               // get RES from RTV0
-               rtv0->GetResource(current_item->replacement_res.put());
-
-               // set SRV0 as full res
-               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv);
-
-               // set RTV0 as our new
-               native_device_context->OMSetRenderTargets(1, &current_item->new_rtv, nullptr);
-
-               // set viewport to new size
-               D3D11_VIEWPORT viewport;
-               viewport.TopLeftX = 0;
-               viewport.TopLeftY = 0;
-               viewport.Width = current_item->size.x;
-               viewport.Height = current_item->size.y;
-               viewport.MinDepth = 0;
-               viewport.MaxDepth = 1;
+               state = PBR_Widen;
+#if 0
+               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() PBR_Downsample current_item is nullptr");
+               
+               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv); // SRV0 full res
+               native_device_context->OMSetRenderTargets(1, !current_item->current_new ? &current_item->new_rtv0 : &current_item->new_rtv1, nullptr); // RTV0 new res
+               
+               // viewport full
+               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
                native_device_context->RSSetViewports(1, &viewport);
-            
-               // next state
-               current_item = nullptr; // consume
-               state = Resolve;
-               return DrawOrDispatchOverrideType::None;
+
+#else
+               return DrawOrDispatchOverrideType::Skip;
+#endif
+            }
+            return DrawOrDispatchOverrideType::None;
+         }
+         case NPR_Edges:
+         {
+            // NPR_Downsample
+            if (ps == 0x26AF16B8)
+            {
+               state = NPR_Downsample;
+               return DrawOrDispatchOverrideType::Skip;
             }
             
-            return DrawOrDispatchOverrideType::Skip;
+            // should not happen, but just in case
+            ASSERT_MSG(false, "SSS::OnDrawOrDispatchOverride() NPR_Edges unexpected ps");
+            return DrawOrDispatchOverrideType::None; 
          }
-         case Resolve:
+         case NPR_Downsample:
+         {
+            // NPR_SSSPrep
+            if (ps == 0x086EEB5C)
+            {
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_NPRPreSSS)).get(), nullptr, 0);
+               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv); // SRV0 full res
+               native_device_context->OMSetRenderTargets(1, !current_item->current_new ? &current_item->new_rtv0 : &current_item->new_rtv1, nullptr); // RTV0 new res
+
+               // viewport full
+               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
+               native_device_context->RSSetViewports(1, &viewport);
+               
+               state = NPR_SSSPrep;
+            }
+            return DrawOrDispatchOverrideType::None;
+         }
+         case NPR_SSSPrep: 
+         case PBR_Widen:
+         {
+            // SSS resolve
+            if (ps == 0x54415551)
+            {
+               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() PBR_Widen current_item is nullptr");
+
+               // get RTV0 RES for replacement
+               ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               rtv0->GetResource(current_item->replacement_res.put());
+
+               // set SRV0 & RTV0 as full res
+               ID3D11ShaderResourceView* const* srv;
+               if (state == PBR_Widen) srv = &current_item->original_srv; // use original before downsample
+               else
+               {
+                  srv = !current_item->current_new
+                        ? &current_item->new_srv0
+                        : &current_item->new_srv1;
+                  current_item->IncrementNew(); // flipflop
+               }
+               native_device_context->PSSetShaderResources(0, 1, srv);
+               native_device_context->OMSetRenderTargets(1, !current_item->current_new ? &current_item->new_rtv0 : &current_item->new_rtv1, nullptr);
+
+               // viewport full
+               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
+               native_device_context->RSSetViewports(1, &viewport);
+
+               // next state
+               current_item = nullptr; // consume
+               replace_remaining = Resources::GetItemCount(); // rearm
+               state = SSS;
+            }
+            return DrawOrDispatchOverrideType::None;
+         }
+         case SSS:
          {
             // done?
-            if (TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
+            if (replace_remaining == 0 || TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
             {
                state = Done;
                break;
             }
-            
+
             // get SRV16
             ComPtr<ID3D11ShaderResourceView> srv16 = nullptr;
             native_device_context->PSGetShaderResources(16, 1, srv16.put());
@@ -1977,20 +2045,25 @@ namespace SSS
             if (item)
             {
                // set SRV16 as our new
-               native_device_context->PSSetShaderResources(16, 1, &item->new_srv);
+               native_device_context->PSSetShaderResources(16, 1, !item->current_new ? &item->new_srv0 : &item->new_srv1);
+               replace_remaining--; // use
             }
 
             // TODO: Project X guarantees "swapchain final" shader to draw for HQ mirrored world reflections before switching sides
             
             return DrawOrDispatchOverrideType::None;
          }
-         case Using: // TODO: del
          case Done:
          default:
-            break;
+            return DrawOrDispatchOverrideType::None;
       }
       
       return DrawOrDispatchOverrideType::None;
+   }
+
+   void OnInit()
+   {
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_NPRPreSSS), ShaderDefinition{ Luma_NPRPreSSS, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "main", {}});
    }
    
    void OnLoad(reshade::api::effect_runtime* runtime)
@@ -2657,6 +2730,9 @@ public:
 
       // XeGTAO
       XeGTAO::OnInit();
+
+      // SSS
+      SSS::OnInit();
 
       // Bloom
       Bloom::OnInit();
