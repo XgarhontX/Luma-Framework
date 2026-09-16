@@ -125,7 +125,7 @@ namespace GlobalsMegaMix
    bool IsSkipTextAfterFinal = false;
    bool UIIsReadmeDone = false;
    bool UIIsAdvanced = false;
-   // bool IsSKMode = false;
+   bool IsGammaCorrectionSyncPaperWhite = true;
 }
 
 namespace DrawingState
@@ -413,6 +413,11 @@ namespace AutoExposureFix
       //TRUE: allow 
       time_last_ae_allow = time_curr; //new timestamp
       return true;
+   }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
    }
 }
 
@@ -3435,11 +3440,15 @@ public:
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", GlobalsMegaMix::UIIsAdvanced);
       reshade::get_config_value(runtime, NAME, "UIIsReadmeDone", GlobalsMegaMix::UIIsReadmeDone);
-      reshade::get_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
-
+      
       reshade::get_config_value(runtime, NAME, "HighFPS_enabled", HighFPS::enabled);
       reshade::get_config_value(runtime, NAME, "HighFPS_limit", HighFPS::limit);
       reshade::get_config_value(runtime, NAME, "HighFPS_menu_clamp", HighFPS::menu_clamp);
+
+      reshade::get_config_value(runtime, NAME, "IsGammaCorrectionSyncPaperWhite", GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite);
+      if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
+
+      AutoExposureFix::OnLoad(runtime);
 
       ProgressBar::OnLoad(runtime);
 
@@ -3498,14 +3507,14 @@ public:
          
          ImGui::NewLine();
          
-         DrawColoredSubHeader("HDR README");
+         DrawColoredSubHeader("README");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This mod is most consistent at +1 stops (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.).\nFor many PVs, going higher looks exceptional!\nBut for many others, intentional blowout & white clip will be lost.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) This mod is most consistent at +1 stops (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.).\nFor many PVs, going higher looks exceptional!\nBut for many others, intentional blowout & white clip will be lost as white path gets unnatural stretched out.");
          ImGui::PopStyleColor();
          
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Unfortunately, UI elems of PV (e.g. lens flare) can be drawn after HDR tonemap, affected by UI Brightness slider.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon shading (Non-Physical Rendering) is clamped to SDR unless changed otherwise.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) Unfortunately, UI elems of PV (e.g. lens flare) can be drawn after HDR tonemap, affected by UI Brightness slider.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) Toon shading (Non-Physical Rendering) is clamped to SDR unless changed otherwise.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For those new to ImGUI, CTRL click a slider for keyboard input.");
 
          // ImGui::NewLine(); //////
@@ -3535,16 +3544,30 @@ public:
       
       //set CUSTOM_GAMMACORRECT22 define based on if paper white is above 0 or not
       ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_GAMMACORRECT22, cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite > 0.f);
+
+      // sync?
+      if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
       
       if (!is_sdr && ImGui::CollapsingHeader("Gamma"))
       {
          DrawColoredSubHeader("Reintroduce SDR's gamma mismatch to lower shadows.");
          
+         // sync
+         if (ImGui::Checkbox("Sync to Scene Paper White", &GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite))
+         {
+            reshade::set_config_value(runtime, NAME, "IsGammaCorrectionSyncPaperWhite", GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite);
+            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
+         }
+         
          //paper white
-         if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
-            reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The threshold / paper white, so values lower are effected.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
+         if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::BeginDisabled();
+         {
+            if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
+               reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The threshold / paper white, so values lower are effected.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
+         }
+         if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::EndDisabled();
 
          //link test
          if (ImGui::Button("Further Explanation (Google Slides)"))
@@ -3657,15 +3680,6 @@ public:
       if (!is_sdr && DrawCollapsingHeaderEnabledColored("Individual PV Peak Brightness", IndividualPVTuning::current_pv.item != nullptr))
       {
          IndividualPVTuning::OnUI(runtime);
-      }
-
-      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      
-      if (DrawCollapsingHeaderEnabledColored("Progress Bar", ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) > 0))
-      {
-         DrawColoredSubHeader("OSU looking ahh progress bar for PVs.");
-
-         ProgressBar::OnUI(runtime);
       }
 
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
@@ -3901,6 +3915,15 @@ public:
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("2 PVs using this are Meiteki Cybernetics & Gaikotsu Gakudan to Riria");
          ImGui::PopStyleColor();
+      }
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      
+      if (DrawCollapsingHeaderEnabledColored("Progress Bar", ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) > 0))
+      {
+         DrawColoredSubHeader("OSU looking ahh progress bar for PVs.");
+
+         ProgressBar::OnUI(runtime);
       }
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
@@ -4219,8 +4242,6 @@ public:
       if (ImGui::CollapsingHeader("Miscellaneous Pipeline Options (Debug)"))
       {
          DrawColoredSubHeader("Various debug views.");
-
-         ImGui::Text("(FYI) Render Order: BG Sprites -> 3D -> Tonemap -> MLAA -> Final -> UI Sprites -> Swapchain");
          
          // if (ImGui::Checkbox("Fullscreen Overlay FX", &Globals::IsFullscreenOverlayFx))
          //    reshade::set_config_value(runtime, NAME, "IsFullscreenOverlayFx", Globals::IsFullscreenOverlayFx);
