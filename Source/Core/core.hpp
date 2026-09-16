@@ -2254,29 +2254,29 @@ namespace
 
    bool OnCreateDevice(reshade::api::device_api api, uint32_t& api_version)
    {
-// #if !CHECK_GRAPHICS_API_COMPATIBILITY
-// #if DEVELOPMENT || TEST
-//       ASSERT_ONCE_MSG(api == reshade::api::device_api::d3d11, "Luma only supports DirectX 11 at the moment, add \"CHECK_GRAPHICS_API_COMPATIBILITY\" to ignore calls from other APIs");
-// #else
-//       static bool skip_api_compatibility_check = false;
-//       if (!skip_api_compatibility_check)
-//       {
-//          const std::shared_lock lock(s_mutex_reshade);
-//          reshade::get_config_value(nullptr, NAME, "SkipAPICompatibilityCheck", skip_api_compatibility_check);
-//       }
-//       if (api != reshade::api::device_api::d3d11 && !skip_api_compatibility_check)
-//       {
-//          int ret = MessageBoxA(NULL, "The application tried to create a non DirectX 11 device. Luma currently only supports DirectX 11, the application might crash.\nPress \"OK\" to continue.\nPress \"Cancel\" to skip this message in the future.", NAME, MB_SETFOREGROUND | MB_OKCANCEL);
-//          if (ret == IDCANCEL)
-//          {
-//             const std::unique_lock lock(s_mutex_reshade);
-//             reshade::set_config_value(nullptr, NAME, "SkipAPICompatibilityCheck", true);
-//             skip_api_compatibility_check = true;
-//          }
-//          return false;
-//       }
-// #endif
-// #endif
+#if !CHECK_GRAPHICS_API_COMPATIBILITY
+#if DEVELOPMENT || TEST
+      ASSERT_ONCE_MSG(api == reshade::api::device_api::d3d11, "Luma only supports DirectX 11 at the moment, add \"CHECK_GRAPHICS_API_COMPATIBILITY\" to ignore calls from other APIs");
+#else
+      static bool skip_api_compatibility_check = false;
+      if (!skip_api_compatibility_check)
+      {
+         const std::shared_lock lock(s_mutex_reshade);
+         reshade::get_config_value(nullptr, NAME, "SkipAPICompatibilityCheck", skip_api_compatibility_check);
+      }
+      if (api != reshade::api::device_api::d3d11 && !skip_api_compatibility_check)
+      {
+         int ret = MessageBoxA(NULL, "The application tried to create a non DirectX 11 device. Luma currently only supports DirectX 11, the application might crash.\nPress \"OK\" to continue.\nPress \"Cancel\" to skip this message in the future.", NAME, MB_SETFOREGROUND | MB_OKCANCEL);
+         if (ret == IDCANCEL)
+         {
+            const std::unique_lock lock(s_mutex_reshade);
+            reshade::set_config_value(nullptr, NAME, "SkipAPICompatibilityCheck", true);
+            skip_api_compatibility_check = true;
+         }
+         return false;
+      }
+#endif
+#endif
 
 #if DEVELOPMENT && 0 // Test: force the latest version to access all the latest features (it doesn't seem to work! nor is much needed, but we should try again as ReShade had a bug with it)
       api_version = D3D_FEATURE_LEVEL_12_2;
@@ -2669,7 +2669,7 @@ namespace
 
          if (desc.present_mode == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || desc.present_mode == DXGI_SWAP_EFFECT_FLIP_DISCARD) // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING requires flip model
          {
-             desc.present_flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; // Games will still need to call "Present()" with "DXGI_PRESENT_ALLOW_TEARING" for this to do anything (ReShade will automatically do it if this flag is set)
+             desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; // Games will still need to call "Present()" with "DXGI_PRESENT_ALLOW_TEARING" for this to do anything (ReShade will automatically do it if this flag is set)
          }
 
          if (prevent_fullscreen_state) // Not sure this helps but it doesn't seem to hurt
@@ -2680,7 +2680,7 @@ namespace
          {
             desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
          }
-         // desc.fullscreen_refresh_rate = 0.f; // This fixes games forcing a specific refresh rate (e.g. Mafia III forces 60Hz for no reason)
+         desc.fullscreen_refresh_rate = 0.f; // This fixes games forcing a specific refresh rate (e.g. Mafia III forces 60Hz for no reason)
          if (prevent_fullscreen_state)
          {
             desc.fullscreen_state = false; // Force disable FSE (see "OnSetFullscreenState()")
