@@ -3439,7 +3439,6 @@ public:
       ImGui::PushID("###XeGTAO");
       if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion (XeGTAO)", XeGTAO::enabled))
       {
-         
          DrawColoredSubHeader("Insert a Ground Truth Ambient Occlusion pass for indirect shading.");
 
          if (ImGui::Checkbox("Enabled", &XeGTAO::enabled))
@@ -3449,7 +3448,6 @@ public:
          
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon (Non-Physical Rendering) doesn't benefit and is untested.");
          ImGui::PopStyleColor();
 
          // TODO: presets
@@ -3482,18 +3480,18 @@ public:
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_NOISE, "Noise", { "Unclamped Phases", "Static", "2 Phases", "3 Phases", "4 Phases", "5 Phases", "6 Phases", "7 Phases", "8 Phases (Better for 120 FPS?)" }, "Noise allow samples to evenly shoot out in all direction.\nInstead of staying static, allow noise to jitter so that it can perceptually mask individual grains.");
          
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_CHECKBOARD, "Rate", { "Full", "Half (Unnoticeable, especially 120 FPS?)", "Quarter (Rather unusable smearing.)" }, "Render every other pixel to save performance."); 
-
-         // if (GlobalsMegaMix::UIIsAdvanced)
-         {
-            ImGui::NewLine();
-            DrawColoredSubHeader("Half Resolution");
-            bool is_halfres = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-            ImGui::PushStyleColor(ImGuiCol_Text, !is_halfres ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f));
-            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_HALFRES, "Half Resolution", "Render AO at half resolution to GREATLY save performance.\n\n(Full resolution not only hits the GPU's ALU, but VRAM!\nHigh FPS will scale nearly exponentially.)");
-            ImGui::PopStyleColor();
-            bool is_halfres_after = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-            if (is_halfres != is_halfres_after) XeGTAO::ResetCreatedResource();
          
+         ImGui::NewLine();
+         DrawColoredSubHeader("Half Resolution");
+         bool is_halfres = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
+         ImGui::PushStyleColor(ImGuiCol_Text, !is_halfres ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f));
+         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_HALFRES, "Half Resolution", "Render AO at half resolution to GREATLY save performance.\n\n(Full resolution not only hits the GPU's ALU, but VRAM!\nHigh FPS will scale nearly exponentially.)");
+         ImGui::PopStyleColor();
+         bool is_halfres_after = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
+         if (is_halfres != is_halfres_after) XeGTAO::ResetCreatedResource();
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
             if (!is_halfres_after) ImGui::BeginDisabled();
             ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_UPSAMPLE, "Joint Bilateral Upsample", "Upscale AO results while preventing leaks by using the spatial difference between half vs full res.");
             if (!is_halfres_after) ImGui::EndDisabled();
