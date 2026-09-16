@@ -629,7 +629,7 @@ namespace IndividualPVTuning
       PVItem* prev_pv = current_pv.item;
       
       //current_pv
-      if (is_dirty)
+      [[unlikely]] if (is_dirty)
       {
          //id
          current_pv.id = pv_id;
@@ -647,7 +647,7 @@ namespace IndividualPVTuning
       }
       
       //restore prev settings if changed
-      if (is_dirty && prev_pv != nullptr)
+      [[unlikely]] if (is_dirty && prev_pv != nullptr)
       {
          //peak
          if (prev_pv->is_clamp_1_stop && roundf(cb_luma_global_settings.ScenePeakWhite) == roundf(cb_luma_global_settings.ScenePaperWhite * 2.f))
@@ -655,7 +655,7 @@ namespace IndividualPVTuning
       }
 
       //save settings & apply new settings
-      if (is_dirty && current_pv.item != nullptr)
+      [[unlikely]] if (is_dirty && current_pv.item != nullptr)
       {
          //reset prev_settings
          prev_settings = PrevSettings();
@@ -697,7 +697,7 @@ namespace IndividualPVTuning
       }
 
       DrawColoredSubHeader("Current");
-      ImGui::Text("PV ID: %d", current_pv.id);
+      ImGui::Text("PV ID: %d", /*current_pv.id*/ MemoryHack::addr_pvID);
       ImGui::Text("PV Name (maybe): %s", name_str.c_str());
 
       ImGui::NewLine();
@@ -747,7 +747,7 @@ namespace HighFPS
       *MemoryHack::addr_puiGameLimit = target; //no need for VirtualProtect
    }
 
-   static void Unpatch()
+   void Unpatch()
    {
       if (!IsReady()) return;
       *MemoryHack::addr_puiGameLimit = 60u;
@@ -2706,6 +2706,234 @@ namespace Bloom
    }
 }
 
+namespace SpotLightShadows
+{
+   bool enabled = false;
+      constexpr const char* reshadesave_enabled = "SpotLightShadowsEnabled";
+   
+   enum State : uint8_t
+   {
+      DepthFinalize0, // 0xC1A00F28
+      DepthFinalize1, // 0xC1A00F28
+      Resolving, // 0x1CE07171 (writes DVS / opaque), 0x03C8D536 (reads DSV / transparent)
+      ResolvingAtLeastOnce,
+      TonemapUse, // Tonemap variants
+      Done,
+   };
+   State state; // denotes next shader to be drawn
+
+   namespace Resources
+   {
+      uint64_t depth_res_handle = 0;
+
+      ComPtr<ID3D11ShaderResourceView> newcolor_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> newcolor_rtv = nullptr;
+
+      ComPtr<ID3D11DepthStencilView> newdsv = nullptr;
+
+      uint2 main_color_size = { 0, 0 };
+
+      void Reset()
+      {
+         depth_res_handle = 0;
+         newcolor_srv.reset();
+         newcolor_rtv.reset();
+         main_color_size = { 0, 0 };
+      }
+   }
+
+   void OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (!enabled) return;
+      if (Resources::main_color_size.x == 0) return;
+      if (DEVELOPMENT && !IsModEnabled()) return;
+
+      switch (state)
+      {
+         case DepthFinalize0:
+         {
+            // wait until shader
+            if (ps != 0xC1A00F28) break;
+
+            // next state
+            state = DepthFinalize1;
+            break;
+         }
+         case DepthFinalize1:
+         {
+            // wait until shader
+            // if (ps != 0xC1A00F28) break;
+            ASSERT_MSG(ps == 0xC1A00F28, "SpotLightShadows: DepthFinalize1 shader not detected next!");
+
+            // RTV0 is precompute depth (will be bound SRV18 for Resolve)
+            if (Resources::depth_res_handle == 0)
+            {
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "SpotLightShadows: RTV0 is null in DepthFinalize");
+               
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+               
+               Resources::depth_res_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+            }
+
+            // next state
+            state = Resolving;
+            break;
+         }
+         case Resolving:
+         case ResolvingAtLeastOnce:
+         {
+            // wait until shader
+            static std::unordered_set<uint32_t> resolving_shaders = { 0x1CE07171, 0x03C8D536 }; // TODO: use static array (0x1CE07171 writes DVS / is opaque & 0x03C8D536 reads DSV / is transparent)
+            if (!resolving_shaders.contains(ps))
+            {
+               // last hurrah SVR10 == depth_res_handle
+               uint64_t srv10_handle;
+               {
+                  ComPtr<ID3D11ShaderResourceView> srv10;
+                  native_device_context->PSGetShaderResources(18, 1, srv10.put());
+                  srv10_handle = !srv10 ? 0 : reinterpret_cast<uint64_t>(srv10.get());
+               }
+               
+               if (srv10_handle != Resources::depth_res_handle)
+               {
+                  if (state == ResolvingAtLeastOnce) state = TonemapUse; // resolved at least once, so we can move on
+                  break; // early "return"
+               }
+
+               resolving_shaders.insert(ps);
+               ASSERT_MSG(false, "SpotLightShadows: New resolving shader!");
+               reshade::log::message(reshade::log::level::warning, std::format("SpotLightShadows: New resolving shader! (ps=0x{:X})", ps).c_str());
+            }
+
+            // clear (DSV is required, while RTV fullscreen overwrites)
+            if (state == Resolving) native_device_context->ClearDepthStencilView(Resources::newdsv.get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
+
+            // replace RTV0 & DSV
+            native_device_context->OMSetRenderTargets(1, &Resources::newcolor_rtv, Resources::newdsv.get());
+
+            // viewport full
+            D3D11_VIEWPORT viewport;
+            viewport.TopLeftX = 0;
+            viewport.TopLeftY = 0;
+            viewport.Width = static_cast<float>(Resources::main_color_size.x);
+            viewport.Height = static_cast<float>(Resources::main_color_size.y);
+            viewport.MinDepth = 0;
+            viewport.MaxDepth = 1;
+            native_device_context->RSSetViewports(1, &viewport);
+
+            // next state
+            state = ResolvingAtLeastOnce;
+            break;
+         }
+         case TonemapUse:
+         case Done:
+            break;
+      }
+   }
+
+   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      // initialize from RTV0
+      [[unlikely]] if (enabled && Resources::main_color_size.x == 0)
+      {
+         // get size
+         ComPtr<ID3D11RenderTargetView> rtv0;
+         native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+         ASSERT_MSG(rtv0 != nullptr, "SpotLightShadows: RTV0 is null in OnTonemapDraw");
+         
+         ComPtr<ID3D11Resource> rtv0_resource;
+         rtv0->GetResource(rtv0_resource.put());
+         
+         ComPtr<ID3D11Texture2D> rtv0_texture;
+         auto hr = rtv0_resource->QueryInterface(rtv0_texture.put());
+         ASSERT_MSG(SUCCEEDED(hr), "SpotLightShadows: OnTonemapDraw hr");
+         
+         D3D11_TEXTURE2D_DESC tex_desc;
+         rtv0_texture->GetDesc(&tex_desc);
+         
+         Resources::main_color_size = { tex_desc.Width, tex_desc.Height };
+         reshade::log::message(reshade::log::level::info, std::format("SpotLightShadows: main color size {}x{}", Resources::main_color_size.x, Resources::main_color_size.y).c_str());
+
+         // create Resources
+         {
+            ComPtr<ID3D11Texture2D> new_texture;
+            
+            // newcolor
+            D3D11_TEXTURE2D_DESC new_tex_desc;
+            new_tex_desc.Width = Resources::main_color_size.x;
+            new_tex_desc.Height = Resources::main_color_size.y;
+            new_tex_desc.MipLevels = 1;
+            new_tex_desc.ArraySize = 1;
+            new_tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            new_tex_desc.SampleDesc.Count = 1;
+            new_tex_desc.SampleDesc.Quality = 0;
+            new_tex_desc.Usage = D3D11_USAGE_DEFAULT;
+            new_tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+            new_tex_desc.CPUAccessFlags = 0;
+            new_tex_desc.MiscFlags = 0;
+            
+            auto hr2 = native_device->CreateTexture2D(&new_tex_desc, nullptr, new_texture.put());
+            ASSERT_MSG(SUCCEEDED(hr2), "SpotLightShadows: OnTonemapDraw hr2");
+
+            auto hr3 = native_device->CreateRenderTargetView(new_texture.get(), nullptr, Resources::newcolor_rtv.put());
+            ASSERT_MSG(SUCCEEDED(hr3), "SpotLightShadows: OnTonemapDraw hr3");
+
+            auto hr4 = native_device->CreateShaderResourceView(new_texture.get(), nullptr, Resources::newcolor_srv.put());
+            ASSERT_MSG(SUCCEEDED(hr4), "SpotLightShadows: OnTonemapDraw hr4");
+
+            // newdsv
+            D3D11_TEXTURE2D_DESC new_dsv_tex_desc;
+            new_dsv_tex_desc.Width = Resources::main_color_size.x;
+            new_dsv_tex_desc.Height = Resources::main_color_size.y;
+            new_dsv_tex_desc.MipLevels = 1;
+            new_dsv_tex_desc.ArraySize = 1;
+            new_dsv_tex_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+            new_dsv_tex_desc.SampleDesc.Count = 1;
+            new_dsv_tex_desc.SampleDesc.Quality = 0;
+            new_dsv_tex_desc.Usage = D3D11_USAGE_DEFAULT;
+            new_dsv_tex_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+            new_dsv_tex_desc.CPUAccessFlags = 0;
+            new_dsv_tex_desc.MiscFlags = 0;
+
+            auto hr5 = native_device->CreateTexture2D(&new_dsv_tex_desc, nullptr, new_texture.put());
+            ASSERT_MSG(SUCCEEDED(hr5), "SpotLightShadows: OnTonemapDraw hr5");
+
+            D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+            dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+            dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+            auto hr6 = native_device->CreateDepthStencilView(new_texture.get(), &dsv_desc, Resources::newdsv.put());
+            ASSERT_MSG(SUCCEEDED(hr6), "SpotLightShadows: OnTonemapDraw hr6");
+         }
+         reshade::log::message(reshade::log::level::info, "SpotLightShadows: created new color buffer and views");
+
+         // skip 1st frame
+         return;
+      }
+
+      // replace SRV7
+      if (state == TonemapUse) native_device_context->PSSetShaderResources(7, 1, &Resources::newcolor_srv);
+   }
+
+   void OnPresent()
+   {
+      state = DepthFinalize0;
+   }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
+      state = DepthFinalize0;
+   }
+}
+
 } // unnamed namespace
 
 class ProjectDivaMegaMix final : public Game
@@ -2829,6 +3057,9 @@ public:
       // Bloom
       Bloom::HardReset();
 
+      // SpotLightShadows
+      SpotLightShadows::HardReset();
+
       // // UISeparation
       // UISeparation::ResetOnSwapchain();
       
@@ -2844,6 +3075,10 @@ public:
       // // skip not ps
       // [[unlikely]]
       // if (ps == 0) return DrawOrDispatchOverrideType::None;
+
+      // SpotLightShadows ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+      SpotLightShadows::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
 
       // XeGTAO ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2908,6 +3143,7 @@ public:
             device_data.cb_luma_global_settings_dirty = true; //reupload for later shaders
 
             Bloom::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
+            SpotLightShadows::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             
             return DrawOrDispatchOverrideType::None;
          }
@@ -3120,8 +3356,11 @@ public:
       // SeparateUIBrightness
       SeparateUIBrightness::OnPresent();
 
+      // SpotLightShadows
+      SpotLightShadows::OnPresent();
+
       // CachedCB
-      CachedCB::Update(device_data);
+      CachedCB::Update(device_data); 
    }
 
    void LoadConfigs() override
@@ -3213,6 +3452,8 @@ public:
       SSS::OnLoad(runtime);
 
       Bloom::OnLoad(runtime);
+
+      SpotLightShadows::OnLoad(runtime);
       
       // if (custom_sdr_gamma == 0) custom_sdr_gamma = 2.2f;
       // reshade::get_config_value(runtime, NAME, "EOTFGammaCorrection", custom_sdr_gamma);
@@ -3263,21 +3504,22 @@ public:
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This mod is most consistent at +1 stops (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.).\nFor many PVs, going higher looks exceptional!\nBut for many others, intentional blowout & white clip will be lost.");
          ImGui::PopStyleColor();
          
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Unfortunately, UI elems of PV (e.g. lens flare) can be after HDR tonemap, affected by UI Brightness slider.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Unfortunately, UI elems of PV (e.g. lens flare) can be drawn after HDR tonemap, affected by UI Brightness slider.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon shading (Non-Physical Rendering) is clamped to SDR unless changed otherwise.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For those new to ImGUI, CTRL click a slider for keyboard input.");
 
-         ImGui::NewLine(); //////
-         
-         DrawColoredSubHeader("Recommended Mods");
-
-         if (ImGui::Button("Clean Interface: Remove all but the notes."))
-            Website::OpenWebsite("https://gamebanana.com/mods/524644");
-         
-         if (ImGui::Button("Remove Forced Toon Shader: Toon shading sucks!"))
-            Website::OpenWebsite("https://gamebanana.com/mods/578377");
-         
-         if (ImGui::Button("Future Tone Customization: Toon shading sucks!"))
-            Website::OpenWebsite("https://gamebanana.com/mods/386869");
+         // ImGui::NewLine(); //////
+         //
+         // DrawColoredSubHeader("Recommended Mods");
+         //
+         // if (ImGui::Button("Clean Interface: Remove all but the notes."))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/524644");
+         //
+         // if (ImGui::Button("Remove Forced Toon Shader: Toon shading sucks!"))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/578377");
+         //
+         // if (ImGui::Button("Future Tone Customization: Toon shading sucks!"))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/386869");
          
          ImGui::NewLine(); //////
 
@@ -3412,7 +3654,7 @@ public:
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Individual PV Tuning", IndividualPVTuning::current_pv.item != nullptr))
+      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Individual PV Peak Brightness", IndividualPVTuning::current_pv.item != nullptr))
       {
          IndividualPVTuning::OnUI(runtime);
       }
@@ -3426,7 +3668,7 @@ public:
          ProgressBar::OnUI(runtime);
       }
 
-      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       // XEGTAO_MANUALSIZE auto toggle
       if (XeGTAO::FoundResource::IsSizeValid())
@@ -3441,14 +3683,14 @@ public:
       {
          DrawColoredSubHeader("Insert a Ground Truth Ambient Occlusion pass for indirect shading.");
 
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
+         ImGui::PopStyleColor();
+         
          if (ImGui::Checkbox("Enabled", &XeGTAO::enabled))
             reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_enabled, XeGTAO::enabled);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("");
-         
-         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
-         ImGui::PopStyleColor();
 
          // TODO: presets
 
@@ -3643,6 +3885,23 @@ public:
          DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
       }
       ImGui::PopID();
+      
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      // SpotLightShadows::
+      ImGui::PushID("###SpotLightShadows");
+      if (DrawCollapsingHeaderEnabledColored("Spot Light Shadows", SpotLightShadows::enabled))
+      {
+         DrawColoredSubHeader("Full Resolution Spot Light Resolve");
+
+         if (ImGui::Checkbox("Full Resolution", &SpotLightShadows::enabled))
+            reshade::set_config_value(runtime, NAME, SpotLightShadows::reshadesave_enabled, SpotLightShadows::enabled);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Make spot light shadow resolve to a full resolution color buffer.\nProbably has some performance cost.");
+
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("2 PVs using this are Meiteki Cybernetics & Gaikotsu Gakudan to Riria");
+         ImGui::PopStyleColor();
+      }
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
