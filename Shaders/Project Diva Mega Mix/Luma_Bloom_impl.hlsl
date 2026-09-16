@@ -239,7 +239,7 @@ void bloom_combine_ps(
   // float3 b2 = g_textures_2_.Sample(g_sampler_s, v3.xy).xyz;
   // float3 b3 = g_textures_3_.Sample(g_sampler_s, v3.xy).xyz;
 
-  uint2 texSize0; 
+  uint2 texSize0;
   g_textures_0_.GetDimensions(texSize0.x, texSize0.y);
   float2 texSize1 = texSize0 * 0.5f;
   float2 texSize2 = texSize1 * 0.5f;
@@ -256,14 +256,14 @@ void bloom_combine_ps(
   float3 b3 = BloomUpsample2(g_textures_3_, g_sampler_s, v3.xy, texSize3, pixSize3).xyz;
 
   o0.w = b0.w;
-  o0.xyz =  b0.xyz * (g_color.x * GS.BloomStrengths.x * /* DVS1 */ (1.320));
-  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y * /* DVS2 */ (1.330));
-  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z * /* DVS3 */ (1.335));
-  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w * /* DVS4 */ (1.335));
+  o0.xyz =  b0.xyz * (g_color.x * GS.BloomStrengths.x /* * 1.320 */);
+  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y /* * 1.330 */);
+  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z /* * 1.335 */);
+  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w /* * 1.335 */);
 
 //   o0 = b0; //debug
 
-  o0.xyz *= GS.BloomStrength;
+  o0.xyz *= GS.BloomStrength * 1.3325;
 
   return;
 }
