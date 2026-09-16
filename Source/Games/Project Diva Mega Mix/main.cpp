@@ -1969,7 +1969,7 @@ namespace SSS
          case NPR_Downsample:
          {
             // NPR_SSSPrep
-            if (ps == 0x086EEB5C)
+            if (ps == 0x086EEB5C) //TODO: skip this and make SSS sample only x & w.
             {
                native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_NPRPreSSS)).get(), nullptr, 0);
                native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv); // SRV0 full res
