@@ -897,37 +897,16 @@ void XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, const GTAOConstants co
 
 #if XEGTAO_FOG == 1
         // fog (decrease if fog is bright) (some material skip fog by g_shader_flags) (some materials use height color, while others depth, all by g_shader_flags)
-        #if 0
-            float fogHLuma = GetLuminance(g_fog_height_color.xyz) * g_fog_height_color.w; // color can be > 1 //TODO: is w even used?
-            float fogLuma = fogHLuma;
-            fogLuma = saturate(fogLuma); //clean
+        float fogHLuma = GetLuminance(g_fog_height_color.xyz) * g_fog_height_color.w;
+        float fogDLuma = GetLuminance(g_fog_depth_color.xyz) * g_fog_depth_color.w;
+        float fogLuma = max(fogHLuma, fogDLuma);
 
-            float fogNear = max(g_fog_height_params.y, g_fog_state_params.y);
-            float fogFar = max(g_fog_height_params.z, g_fog_state_params.z);
-            float fogScore = smoothstep(fogNear, fogFar, viewspaceZ) * fogLuma;
-            fogScore = sqrt(fogScore);
-        #elif 0
-            float fogHLuma = GetLuminance(g_fog_height_color.xyz) * g_fog_height_color.w;
-            float fogDLuma = GetLuminance(g_fog_depth_color.xyz) * g_fog_depth_color.w;
+        float fogHScore = smoothstep(g_fog_height_params.y, g_fog_height_params.z, viewspaceZ) * g_fog_height_params.x;
+        float fogSScore = smoothstep(g_fog_state_params.y, g_fog_state_params.z, viewspaceZ) * g_fog_state_params.x;
+        float fogScore = fogSScore/* max(fogHScore, fogSScore) */;
+        fogScore = pow(fogScore, 0.800); // curve
+        fogScore *= fogLuma; // color
 
-            float fogHScore = smoothstep(g_fog_height_params.y, g_fog_height_params.z, viewspaceZ) * fogHLuma;
-            float fogSScore = smoothstep(g_fog_state_params.y , g_fog_state_params.z, viewspaceZ) * fogDLuma;
-            float fogScore = min(fogHScore, fogSScore);
-            fogScore = sqrt(fogScore);
-        #elif 1
-            float fogHLuma = GetLuminance(g_fog_height_color.xyz) * g_fog_height_color.w;
-            float fogDLuma = GetLuminance(g_fog_depth_color.xyz) * g_fog_depth_color.w;
-            float fogLuma = lerp(fogHLuma, fogDLuma, fogHLuma > fogDLuma ? 0.1 : 0.9);
-
-            float fogHScore = smoothstep(g_fog_height_params.y, g_fog_height_params.z, viewspaceZ) * fogLuma;
-            float fogSScore = smoothstep(g_fog_state_params.y, g_fog_state_params.z, viewspaceZ) * fogLuma;
-            float fogScore = min(fogHScore, fogSScore);
-            fogScore = sqrt(fogScore);
-        #endif
-
-
-        // fogScore = saturate(fogScore); //clean
-        // fogScore *= fogScore; //curved
         visibility = max(visibility, fogScore);
 #endif
 
