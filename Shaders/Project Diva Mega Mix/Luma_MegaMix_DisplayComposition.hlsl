@@ -343,13 +343,22 @@ float3 BRUHHHAll(float3 x, float2 v1)
       const bool r = 1-v1.y < 0.0035f;
     #endif
 
+		// color setup
+		#if 1 // white
+			float3 pc = float3(1.f);
+		#elif 1 // teal
+			float3 pc = float3(61, 255, 255) / 255.f;
+		#elif 1 // pink
+			float3 pc = float3(255, 99, 226) / 255.f;
+		#endif
+
     if (GS.ProgressBarRatio >= 0 && r) {
       if (v1.x <= GS.ProgressBarRatio) { //played
-        x = lerp(x, 0.8, 0.5f);
+        x = lerp(x, pc * 0.8, 0.5f);
       } else if (v1.x > GS.ProgressBarRatio && v1.x <= GS.ProgressBarRatio + 0.0025f) { //curr
-        x = lerp(x, 1, 0.9f);
+        x = lerp(x, pc * 1, 0.9f);
       } else { //future
-        x = lerp(x, 0, 0.5f);
+        x = lerp(x, pc * 0, 0.5f);
       }
 
       // x = lerp(x, 0, 0.25f);

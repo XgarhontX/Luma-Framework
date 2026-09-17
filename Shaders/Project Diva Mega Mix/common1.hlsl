@@ -3,7 +3,6 @@
 #include "../Includes/Color.hlsl"
 #include "../Includes/Tonemap.hlsl"
 #include "../Includes/Reinhard.hlsl"
-#include "./Includes/PerChannelCorrect.hlsl"
 #include "./Includes/ColorGrade.hlsl"
 #include "./Includes/DrawBinary.hlsl"
 #include "./Includes/ictcp_portable.hlsl"
@@ -18,8 +17,8 @@
 #if CUSTOM_SDR == 1
   #ifdef CUSTOM_TESTSDR
     #undef CUSTOM_TESTSDR
-    #define CUSTOM_TESTSDR 1
   #endif
+  #define CUSTOM_TESTSDR 1
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -466,8 +465,8 @@ float3 Tonemap_BloomSample(Texture2D<float4> t, SamplerState s, float2 uv) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 float3 Tonemap_SaveSprites_UpgradeSpritesOnly(float3 sprites) {
   #if CUSTOM_TESTSDR == 1
-    // return saturate(sprites);
-    return max(0, sprites);
+    return saturate(sprites);
+    // return max(0, sprites);
   #endif
 
   //gamma decode

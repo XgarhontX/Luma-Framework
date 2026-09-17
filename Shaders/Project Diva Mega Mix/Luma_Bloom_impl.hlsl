@@ -208,6 +208,58 @@ float4 BloomUpsample2(Texture2D tex, SamplerState smp, float2 texcoord, float2 t
   return lerp(tex10, tex00, g0.x);
 }
 
+void bloom_blur0_vs(
+  uint v0 : SV_VertexID0,
+  out float4 o0 : SV_POSITION0,
+  out float4 o1 : TEXCOORD0,
+  out float4 o2 : TEXCOORD1,
+  out float2 o3 : TEXCOORD2
+)
+{
+  float4 r0;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.x = (uint)v0.x >> 1;
+  r0.x = (uint)r0.x;
+  r0.x = r0.x * 2 + -1;
+  r0.z = (int)v0.x & 1;
+  r0.z = (uint)r0.z;
+  r0.y = r0.z * 2 + -1;
+  o0.xy = r0.xy;
+  r0.xyzw = r0.xyxy * g_texcoord_modifier.xyxy + g_texcoord_modifier.zwzw;
+  o0.zw = float2(0,1);
+
+  o1.xyzw = g_texel_size.xyxy * float4(-0.5,-0.5,0.5,-0.5) + r0.zwzw;
+  o2.xyzw = g_texel_size.xyxy * float4(-0.5,0.5,0.5,0.5) + r0.xyzw;
+  o3.xy = r0.xy; // center
+  
+  return;
+}
+void bloom_blur0_ps(
+  float4 v0: SV_POSITION0,
+  float4 v1: TEXCOORD0,
+  float4 v2: TEXCOORD1,
+  float2 v3: TEXCOORD2,
+  out float4 o0: SV_Target0)
+{
+  float4 r0,r1;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  // r0.xyzw = g_textures_0_.Sample(g_sampler_s, v1.xy).xyzw;
+  // r1.xyzw = g_textures_0_.Sample(g_sampler_s, v1.zw).xyzw;
+  // r0.xyzw = r1.xyzw + r0.xyzw;
+  // r1.xyzw = g_textures_0_.Sample(g_sampler_s, v2.xy).xyzw;
+  // r0.xyzw = r1.xyzw + r0.xyzw;
+  // r1.xyzw = g_textures_0_.Sample(g_sampler_s, v2.zw).xyzw;
+  // r0.xyzw = r1.xyzw + r0.xyzw;
+  // o0.xyzw = g_color.xyzw * 0.25 * r0.xyzw;
+
+  float4 bloom = BloomUpsample2(g_textures_0_, g_sampler_s, v3.xy, g_texel_size.zw, g_texel_size.xy);
+  o0 = g_color * bloom;
+}
+
 void bloom_combine_ps(
   float4 v0 : SV_POSITION0,
   float4 v1 : TEXCOORD0,
@@ -256,14 +308,14 @@ void bloom_combine_ps(
   float3 b3 = BloomUpsample2(g_textures_3_, g_sampler_s, v3.xy, texSize3, pixSize3).xyz;
 
   o0.w = b0.w;
-  o0.xyz =  b0.xyz * (g_color.x * GS.BloomStrengths.x /* * 1.320 */);
-  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y /* * 1.330 */);
-  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z /* * 1.335 */);
-  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w /* * 1.335 */);
+  o0.xyz =  b0.xyz * (g_color.x * GS.BloomStrengths.x * (1.125 * 1.100 /* * DVS1 */));
+  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y * (1.267 * 1.050 /* * DVS2 */));
+  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z * (1.287 * 1.000 /* * DVS3 */));
+  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w * (1.300 * 1.000 /* * DVS4 */));
 
 //   o0 = b0; //debug
 
-  o0.xyz *= GS.BloomStrength * 1.3325;
+  o0.xyz *= GS.BloomStrength /* * 1.3325 */;
 
   return;
 }
