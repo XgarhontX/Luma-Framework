@@ -94,10 +94,10 @@ namespace CB
       float CGShadowsStrength;
       float CGShadowsMidGray;
 
-      float ProgressBarRatio;
       float XeGTAOFinalPower;
       float SSSRadius;
-      float p00; 
+      float ProgressBarRatio;
+      int ProgressBarColorPacked; 
    };
    
    struct LumaGameData

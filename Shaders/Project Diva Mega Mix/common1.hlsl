@@ -42,15 +42,9 @@ bool CheckCustom(float4 x, float4 target, float leniency) {
 //REC709
 #define DECODEREC709(T)\
 T DecodeRec709(T x) {\
-  T r0, r2, r3, r4;\
-  r0 = x;\
-  r2 = 0.0989999995 + r0; \
-  r2 = 0.909918129 * r2;\
-  r2 = pow(r2, 2.22222233);\
-  r3 = cmp(0.0810000002 >= r0);\
-  r4 = 0.222222224 * r0;\
-  r2 = r3 ? r4 : r2;\
-  return r2;\
+  return cmp(0.0810000002 >= x)\
+    ? 0.222222224 * x\
+    : pow(0.909918129 * (0.0989999995 + x), 2.22222233);\
 }
 DECODEREC709(float)
 DECODEREC709(float2)
@@ -60,14 +54,9 @@ DECODEREC709(float4)
 
 #define ENCODEREC709(T)\
 T EncodeRec709(T x) {\
-  T r0, r1, r2;\
-  r1 = x;\
-  r0 = pow(r1, 0.449999988);\
-  r0 = r0 * 1.09899998 + -0.0989999995;\
-  r2 = cmp(0.0179999992 >= r1);\
-  r1 = 4.5 * r1;\
-  r0 = r2 ? r1 : r0;\
-  return r0;\
+  return cmp(0.0179999992 >= x)\
+    ? 4.5 * x\
+    : 1.09899998 * pow(x, 0.449999988) - 0.0989999995;\
 }
 ENCODEREC709(float)
 ENCODEREC709(float2)

@@ -11,7 +11,6 @@ Texture2D<float4> g_texture : register(t0);
 float3 Saturation(float3 x, float s) {
   x = UCSTo(x, CS_BT709);
   x.yz *= s;
-  x.yz *= 1.085f;
   x = UCSFrom(x, CS_BT709);
   x = max(0, x); //clamp cs
   return x;
@@ -42,7 +41,7 @@ void main(
       s *= GS.CGSaturation;
     #endif
     #if CUSTOM_ALTSAT == 1
-      x = 1.1f;
+      x = 1.f;
     #endif
     x = Saturation(x, GS.CGSaturation);
   #endif

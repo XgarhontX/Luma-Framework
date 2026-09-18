@@ -485,7 +485,8 @@ namespace CachedCB
       p /= pw;
       if (rec709)
       {
-         p = Encode_sRGB(p);
+         // p = Encode_sRGB(p);
+         p = pow(p, 1.0/2.4);
          p = Decode_Rec709(p);
       }
       return p;
@@ -762,22 +763,44 @@ namespace HighFPS
 
 namespace ProgressBar
 {
-   bool enabled = false;
    float progress_ratio = -1.f;
    float progress_ratio_prev = -1.f;
+
+   int ColorGetPacked(float3 color_unorm)
+   {
+      uint8_t r = static_cast<uint8_t>(std::clamp(color_unorm.x * 255.f, 0.f, 255.f));
+      uint8_t g = static_cast<uint8_t>(std::clamp(color_unorm.y * 255.f, 0.f, 255.f));
+      uint8_t b = static_cast<uint8_t>(std::clamp(color_unorm.z * 255.f, 0.f, 255.f));
+      uint8_t a = 255;
+      return (a << 24) | (b << 16) | (g << 8) | r;
+   }
+
+   float3 ColorGetUnorm(int color_packed)
+   {
+      uint32_t c = static_cast<uint32_t>(color_packed);
+      float r = static_cast<float>(c & 0xFF) / 255.f;
+      float g = static_cast<float>((c >> 8) & 0xFF) / 255.f;
+      float b = static_cast<float>((c >> 16) & 0xFF) / 255.f;
+      return float3(r, g, b);
+   }
 
    void OnUI(reshade::api::effect_runtime* runtime)
    {
       DrawColoredSubHeader("OSU looking ahh progress bar for PVs.");
 
       //cb
-      bool enabled_prev = enabled;
-      enabled = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PROGRESSBAR, "HUD Progress Bar", {"Off", "Top", "Bottom"}, "Draw a simple progress bar for PVs.");
+      bool enabled = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PROGRESSBAR, "Enabled", {"Off", "Top", "Bottom"}, "Draw a simple progress bar for PVs.") > 0;
       if (!enabled) progress_ratio = -1.f;
-      if (enabled_prev != enabled) reshade::set_config_value(nullptr, NAME, "ProgressBarEnabled", enabled);
+
+      // float3 color picker
+      float3 color_unorm = ColorGetUnorm(cb_luma_global_settings.GameSettings.ProgressBarColorPacked);
+      if (ImGui::ColorEdit3("Color", &color_unorm.x))
+      {
+         cb_luma_global_settings.GameSettings.ProgressBarColorPacked = ColorGetPacked(color_unorm);
+         reshade::set_config_value(runtime, NAME, "ProgressBarColorPacked", cb_luma_global_settings.GameSettings.ProgressBarColorPacked);
+      }
 
       ImGui::NewLine();
-
       DrawColoredSubHeader("Progress");
 
       //ui progress bar
@@ -787,15 +810,13 @@ namespace ProgressBar
       ImGui::PopItemWidth();
 
       //ui stats
-      // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
       ImGui::Text("Time: %.2f / %.2f s", *MemoryHack::addr_pvTimeSec, *MemoryHack::addr_pvTimeTotalSec);
       ImGui::Text("Remaining: %.2f s", *MemoryHack::addr_pvTimeTotalSec - *MemoryHack::addr_pvTimeSec);
-      // ImGui::PopStyleColor();
    }
 
    void OnPresent()
    {
-      if (!enabled) return;
+      if (ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) == 0) return;
       progress_ratio_prev = progress_ratio;
       progress_ratio = *MemoryHack::addr_pvTimeSec / *MemoryHack::addr_pvTimeTotalSec;
       cb_luma_global_settings.GameSettings.ProgressBarRatio = progress_ratio > progress_ratio_prev ? progress_ratio : -1;
@@ -803,15 +824,13 @@ namespace ProgressBar
 
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
-      enabled = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) > 0;
-      
-      bool saved_enabled;
-      reshade::get_config_value(runtime, NAME, "ProgressBarEnabled", saved_enabled);
-      enabled |= saved_enabled;
-      
+      // ProgressBarRatio init
       cb_luma_global_settings.GameSettings.ProgressBarRatio = -1.f;
-      std::string s = "ProgressBar::OnLoad() enabled: " + std::to_string(enabled);
-      message(reshade::log::level::info, s.c_str());
+
+      // ProgressBarColorPacked init & load
+      cb_luma_global_settings.GameSettings.ProgressBarColorPacked = 0xFFFFFFFF; // white
+      reshade::get_config_value(runtime, NAME, "ProgressBarColorPacked", cb_luma_global_settings.GameSettings.ProgressBarColorPacked);
+      
    }
 }
 
@@ -3920,58 +3939,61 @@ public:
       // sync?
       if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
       
-      if (!is_sdr && ImGui::CollapsingHeader("Gamma"))
+      if (ImGui::CollapsingHeader("Gamma"))
       {
-         DrawColoredSubHeader("Reintroduce SDR's gamma mismatch to lower shadows.");
-         
-         // sync
-         if (ImGui::Checkbox("Sync to Scene Paper White", &GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite))
+         if (!is_sdr)
          {
-            reshade::set_config_value(runtime, NAME, "IsGammaCorrectionSyncPaperWhite", GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite);
-            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
-         }
+            DrawColoredSubHeader("Reintroduce SDR's gamma mismatch to lower shadows matching original intent.");
          
-         //paper white
-         if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::BeginDisabled();
-         {
-            if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
-               reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The threshold / paper white, so values lower are effected.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
-         }
-         if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::EndDisabled();
-
-         //link test
-         if (ImGui::Button("Further Explanation (Google Slides)"))
-            Website::OpenWebsite("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=false&loop=false&slide=id.g3e007eafba8_0_0");
-
-         ImGui::NewLine();////////////////
-         
-         //mode
-         is_disabled = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMACORRECT22) == 0; 
-         if (is_disabled) ImGui::BeginDisabled();
-         {            
-            //CUSTOM_GAMMA_CORRECTION_MODE dropdown
+            // sync
+            if (ImGui::Checkbox("Sync to Scene Paper White", &GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite))
             {
-               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE, "Gamma Correction Mode",
-                   { "Per-Channel (Hue Shifts)", "Perceptual (Hue Corrected)" },
-                   "How should the gamma correction operate?\n\nPer-Channel hue shifts shadows.\nPerceptual retains the hues of the original sRGB gamma output, only darkening luminance.");
+               reshade::set_config_value(runtime, NAME, "IsGammaCorrectionSyncPaperWhite", GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite);
+               if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
             }
-
-            //GammaPerceptualChrominanceCorrect
-            bool is_disabled_perceptual = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE) != 1;
-            if (is_disabled_perceptual) ImGui::BeginDisabled();
+            
+            //paper white
+            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::BeginDisabled();
             {
-               if (ImGui::SliderFloat("Perceptual Chrominance Gain Reduction", &cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, 0.f, 1.f, "%.4f"))
-                  reshade::set_config_value(runtime, NAME, "GammaPerceptualChrominanceCorrect", cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect);
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce chrominance/saturation increase from Gamma Correction in Perceptual mode,\npreventing it from becoming too artificial.");
-               DrawResetButton(cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, default_luma_global_game_settings.GammaPerceptualChrominanceCorrect, "GammaPerceptualChrominanceCorrect", runtime);
+               if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
+                  reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The threshold / paper white, so values lower are effected.");
+               DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
             }
-            if (is_disabled_perceptual) ImGui::EndDisabled();
-         }
-         if (is_disabled) ImGui::EndDisabled();
+            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::EndDisabled();
 
-         ImGui::NewLine();////////////////
+            //link test
+            if (ImGui::Button("Further Explanation (Google Slides)"))
+               Website::OpenWebsite("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=false&loop=false&slide=id.g3e007eafba8_0_0");
+
+            ImGui::NewLine();////////////////
+            
+            //mode
+            is_disabled = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMACORRECT22) == 0; 
+            if (is_disabled) ImGui::BeginDisabled();
+            {            
+               //CUSTOM_GAMMA_CORRECTION_MODE dropdown
+               {
+                  ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE, "Gamma Correction Mode",
+                      { "Per-Channel (Hue Shifts)", "Perceptual (Hue Corrected)" },
+                      "How should the gamma correction operate?\n\nPer-Channel hue shifts shadows.\nPerceptual retains the hues of the original sRGB gamma output, only darkening luminance.");
+               }
+
+               //GammaPerceptualChrominanceCorrect
+               bool is_disabled_perceptual = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE) != 1;
+               if (is_disabled_perceptual) ImGui::BeginDisabled();
+               {
+                  if (ImGui::SliderFloat("Perceptual Chrominance Gain Reduction", &cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, 0.f, 1.f, "%.4f"))
+                     reshade::set_config_value(runtime, NAME, "GammaPerceptualChrominanceCorrect", cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect);
+                  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce chrominance/saturation increase from Gamma Correction in Perceptual mode,\npreventing it from becoming too artificial.");
+                  DrawResetButton(cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, default_luma_global_game_settings.GammaPerceptualChrominanceCorrect, "GammaPerceptualChrominanceCorrect", runtime);
+               }
+               if (is_disabled_perceptual) ImGui::EndDisabled();
+            }
+            if (is_disabled) ImGui::EndDisabled();
+
+            ImGui::NewLine();////////////////
+         }
          
          DrawColoredSubHeader("PS4 Gamma");
 
@@ -3979,7 +4001,11 @@ public:
          {
             bool b = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_HDTVREC709_1) == 1;
             if (ImGui::Checkbox("Rec. 709 Gamma", &b)) ShaderDefineInfo::ToggleBool(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Do aggressive HDTV Rec. 709 gamma seen on PS4.\n\nWatch out for crushed shadows!\nPerhaps disable Gamma Correction above.");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Do aggressive HDTV Rec. 709 (w/ 2.4) gamma used by PS4 Future Tone."
+                                                                                             "\n(After implementing the curve, I did A/B testing with PS4 to confirm.)"
+                                                                                             "\n"
+                                                                                             "\nSince the original arcade on Sega RingEdge & Nu are Windows based,"
+                                                                                             "\nit is PS4's Rec. 709 gamma that is the outlier.");
          }
       }
 

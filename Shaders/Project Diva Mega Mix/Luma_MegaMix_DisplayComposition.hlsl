@@ -344,13 +344,12 @@ float3 BRUHHHAll(float3 x, float2 v1)
     #endif
 
 		// color setup
-		#if 1 // white
-			float3 pc = float3(1.f);
-		#elif 1 // teal
-			float3 pc = float3(61, 255, 255) / 255.f;
-		#elif 1 // pink
-			float3 pc = float3(255, 99, 226) / 255.f;
-		#endif
+		uint pcp = (uint)GS.ProgressBarColorPacked;
+		float3 pc = float3(
+			float(pcp & 0xFFu) / 255.0,
+			float((pcp >> 8) & 0xFFu) / 255.0,
+			float((pcp >> 16) & 0xFFu) / 255.0
+		);
 
     if (GS.ProgressBarRatio >= 0 && r) {
       if (v1.x <= GS.ProgressBarRatio) { //played
@@ -385,7 +384,7 @@ float3 BRUHHHAll(float3 x, float2 v1)
     //noop
   #else
     x = EncodeRec709(x);
-    x = gamma_sRGB_to_linear(x);
+    x = pow(x, 2.4);
   #endif
 
   //Gamma Correction & Mode / Fake BT2020 / Saturation (bruh moment)
