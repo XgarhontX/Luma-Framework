@@ -121,11 +121,10 @@ namespace GlobalsMegaMix
    // bool IsFullscreenOverlayFx = true;
    int TonemapInfoBackup = 0;
    int SwapchainChangeCount = 0;
-   // bool IsSkipUntilUI = false;
-   bool IsSkipTextAfterFinal = false;
+   bool IsUIText = true;
    bool UIIsReadmeDone = false;
    bool UIIsAdvanced = false;
-   // bool IsSKMode = false;
+   bool IsGammaCorrectionSyncPaperWhite = true;
 }
 
 namespace DrawingState
@@ -216,6 +215,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t XEGTAO_THREADS_NORMALSSMOOTH      = char_ptr_crc32("XEGTAO_THREADS_NORMALSSMOOTH");
    constexpr uint32_t XEGTAO_THREADS_AO                 = char_ptr_crc32("XEGTAO_THREADS_AO");
    constexpr uint32_t XEGTAO_THREADS_DENOISE            = char_ptr_crc32("XEGTAO_THREADS_DENOISE");
+   constexpr uint32_t CUSTOM_PS4BLUR_1                  = char_ptr_crc32("CUSTOM_PS4BLUR_1");
 
    void OnInit()
    {
@@ -249,6 +249,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_TESTBGSPRITES", '0', true, false, "Test BG Sprites layering.", 2},
          {"CUSTOM_PROGRESSBAR", '0', true, false, "Play head progress bar.", 2},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
+         {"CUSTOM_PS4BLUR_1", '0', true, false, "PS4 frame blur / ghosting.", 2},
          {"XEGTAO_SLICECOUNT", '1', true, false, "XeGTAO samples.", 6},
          {"XEGTAO_STEPSPERSLICE", '0', true, false, "XeGTAO samples.", 2},
          {"XEGTAO_HALFRES", '1', true, false, "XeGTAO half resolution.", 1},
@@ -261,19 +262,18 @@ namespace ShaderDefineInfo
          {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, false, "XeGTAO compute shader thread groups.", 1},
          {"XEGTAO_THREADS_AO", '1', true, false, "XeGTAO compute shader thread groups.", 1},
          {"XEGTAO_THREADS_DENOISE", '0', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"BLOOM_IMPROVE", '0', true, false, "Improve bloom blurring.", 1},
+         {"CUSTOM_SDR", '0', true, false, "SDR path.", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       auto_recompile_defines = true; //force
-      // allow_disabling_gamma_ramp = true; 
       assert(shader_defines_data.size() < MAX_SHADER_DEFINES);
       
       // Default built-in
-      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
-      GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0');
-      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('1');
+      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('9'); GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetValue('9');
+      GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('9'); GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetValue('9'); GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetValueFixed(true);
+      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('9'); GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetValue('9');
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValue('0'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValueFixed(true);
-      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
+      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2'); GetShaderDefineData(UI_DRAW_TYPE_HASH).SetValue('2'); GetShaderDefineData(UI_DRAW_TYPE_HASH).SetValueFixed(true);
    }
 
    static char InvertCharBool(char b)
@@ -414,99 +414,103 @@ namespace AutoExposureFix
       time_last_ae_allow = time_curr; //new timestamp
       return true;
    }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
+   }
 }
 
 namespace CachedCB
 {
-   bool is_dirty = true;
-   
    constexpr float white_clip_def = /*0.022f*/0.1650;
    float white_clip = white_clip_def;
-   bool is_rec709;
-
-   float peak_prev;
-   float paper_prev;
-   float white_clip_prev;
-   bool is_rec709_prev;
 
    float Encode_sRGB(float x)
    {
-      if (x <= 0.0031308f) return 12.92f * x;
-      else return 1.055f * powf(x, 1.f / 2.4f) - 0.055f;
+      return x <= 0.0031308f ? x * 12.92f : 1.055f * powf(x, 1.f / 2.4f) - 0.055f;
    }
 
    float Decode_sRGB(float x)
    {
-      if (x <= 0.04045f) return x / 12.92f;
-      else return powf((x + 0.055f) / 1.055f, 2.4f);
+      return x <= 0.04045f ? x / 12.92f : powf((x + 0.055f) / 1.055f, 2.4f);
    }
 
    float Encode_Rec709(float x)
    {
-      float r0, r1;
-      r1 = x;
-      r0 = pow(r1, 0.449999988);
-      r0 = r0 * 1.09899998 + -0.0989999995;
-      bool r2 = (0.0179999992 >= r1);
-      r1 = 4.5 * r1;
-      r0 = r2 ? r1 : r0;
-      return r0;
+      return 0.0179999992f >= x ? 4.5f * x : 1.09899998f * powf(x, 0.449999988f) - 0.0989999995f;
    }
 
    float Decode_Rec709(float x)
    {
-      float r0, r2, r4;
-      r0 = x;
-      r2 = 0.0989999995 + r0; 
-      r2 = 0.909918129 * r2;
-      r2 = pow(r2, 2.22222233);
-      bool r3 = 0.0810000002 >= r0;
-      r4 = 0.222222224 * r0;
-      r2 = r3 ? r4 : r2;
-      return r2;
+      return 0.0810000002f >= x ? 0.222222224f * x : powf(0.909918129f * (0.0989999995f + x), 2.22222233f);
+   }
+
+   float Rec709Correction(float x)
+   {
+      x = Encode_sRGB(x);
+      x = Decode_Rec709(x);
+      return x;
    }
    
    float CalcWhiteClip(float p, float pw, float wc)
    {
       float bruh1 = (p / 1000.f);
       float bruh = bruh1;
-      bruh = pow(bruh, bruh1 < 1.f ? 4.4f : 3.6f); // fudge
+      bruh = powf(bruh, bruh1 < 1.f ? 4.4f : 3.6f); // fudge
       return (wc / pw) * 6000000.f * bruh; //kms, this is the biggest bandaid of all bandaids. gamma lighting ahh
    }
 
    float CalcPeak(float p, float pw, bool rec709)
    {
       p /= pw;
-      if (rec709)
-      {
-         p = Encode_sRGB(p);
-         p = Decode_Rec709(p);
-      }
+      if (rec709) p = Rec709Correction(p);
       return p;
    }
 
-   void Update(DeviceData& device_data)
+   float CalcIntScaling(float spw, float uipw, bool rec709)
+   {
+      float is = spw / uipw;
+      if (rec709) is = Rec709Correction(is);
+      return is;
+   }
+
+   void Update()
    {
       //changed?
-      is_rec709 = ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
-      if (cb_luma_global_settings.ScenePeakWhite != peak_prev || cb_luma_global_settings.ScenePaperWhite != paper_prev || white_clip != white_clip_prev || is_rec709 != is_rec709_prev)
+      bool is_rec709 = ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
+      
+      static float peak_prev = 0;
+      static float paper_prev = 0;
+      static float ui_paper_prev = 0;
+      static float white_clip_prev = 0;
+      static bool is_rec709_prev = false;
+
+      [[unlikely]]
+      if (cb_luma_global_settings.ScenePeakWhite != peak_prev ||
+         cb_luma_global_settings.ScenePaperWhite != paper_prev ||
+         cb_luma_global_settings.UIPaperWhite != ui_paper_prev ||
+         white_clip != white_clip_prev ||
+         is_rec709 != is_rec709_prev)
       {
-         is_dirty = true;
          peak_prev = cb_luma_global_settings.ScenePeakWhite;
          paper_prev = cb_luma_global_settings.ScenePaperWhite;
          white_clip_prev = white_clip;
+         ui_paper_prev = cb_luma_global_settings.UIPaperWhite;
          is_rec709_prev = is_rec709;
+
+         //update
+         cb_luma_global_settings.GameSettings.TonemapperPeakCached = CalcPeak(cb_luma_global_settings.ScenePeakWhite, cb_luma_global_settings.ScenePaperWhite, is_rec709);
+         cb_luma_global_settings.GameSettings.TonemapperMaxExpectedCached = CalcWhiteClip(cb_luma_global_settings.ScenePeakWhite, cb_luma_global_settings.ScenePaperWhite, white_clip);
+         cb_luma_global_settings.GameSettings.IntermediateScalingCached = CalcIntScaling(cb_luma_global_settings.ScenePaperWhite, cb_luma_global_settings.UIPaperWhite, is_rec709);
+
+         if (DEVELOPMENT) reshade::log::message(reshade::log::level::info, std::format("CachedCB: Peak: {}, Paper: {}, UI Paper: {}, WhiteClip: {}, Rec709: {}",
+            cb_luma_global_settings.GameSettings.TonemapperPeakCached,
+            cb_luma_global_settings.GameSettings.TonemapperMaxExpectedCached,
+            cb_luma_global_settings.GameSettings.IntermediateScalingCached,
+            white_clip,
+            is_rec709).c_str());
       }
-
-      //gatekeep
-      if (!is_dirty) return;
-      is_dirty = false;
-
-      //update
-      cb_luma_global_settings.GameSettings.TonemapperPeakCached = CalcPeak(cb_luma_global_settings.ScenePeakWhite, cb_luma_global_settings.ScenePaperWhite, is_rec709);
-      cb_luma_global_settings.GameSettings.TonemapperMaxExpectedCached = CalcWhiteClip(cb_luma_global_settings.ScenePeakWhite, cb_luma_global_settings.ScenePaperWhite, white_clip);
-      device_data.cb_luma_global_settings_dirty = true;
-      cb_luma_global_settings.GameSettings.TonemapHDRStops = log2(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite);
    }
 }
 
@@ -629,7 +633,7 @@ namespace IndividualPVTuning
       PVItem* prev_pv = current_pv.item;
       
       //current_pv
-      if (is_dirty)
+      [[unlikely]] if (is_dirty)
       {
          //id
          current_pv.id = pv_id;
@@ -647,7 +651,7 @@ namespace IndividualPVTuning
       }
       
       //restore prev settings if changed
-      if (is_dirty && prev_pv != nullptr)
+      [[unlikely]] if (is_dirty && prev_pv != nullptr)
       {
          //peak
          if (prev_pv->is_clamp_1_stop && roundf(cb_luma_global_settings.ScenePeakWhite) == roundf(cb_luma_global_settings.ScenePaperWhite * 2.f))
@@ -655,7 +659,7 @@ namespace IndividualPVTuning
       }
 
       //save settings & apply new settings
-      if (is_dirty && current_pv.item != nullptr)
+      [[unlikely]] if (is_dirty && current_pv.item != nullptr)
       {
          //reset prev_settings
          prev_settings = PrevSettings();
@@ -674,9 +678,6 @@ namespace IndividualPVTuning
          s = "IndividualPVTuning::OnPresent() Current PV: " + std::to_string(current_pv.id) + " " + (current_pv.item != nullptr ? "(tuning applied)" : "(no tuning)") + " " + (current_pv.item != nullptr ? current_pv.item->reason : "");
          message(reshade::log::level::info, s.c_str());
       }
-
-      // TonemapHDRStops
-      cb_luma_global_settings.GameSettings.TonemapHDRStops = log2(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite);
    }
 
    void OnUI(reshade::api::effect_runtime* runtime)
@@ -697,7 +698,7 @@ namespace IndividualPVTuning
       }
 
       DrawColoredSubHeader("Current");
-      ImGui::Text("PV ID: %d", current_pv.id);
+      ImGui::Text("PV ID: %d", /*current_pv.id*/ *MemoryHack::addr_pvID);
       ImGui::Text("PV Name (maybe): %s", name_str.c_str());
 
       ImGui::NewLine();
@@ -747,7 +748,7 @@ namespace HighFPS
       *MemoryHack::addr_puiGameLimit = target; //no need for VirtualProtect
    }
 
-   static void Unpatch()
+   void Unpatch()
    {
       if (!IsReady()) return;
       *MemoryHack::addr_puiGameLimit = 60u;
@@ -756,30 +757,60 @@ namespace HighFPS
 
 namespace ProgressBar
 {
-   bool enabled = false;
    float progress_ratio = -1.f;
    float progress_ratio_prev = -1.f;
 
+   int ColorGetPacked(float3 color_unorm)
+   {
+      uint8_t r = static_cast<uint8_t>(std::clamp(color_unorm.x * 255.f, 0.f, 255.f));
+      uint8_t g = static_cast<uint8_t>(std::clamp(color_unorm.y * 255.f, 0.f, 255.f));
+      uint8_t b = static_cast<uint8_t>(std::clamp(color_unorm.z * 255.f, 0.f, 255.f));
+      uint8_t a = 255;
+      return (a << 24) | (b << 16) | (g << 8) | r;
+   }
+
+   float3 ColorGetUnorm(int color_packed)
+   {
+      uint32_t c = static_cast<uint32_t>(color_packed);
+      float r = static_cast<float>(c & 0xFF) / 255.f;
+      float g = static_cast<float>((c >> 8) & 0xFF) / 255.f;
+      float b = static_cast<float>((c >> 16) & 0xFF) / 255.f;
+      return float3(r, g, b);
+   }
+
    void OnUI(reshade::api::effect_runtime* runtime)
    {
+      DrawColoredSubHeader("OSU looking ahh progress bar for PVs.");
+
+      //cb
+      bool enabled = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PROGRESSBAR, "Enabled", {"Off", "Top", "Bottom"}, "Draw a simple progress bar for PVs.") > 0;
+      if (!enabled) progress_ratio = -1.f;
+
+      // float3 color picker
+      float3 color_unorm = ColorGetUnorm(cb_luma_global_settings.GameSettings.ProgressBarColorPacked);
+      if (ImGui::ColorEdit3("Color", &color_unorm.x))
+      {
+         cb_luma_global_settings.GameSettings.ProgressBarColorPacked = ColorGetPacked(color_unorm);
+         reshade::set_config_value(runtime, NAME, "ProgressBarColorPacked", cb_luma_global_settings.GameSettings.ProgressBarColorPacked);
+      }
+
+      ImGui::NewLine();
+      DrawColoredSubHeader("Progress");
+
       //ui progress bar
       float progress_ratio_ui = *MemoryHack::addr_pvTimeSec / *MemoryHack::addr_pvTimeTotalSec;
-      ImGui::ProgressBar(progress_ratio_ui);
+      ImGui::PushItemWidth(-FLT_MIN);
+      ImGui::ProgressBar(progress_ratio_ui, ImVec2(-FLT_MIN, 0.0f));
+      ImGui::PopItemWidth();
 
       //ui stats
       ImGui::Text("Time: %.2f / %.2f s", *MemoryHack::addr_pvTimeSec, *MemoryHack::addr_pvTimeTotalSec);
       ImGui::Text("Remaining: %.2f s", *MemoryHack::addr_pvTimeTotalSec - *MemoryHack::addr_pvTimeSec);
-
-      //cb
-      bool enabled_prev = enabled;
-      enabled = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PROGRESSBAR, "HUD Progress Bar", {"Off", "Top", "Bottom"}, "Draw a simple progress bar for PVs.");
-      if (!enabled) progress_ratio = -1.f;
-      if (enabled_prev != enabled) reshade::set_config_value(nullptr, NAME, "ProgressBarEnabled", enabled);
    }
 
    void OnPresent()
    {
-      if (!enabled) return;
+      if (ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) == 0) return;
       progress_ratio_prev = progress_ratio;
       progress_ratio = *MemoryHack::addr_pvTimeSec / *MemoryHack::addr_pvTimeTotalSec;
       cb_luma_global_settings.GameSettings.ProgressBarRatio = progress_ratio > progress_ratio_prev ? progress_ratio : -1;
@@ -787,15 +818,13 @@ namespace ProgressBar
 
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
-      enabled = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) > 0;
-      
-      bool saved_enabled;
-      reshade::get_config_value(runtime, NAME, "ProgressBarEnabled", saved_enabled);
-      enabled |= saved_enabled;
-      
+      // ProgressBarRatio init
       cb_luma_global_settings.GameSettings.ProgressBarRatio = -1.f;
-      std::string s = "ProgressBar::OnLoad() enabled: " + std::to_string(enabled);
-      message(reshade::log::level::info, s.c_str());
+
+      // ProgressBarColorPacked init & load
+      cb_luma_global_settings.GameSettings.ProgressBarColorPacked = 0xFFFFFFFF; // white
+      reshade::get_config_value(runtime, NAME, "ProgressBarColorPacked", cb_luma_global_settings.GameSettings.ProgressBarColorPacked);
+      
    }
 }
 
@@ -874,8 +903,6 @@ namespace XeGTAO
 
    int denoise_count = 3; // denoise the AO result
       constexpr const char* reshadesave_denoise = "XeGTAODenoise";
-
-   PUBLISHING_CONSTEXPR int debug_mode = 0;
 
    PUBLISHING_CONSTEXPR bool debug_late = false;
    PUBLISHING_CONSTEXPR bool debug_skipsmooth = false;
@@ -1390,6 +1417,8 @@ namespace XeGTAO
 
    bool TryDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps, int main_color_index)
    {
+      if (DEVELOPMENT && !IsModEnabled()) return true;
+
       // get bound main color RES from original draw
       ComPtr<ID3D11Resource> main_color_res = nullptr;
       uint64_t main_color_res_handle = 0;
@@ -1414,9 +1443,7 @@ namespace XeGTAO
 
       // failed: bound main color RES != FoundResource::Color::res (i.e. X Song Pack HQ Mirrored World Reflections)
       if (main_color_res_handle != reinterpret_cast<uint64_t>(FoundResource::Color::res.get())) return false;
-
-      if (debug_mode == 1) return false;
-
+      
       // Thread counts setup
       int checkerboard_mode = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD);
       UINT thread_x_effective;
@@ -1432,15 +1459,10 @@ namespace XeGTAO
 
       // half res setup
       bool is_half_res = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-
-      if (debug_mode == 2) return false;
-      
       // Back up draw 
       DrawStateStack<DrawStateStackType::SimpleGraphics> dss;
       dss.Cache(native_device_context, 0);
-
-      if (debug_mode == 3) return false;
-
+      
       // unbind OM RTV0 and DSV, avoid conflict
       if (main_color_index < 0)
       {
@@ -1458,9 +1480,7 @@ namespace XeGTAO
       // CB bind
       native_device_context->CSSetConstantBuffers(1, 1, &FoundResource::SceneCB::cb);
       SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
-
-      if (debug_mode == 4) return false;
-
+      
       // PreFilterDepth bind and draw
       const std::array<ID3D11UnorderedAccessView*, DEPTH_MIP_LEVELS + 1> uavs_depth = {
          CreatedResource::Depth32::uav.get(),
@@ -1475,15 +1495,11 @@ namespace XeGTAO
       native_device_context->CSSetShaderResources(0, 1, &FoundResource::Depth::srv); //in: depth
       // native_device_context->Dispatch((FoundResource::size.x + 16 - 1) / 16, (FoundResource::size.y + 16 - 1) / 16, 1);
       native_device_context->Dispatch((CreatedResource::PreFilteredDepth::tex_desc.Width + 16 - 1) / 16, (CreatedResource::PreFilteredDepth::tex_desc.Height + 16 - 1) / 16, 1);
-
-      if (debug_mode == 5) return false;
-
+      
       // Unbind PreFilteredDepth UAVs
       constexpr std::array<ID3D11UnorderedAccessView*, DEPTH_MIP_LEVELS + 1> null_uavs_depth = { };
       native_device_context->CSSetUnorderedAccessViews(0, null_uavs_depth.size(), null_uavs_depth.data(), nullptr);
-
-      if (debug_mode == 6) return false;
-
+      
       // NormalGenerate bind and draw
       native_device_context->CSSetUnorderedAccessViews(0, 1, &CreatedResource::Normals0::uav, nullptr); //out: normals
       native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_NormalGenerate)).get(), nullptr, 0);
@@ -1496,8 +1512,6 @@ namespace XeGTAO
       }
       native_device_context->Dispatch(thread_x_effective, thread_y_effective, 1);
       ID3D11ShaderResourceView* normals_srv_effective = CreatedResource::Normals0::srv.get();
-
-      if (debug_mode == 7) return false;
       
       if (!debug_skipsmooth)
       {
@@ -1513,9 +1527,7 @@ namespace XeGTAO
          native_device_context->CSSetShaderResources(0, srvs_normals_smooth_1.size(), srvs_normals_smooth_1.data());
          native_device_context->Dispatch(thread_x_effective, thread_y_effective, 1);
          normals_srv_effective = CreatedResource::Normals1::srv.get();
-
-         if (debug_mode == 8) return false;
-
+         
          // NormalsSmooth 2 bind and draw
          if (ShaderDefineInfo::Get(ShaderDefineInfo::XEGTAO_NORMALSMOOTH_QUALITY) > 0)
          {
@@ -1526,8 +1538,6 @@ namespace XeGTAO
             native_device_context->Dispatch(thread_x_effective, thread_y_effective, 1);
             normals_srv_effective = CreatedResource::Normals0::srv.get();
          }
-         
-         if (debug_mode == 9) return false;
       }
 
       // XeGTAO Main Pass bind and draw
@@ -1541,8 +1551,6 @@ namespace XeGTAO
          thread_y_effective = ThreadCount::main_pass.GetYEffective(checkerboard_mode >= 2);
       }
       native_device_context->Dispatch(thread_x_effective, thread_y_effective, 1);
-
-      if (debug_mode == 10) return false;
       
       // Denoise bind and draw loop
       bool ao_flipflop = false;
@@ -1568,9 +1576,7 @@ namespace XeGTAO
          native_device_context->Dispatch(thread_x_effective, thread_y_effective,1); // half width, but cs does 2 pixels
       }
       ID3D11ShaderResourceView* ao_srv = !ao_flipflop ? CreatedResource::Main0::srv.get() : CreatedResource::Main1::srv.get();
-
-      if (debug_mode == 11) return false;
-
+      
       // Unbind CS
       constexpr std::array<ID3D11UnorderedAccessView*, 1> null_uavs = { };
       native_device_context->CSSetUnorderedAccessViews(0, null_uavs.size(), null_uavs.data(), nullptr);
@@ -1588,12 +1594,8 @@ namespace XeGTAO
       constexpr std::array<ID3D11SamplerState*, 2> null_2samplers = { };
       native_device_context->CSSetSamplers(0, null_2samplers.size(), null_2samplers.data());
       
-      if (debug_mode == 12) return false;
-      
       // CopyResource() to MainColorDuped (has to be, since original main color is not UAV-able)
       native_device_context->CopyResource(CreatedResource::MainColorDuped::tex.get(), FoundResource::Color::res.get());
-      
-      if (debug_mode == 13) return false;
       
       // Apply XeGTAO to main color RTV0 bind and draw (will also be cleaned up by dss)
       {
@@ -1608,11 +1610,8 @@ namespace XeGTAO
          const std::array<ID3D11ShaderResourceView*, 5> ps_srvs = { CreatedResource::MainColorDuped::srv.get(), ao_srv, FoundResource::Depth::srv.get(), CreatedResource::PreFilteredDepth::srv.get(), normals_srv_effective };
 
          // save index 3+
-         if (DEVELOPMENT)
-         {
-            ASSERT_ONCE_MSG(dss.srv_num == 3, "WTH! Is DrawStateStackType::SimpleGraphics srv_num != 3?!?!");
-            ASSERT_ONCE_MSG(dss.samplers_num == 1, "WTH! Is DrawStateStackType::SimpleGraphics samplers_num != 1?!?!");
-         }
+         ASSERT_ONCE_MSG(dss.srv_num == 3, "WTH! Is DrawStateStackType::SimpleGraphics srv_num != 3?!?!");
+         ASSERT_ONCE_MSG(dss.samplers_num == 1, "WTH! Is DrawStateStackType::SimpleGraphics samplers_num != 1?!?!");
          std::array<ID3D11ShaderResourceView*, 2> ps_srvs_saved = { };
          native_device_context->PSGetShaderResources(3, ps_srvs_saved.size(), ps_srvs_saved.data()); // index 3 & 4
          
@@ -1650,8 +1649,6 @@ namespace XeGTAO
          for (auto& srv : ps_srvs_saved) if (srv) { srv->Release(); srv = nullptr; }
       }
       
-      if (debug_mode == 14) return false;
-
       // restore draw state
       dss.Restore(native_device_context, true, true);
 
@@ -1738,13 +1735,19 @@ namespace SSS
    {
       Unknown, // start
       Setup,  // Setup skin surface buffer 0x93881580 drawn
-      Downsample0, // Downsampling pass
-      Downsample1, // Downsampling pass
-      Resolve, // actual SSS computation
-      Using, // forward render using SSS result // TODO: del
+      PBR_Downsample,
+      PBR_Widen,
+      NPR_Edges,
+      NPR_Downsample,
+      NPR_SSSPrep,
+      SSS,
       Done, // done for this frame
    };
-   State state = Unknown; // denotes which shader has drawn previously, to know what to do next
+   State state = Unknown; // denotes which shader has drawn prev
+
+   uint32_t curr_pv_id = 0;
+
+   constexpr const char* Luma_NPRPreSSS = "Luma_NPRPreSSS";
 
    namespace Resources
    {
@@ -1755,37 +1758,29 @@ namespace SSS
          uint2 size = { 0, 0 };
 
          ComPtr<ID3D11ShaderResourceView> original_srv; // our own created to original
-         ComPtr<ID3D11Texture2D> new_tex;
-         ComPtr<ID3D11ShaderResourceView> new_srv;
-         ComPtr<ID3D11RenderTargetView> new_rtv;
 
+         // dual interchanging ring buffer like usage
+         bool current_new = false;
+         ComPtr<ID3D11ShaderResourceView> new_srv0;
+         ComPtr<ID3D11RenderTargetView> new_rtv0;
+         ComPtr<ID3D11ShaderResourceView> new_srv1;
+         ComPtr<ID3D11RenderTargetView> new_rtv1;
+         void IncrementNew() { current_new = !current_new; }
+         
          uint64_t GetOriginalResHandle() const { return reinterpret_cast<uint64_t>(original_res.get()); }
          uint64_t GetReplacementResHandle() const { return reinterpret_cast<uint64_t>(replacement_res.get()); }
          
          bool IsValid() const { return original_res.get(); }
          void Reset()
          {
+            size = { 0, 0 };
             original_res.reset(); replacement_res.reset();
-            new_tex.reset(); new_srv.reset(); new_rtv.reset();
+            new_srv0.reset(); new_rtv0.reset();
          }
       };
 
       std::array<Item, 2> items = { };
-      uint8_t item_count = 0;
-
-      bool InsertItem(Item&& item)
-      {
-         for (auto& i : items)
-         {
-            if (!i.IsValid())
-            {
-               i = std::move(item);
-               return true;
-            }
-         }
-         item_count++;
-         return false;
-      }
+      int GetItemCount() { return std::count_if(items.begin(), items.end(), [](const Item& item) { return item.IsValid(); }); }
 
       Item* TryGetItemForOriginal(uint64_t original_res_handle)
       {
@@ -1814,153 +1809,226 @@ namespace SSS
       void Reset()
       {
          for (auto& item : items) item.Reset();
-         item_count = 0;
       }
    }
 
    // return only Skip or None (continues normal exec)
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
+      /*
+         PBR
+         0x93881580: geo setup
+         0x26AF16B8: downsample
+         0xF2254A92: edges wider
+         0x54415551: sss0
+
+         NPR
+         0x93881580: geo setup (with edge outline precompute)
+         0x8E7027B5: edge outline resolve (slightly unrelated)
+         0x26AF16B8: downsample
+         0x086EEB5C: geo setup resolved to sss0 usable
+         0x54415551: sss0
+       */
       if (!enabled) return DrawOrDispatchOverrideType::None;
 
       // if SSS setup shader, force state
       if (ps == 0x93881580) state = Setup;
 
-      static Resources::Item* current_item = nullptr; //acts like token
+      static Resources::Item* current_item = nullptr; // acts like token
+      static int replace_remaining = 0; // acts like token
       
       switch (state)
       {
-         case Unknown: break;
+         case Unknown: return DrawOrDispatchOverrideType::None;
          case Setup:
          {
+            // PBR_Downsample
             if (ps == 0x26AF16B8) // "sprite simple"
             {
-               state = Downsample0;
+               state = PBR_Downsample;
                return DrawOrDispatchOverrideType::Skip; // allow this draw to continue
             }
-            
-            if (!current_item) // do only once per set
+
+            // NPR_Edges
+            if (ps == 0x8E7027B5) // edge outlines
+            {
+               state = NPR_Edges;
+               return DrawOrDispatchOverrideType::None; // allow this draw to continue
+            }
+
+            // init item (only once per set)
+            if (!current_item) 
             {
                // get RTV0
                ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
                native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
                ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() rtv0 is nullptr");
-
+         
                // get RES from RTV0
                ComPtr<ID3D11Resource> res0 = nullptr;
                rtv0->GetResource(res0.put());
-
+         
                // RES handle
                auto res_handle = reinterpret_cast<uint64_t>(res0.get());
-
+         
                // get item
                current_item = Resources::TryGetItemForOriginal(res_handle);
-
+         
                // create new
-               [[unlikely]]
-               if (!current_item)
+               [[unlikely]] if (!current_item)
                {
                   // query TEX
                   ComPtr<ID3D11Texture2D> tex0 = nullptr;
                   auto hr0 = res0->QueryInterface(tex0.put());
                   ASSERT_MSG(SUCCEEDED(hr0), "SSS::OnDrawOrDispatchOverride() res0->QueryInterface(tex0) failed");
-
+         
                   // get DESC for size
                   D3D11_TEXTURE2D_DESC tex_desc = {};
                   tex0->GetDesc(&tex_desc);
                   uint2 size = { tex_desc.Width, tex_desc.Height };
                   
-                  // create
-                  {
-                     current_item = Resources::TryGetEmptyItem();
-                     ASSERT_MSG(current_item != nullptr, "SSS::Resources::CreateItem() no empty item slot");
-         
-                     D3D11_TEXTURE2D_DESC tex_desc = {};
-                     tex_desc.Width = size.x;
-                     tex_desc.Height = size.y;
-                     tex_desc.MipLevels = 1;
-                     tex_desc.ArraySize = 1;
-                     tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-                     tex_desc.SampleDesc.Count = 1;
-                     tex_desc.SampleDesc.Quality = 0;
-                     tex_desc.Usage = D3D11_USAGE_DEFAULT;
-                     tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-                     tex_desc.CPUAccessFlags = 0;
-                     tex_desc.MiscFlags = 0;
+                  // create item
+                  current_item = Resources::TryGetEmptyItem();
+                  ASSERT_MSG(current_item != nullptr, "SSS::Resources::CreateItem() no empty item slot");
 
-                     current_item->size = size;
-                     current_item->original_res.attach(res0.detach()); // save original RES
+                  // tex setup
+                  current_item->size = size;
+                  ComPtr<ID3D11Texture2D> replacement_tex = nullptr;
+                  tex_desc.Width = current_item->size.x;
+                  tex_desc.Height = current_item->size.y;
+                  tex_desc.MipLevels = 1;
+                  tex_desc.ArraySize = 1;
+                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  tex_desc.SampleDesc.Count = 1;
+                  tex_desc.SampleDesc.Quality = 0;
+                  tex_desc.Usage = D3D11_USAGE_DEFAULT;
+                  tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                  tex_desc.CPUAccessFlags = 0;
+                  tex_desc.MiscFlags = 0;
+                  
+                  // new 0
+                  /*auto*/ hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr0), "SSS::Resources::Item::CreateReplacement() hr0");
+                  auto hr1 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_srv0.put());
+                  ASSERT_MSG(SUCCEEDED(hr1), "SSS::Resources::Item::CreateReplacement() hr1");
+                  auto hr2 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_rtv0.put());
+                  ASSERT_MSG(SUCCEEDED(hr2), "SSS::Resources::Item::CreateReplacement() hr2");
 
-                     auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, current_item->new_tex.put());
-                     ASSERT_MSG(SUCCEEDED(hr0), "SSS::Resources::CreateItem() hr0");
-         
-                     auto hr1 = native_device->CreateShaderResourceView(current_item->new_tex.get(), nullptr, current_item->new_srv.put());
-                     ASSERT_MSG(SUCCEEDED(hr1), "SSS::Resources::CreateItem() hr1");
-         
-                     auto hr2 = native_device->CreateRenderTargetView(current_item->new_tex.get(), nullptr, current_item->new_rtv.put());
-                     ASSERT_MSG(SUCCEEDED(hr2), "SSS::Resources::CreateItem() hr2");
+                  // new 1
+                  auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr3), "SSS::Resources::Item::CreateReplacement() hr3");
+                  auto hr4 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_srv1.put());
+                  ASSERT_MSG(SUCCEEDED(hr4), "SSS::Resources::Item::CreateReplacement() hr4");
+                  auto hr5 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_rtv1.put());
+                  ASSERT_MSG(SUCCEEDED(hr5), "SSS::Resources::Item::CreateReplacement() hr5");
 
-                     auto hr3 = native_device->CreateShaderResourceView(current_item->original_res.get(), nullptr, current_item->original_srv.put());
-                     ASSERT_MSG(SUCCEEDED(hr3), "SSS::Resources::CreateItem() hr3");
-
-                     current_item->original_res = res0; // save original RES
-                  }
+                  // original RES & SRV
+                  current_item->original_res.attach(res0.detach());
+                  auto hr6 = native_device->CreateShaderResourceView(current_item->original_res.get(), nullptr, current_item->original_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr6), "SSS::Resources::Item::CreateReplacement() hr6");
                }
             }
             
             return DrawOrDispatchOverrideType::None;
          }
-         case Downsample0:
+         case PBR_Downsample:
          {
-            if (ps == 0xF2254A92) state = Downsample1;
-            return DrawOrDispatchOverrideType::Skip;
-         }
-         case Downsample1:
-         {
-            if (ps == 0x54415551)
+            // PBR_Widen
+            if (ps == 0xF2254A92)
             {
-               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() current_item is nullptr");
-
-               // get RTV0
-               ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
-               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-
-               // get RES from RTV0
-               rtv0->GetResource(current_item->replacement_res.put());
-
-               // set SRV0 as full res
-               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv);
-
-               // set RTV0 as our new
-               native_device_context->OMSetRenderTargets(1, &current_item->new_rtv, nullptr);
-
-               // set viewport to new size
-               D3D11_VIEWPORT viewport;
-               viewport.TopLeftX = 0;
-               viewport.TopLeftY = 0;
-               viewport.Width = current_item->size.x;
-               viewport.Height = current_item->size.y;
-               viewport.MinDepth = 0;
-               viewport.MaxDepth = 1;
+               state = PBR_Widen;
+#if 0
+               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() PBR_Downsample current_item is nullptr");
+               
+               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv); // SRV0 full res
+               native_device_context->OMSetRenderTargets(1, !current_item->current_new ? &current_item->new_rtv0 : &current_item->new_rtv1, nullptr); // RTV0 new res
+               
+               // viewport full
+               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
                native_device_context->RSSetViewports(1, &viewport);
-            
-               // next state
-               current_item = nullptr; // consume
-               state = Resolve;
-               return DrawOrDispatchOverrideType::None;
+
+#else
+               return DrawOrDispatchOverrideType::Skip;
+#endif
+            }
+            return DrawOrDispatchOverrideType::None;
+         }
+         case NPR_Edges:
+         {
+            // NPR_Downsample
+            if (ps == 0x26AF16B8)
+            {
+               state = NPR_Downsample;
+               return DrawOrDispatchOverrideType::Skip;
             }
             
-            return DrawOrDispatchOverrideType::Skip;
+            // should not happen, but just in case
+            ASSERT_MSG(false, "SSS::OnDrawOrDispatchOverride() NPR_Edges unexpected ps");
+            return DrawOrDispatchOverrideType::None; 
          }
-         case Resolve:
+         case NPR_Downsample:
+         {
+            // NPR_SSSPrep
+            if (ps == 0x086EEB5C) //TODO: skip this and make SSS sample only x & w.
+            {
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_NPRPreSSS)).get(), nullptr, 0);
+               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv); // SRV0 full res
+               native_device_context->OMSetRenderTargets(1, !current_item->current_new ? &current_item->new_rtv0 : &current_item->new_rtv1, nullptr); // RTV0 new res
+
+               // viewport full
+               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
+               native_device_context->RSSetViewports(1, &viewport);
+               
+               state = NPR_SSSPrep;
+            }
+            return DrawOrDispatchOverrideType::None;
+         }
+         case NPR_SSSPrep: 
+         case PBR_Widen:
+         {
+            // SSS resolve
+            if (ps == 0x54415551)
+            {
+               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() PBR_Widen current_item is nullptr");
+
+               // get RTV0 RES for replacement
+               ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               rtv0->GetResource(current_item->replacement_res.put());
+
+               // set SRV0 & RTV0 as full res
+               ID3D11ShaderResourceView* const* srv;
+               if (state == PBR_Widen) srv = &current_item->original_srv; // use original before downsample
+               else
+               {
+                  srv = !current_item->current_new
+                        ? &current_item->new_srv0
+                        : &current_item->new_srv1;
+                  current_item->IncrementNew(); // flipflop
+               }
+               native_device_context->PSSetShaderResources(0, 1, srv);
+               native_device_context->OMSetRenderTargets(1, !current_item->current_new ? &current_item->new_rtv0 : &current_item->new_rtv1, nullptr);
+
+               // viewport full
+               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
+               native_device_context->RSSetViewports(1, &viewport);
+
+               // next state
+               current_item = nullptr; // consume
+               replace_remaining = Resources::GetItemCount(); // rearm
+               state = SSS;
+            }
+            return DrawOrDispatchOverrideType::None;
+         }
+         case SSS:
          {
             // done?
-            if (TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
+            if (replace_remaining == 0 || TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
             {
                state = Done;
                break;
             }
-            
+
             // get SRV16
             ComPtr<ID3D11ShaderResourceView> srv16 = nullptr;
             native_device_context->PSGetShaderResources(16, 1, srv16.put());
@@ -1977,20 +2045,25 @@ namespace SSS
             if (item)
             {
                // set SRV16 as our new
-               native_device_context->PSSetShaderResources(16, 1, &item->new_srv);
+               native_device_context->PSSetShaderResources(16, 1, !item->current_new ? &item->new_srv0 : &item->new_srv1);
+               replace_remaining--; // use
             }
 
             // TODO: Project X guarantees "swapchain final" shader to draw for HQ mirrored world reflections before switching sides
             
             return DrawOrDispatchOverrideType::None;
          }
-         case Using: // TODO: del
          case Done:
          default:
-            break;
+            return DrawOrDispatchOverrideType::None;
       }
       
       return DrawOrDispatchOverrideType::None;
+   }
+
+   void OnInit()
+   {
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_NPRPreSSS), ShaderDefinition{ Luma_NPRPreSSS, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "main", {}});
    }
    
    void OnLoad(reshade::api::effect_runtime* runtime)
@@ -2002,6 +2075,25 @@ namespace SSS
    {
       Resources::Reset();
       state = Unknown;
+   }
+
+   void OnPresent()
+   {
+      if (!enabled) return;
+
+      // reset state
+      state = Unknown;
+
+      // on PV change, purge if multiple SSS items
+      uint32_t new_pv_id = *MemoryHack::addr_pvID;
+      if (new_pv_id != curr_pv_id)
+      {
+         curr_pv_id = new_pv_id; // update
+         if (Resources::GetItemCount() > 1) // multiple?
+         {
+            Resources::Reset(); // purge
+         }
+      }
    }
 }
 
@@ -2019,6 +2111,8 @@ namespace Bloom
       float sigma_increase = sigma_increase_def;
    
    constexpr const char* Bloom_Combine_PS = "Bloom Combine PS";
+   constexpr const char* Bloom_Blur0_PS = "Bloom Blur0 PS";
+   constexpr const char* Bloom_Blur0_VS = "Bloom Blur0 VS";
    
    enum State : uint8_t
    {
@@ -2562,6 +2656,10 @@ namespace Bloom
             // SRV0 set to 4rd last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 4]);
 
+            // Set VS PS
+            native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Bloom_Blur0_VS)).get(), nullptr, 0);
+            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Bloom_Blur0_PS)).get(), nullptr, 0);
+
             state = BloomCombine;
             break;
          }
@@ -2611,6 +2709,13 @@ namespace Bloom
       state = Done;
    }
 
+   void OnInit()
+   {
+      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Combine_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_combine_ps"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_blur0_ps"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_VS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "bloom_blur0_vs"));
+   }
+
    void OnPresent()
    {
       state = Downsample0;
@@ -2626,10 +2731,656 @@ namespace Bloom
       reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
       reshade::get_config_value(runtime, NAME, reshadesave_sigma, sigma);
    }
+}
 
+namespace SpotLightShadows
+{
+   bool enabled = false;
+      constexpr const char* reshadesave_enabled = "SpotLightShadowsEnabled";
+   
+   enum State : uint8_t
+   {
+      DepthFinalize0, // 0xC1A00F28
+      DepthFinalize1, // 0xC1A00F28
+      Resolving, // 0x1CE07171 (writes DVS / opaque), 0x03C8D536 (reads DSV / transparent)
+      ResolvingAtLeastOnce,
+      TonemapUse, // Tonemap variants
+      Done,
+   };
+   State state; // denotes next shader to be drawn
+
+   namespace Resources
+   {
+      uint64_t depth_res_handle = 0;
+
+      ComPtr<ID3D11ShaderResourceView> newcolor_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> newcolor_rtv = nullptr;
+
+      ComPtr<ID3D11DepthStencilView> newdsv = nullptr;
+
+      uint2 main_color_size = { 0, 0 };
+
+      void Reset()
+      {
+         depth_res_handle = 0;
+         newcolor_srv.reset();
+         newcolor_rtv.reset();
+         main_color_size = { 0, 0 };
+      }
+   }
+
+   void OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (!enabled) return;
+      if (Resources::main_color_size.x == 0) return;
+      if (DEVELOPMENT && !IsModEnabled()) return;
+
+      switch (state)
+      {
+         case DepthFinalize0:
+         {
+            // wait until shader
+            if (ps != 0xC1A00F28) break;
+
+            // next state
+            state = DepthFinalize1;
+            break;
+         }
+         case DepthFinalize1:
+         {
+            // wait until shader
+            // if (ps != 0xC1A00F28) break;
+            ASSERT_MSG(ps == 0xC1A00F28, "SpotLightShadows: DepthFinalize1 shader not detected next!");
+
+            // RTV0 is precompute depth (will be bound SRV18 for Resolve)
+            if (Resources::depth_res_handle == 0)
+            {
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "SpotLightShadows: RTV0 is null in DepthFinalize");
+               
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+               
+               Resources::depth_res_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+            }
+
+            // next state
+            state = Resolving;
+            break;
+         }
+         case Resolving:
+         case ResolvingAtLeastOnce:
+         {
+            // wait until shader
+            static std::unordered_set<uint32_t> resolving_shaders = { 0x1CE07171, 0x03C8D536 }; // TODO: use static array (0x1CE07171 writes DVS / is opaque & 0x03C8D536 reads DSV / is transparent)
+            if (!resolving_shaders.contains(ps))
+            {
+               // last hurrah SVR10 == depth_res_handle
+               uint64_t srv10_handle;
+               {
+                  ComPtr<ID3D11ShaderResourceView> srv10;
+                  native_device_context->PSGetShaderResources(18, 1, srv10.put());
+                  srv10_handle = !srv10 ? 0 : reinterpret_cast<uint64_t>(srv10.get());
+               }
+               
+               if (srv10_handle != Resources::depth_res_handle)
+               {
+                  if (state == ResolvingAtLeastOnce) state = TonemapUse; // resolved at least once, so we can move on
+                  break; // early "return"
+               }
+
+               resolving_shaders.insert(ps);
+               ASSERT_MSG(false, "SpotLightShadows: New resolving shader!");
+               reshade::log::message(reshade::log::level::warning, std::format("SpotLightShadows: New resolving shader! (ps=0x{:X})", ps).c_str());
+            }
+
+            // clear (DSV is required, while RTV fullscreen overwrites)
+            if (state == Resolving) native_device_context->ClearDepthStencilView(Resources::newdsv.get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
+
+            // replace RTV0 & DSV
+            native_device_context->OMSetRenderTargets(1, &Resources::newcolor_rtv, Resources::newdsv.get());
+
+            // viewport full
+            D3D11_VIEWPORT viewport;
+            viewport.TopLeftX = 0;
+            viewport.TopLeftY = 0;
+            viewport.Width = static_cast<float>(Resources::main_color_size.x);
+            viewport.Height = static_cast<float>(Resources::main_color_size.y);
+            viewport.MinDepth = 0;
+            viewport.MaxDepth = 1;
+            native_device_context->RSSetViewports(1, &viewport);
+
+            // next state
+            state = ResolvingAtLeastOnce;
+            break;
+         }
+         case TonemapUse:
+         case Done:
+            break;
+      }
+   }
+
+   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      // initialize from RTV0
+      [[unlikely]] if (enabled && Resources::main_color_size.x == 0)
+      {
+         // get size
+         ComPtr<ID3D11RenderTargetView> rtv0;
+         native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+         ASSERT_MSG(rtv0 != nullptr, "SpotLightShadows: RTV0 is null in OnTonemapDraw");
+         
+         ComPtr<ID3D11Resource> rtv0_resource;
+         rtv0->GetResource(rtv0_resource.put());
+         
+         ComPtr<ID3D11Texture2D> rtv0_texture;
+         auto hr = rtv0_resource->QueryInterface(rtv0_texture.put());
+         ASSERT_MSG(SUCCEEDED(hr), "SpotLightShadows: OnTonemapDraw hr");
+         
+         D3D11_TEXTURE2D_DESC tex_desc;
+         rtv0_texture->GetDesc(&tex_desc);
+         
+         Resources::main_color_size = { tex_desc.Width, tex_desc.Height };
+         reshade::log::message(reshade::log::level::info, std::format("SpotLightShadows: main color size {}x{}", Resources::main_color_size.x, Resources::main_color_size.y).c_str());
+
+         // create Resources
+         {
+            ComPtr<ID3D11Texture2D> new_texture;
+            
+            // newcolor
+            D3D11_TEXTURE2D_DESC new_tex_desc;
+            new_tex_desc.Width = Resources::main_color_size.x;
+            new_tex_desc.Height = Resources::main_color_size.y;
+            new_tex_desc.MipLevels = 1;
+            new_tex_desc.ArraySize = 1;
+            new_tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            new_tex_desc.SampleDesc.Count = 1;
+            new_tex_desc.SampleDesc.Quality = 0;
+            new_tex_desc.Usage = D3D11_USAGE_DEFAULT;
+            new_tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+            new_tex_desc.CPUAccessFlags = 0;
+            new_tex_desc.MiscFlags = 0;
+            
+            auto hr2 = native_device->CreateTexture2D(&new_tex_desc, nullptr, new_texture.put());
+            ASSERT_MSG(SUCCEEDED(hr2), "SpotLightShadows: OnTonemapDraw hr2");
+
+            auto hr3 = native_device->CreateRenderTargetView(new_texture.get(), nullptr, Resources::newcolor_rtv.put());
+            ASSERT_MSG(SUCCEEDED(hr3), "SpotLightShadows: OnTonemapDraw hr3");
+
+            auto hr4 = native_device->CreateShaderResourceView(new_texture.get(), nullptr, Resources::newcolor_srv.put());
+            ASSERT_MSG(SUCCEEDED(hr4), "SpotLightShadows: OnTonemapDraw hr4");
+
+            // newdsv
+            D3D11_TEXTURE2D_DESC new_dsv_tex_desc;
+            new_dsv_tex_desc.Width = Resources::main_color_size.x;
+            new_dsv_tex_desc.Height = Resources::main_color_size.y;
+            new_dsv_tex_desc.MipLevels = 1;
+            new_dsv_tex_desc.ArraySize = 1;
+            new_dsv_tex_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+            new_dsv_tex_desc.SampleDesc.Count = 1;
+            new_dsv_tex_desc.SampleDesc.Quality = 0;
+            new_dsv_tex_desc.Usage = D3D11_USAGE_DEFAULT;
+            new_dsv_tex_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+            new_dsv_tex_desc.CPUAccessFlags = 0;
+            new_dsv_tex_desc.MiscFlags = 0;
+
+            auto hr5 = native_device->CreateTexture2D(&new_dsv_tex_desc, nullptr, new_texture.put());
+            ASSERT_MSG(SUCCEEDED(hr5), "SpotLightShadows: OnTonemapDraw hr5");
+
+            D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+            dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+            dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+            auto hr6 = native_device->CreateDepthStencilView(new_texture.get(), &dsv_desc, Resources::newdsv.put());
+            ASSERT_MSG(SUCCEEDED(hr6), "SpotLightShadows: OnTonemapDraw hr6");
+         }
+         reshade::log::message(reshade::log::level::info, "SpotLightShadows: created new color buffer and views");
+
+         // skip 1st frame
+         return;
+      }
+
+      // replace SRV7
+      if (state == TonemapUse) native_device_context->PSSetShaderResources(7, 1, &Resources::newcolor_srv);
+   }
+
+   void OnPresent()
+   {
+      state = DepthFinalize0;
+   }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
+      state = DepthFinalize0;
+   }
+}
+
+namespace AntiAliasing
+{
+   enum Enabled : uint8_t
+   {
+      Vanilla,
+      Disable,
+      DLAA,
+   };
+   Enabled enabled = Vanilla;
+      constexpr const char* reshadesave_enabled = "AntiAliasingEnabled";
+
+   enum State : uint8_t
+   {
+      MLAAEdges0, // 0x3ACC6F7A
+      MLAAEdges1, // 0x5DA2FE05
+      MLAAResolve, // 0x5C5FD160
+      
+      Done,
+   };
+   State state; // denotes next shader to be drawn
+      
+
+   constexpr const char* Luma_DLAA = "Luma_DLAA";
+   constexpr const char* Luma_DLAA_VS = "Luma_DLAA_VS";
+   constexpr const char* Luma_DLAA_PreFilter = "Luma_DLAA_PreFilter";
+   constexpr const char* Luma_DLAA_Resolve = "Luma_DLAA_Resolve";
+
+   namespace Resources
+   {
+      uint2 size = { 0, 0 };
+      
+      ComPtr<ID3D11ShaderResourceView> srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> rtv = nullptr;
+
+      void Reset()
+      {
+         srv.reset();
+         rtv.reset();
+         size = { 0, 0 };
+      }
+   }
+
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (enabled == Vanilla) return DrawOrDispatchOverrideType::None;
+      if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
+
+      switch (state)
+      {
+         case MLAAEdges0:
+         {
+            if (ps == 0x3ACC6F7A)
+            {
+               state = MLAAEdges1;
+               return DrawOrDispatchOverrideType::Skip;
+            }
+            break;
+         }
+         case MLAAEdges1:
+         {
+            if (ps == 0x5DA2FE05)
+            {
+               state = MLAAResolve;
+               return DrawOrDispatchOverrideType::Skip;
+            }
+            break;
+         }
+         case MLAAResolve:
+         {
+            if (ps != 0x5C5FD160) return DrawOrDispatchOverrideType::None;
+            state = Done;
+            
+            if (enabled == DLAA) // DLAA
+            {
+               // get SRV0
+               ComPtr<ID3D11ShaderResourceView> srv0;
+               native_device_context->PSGetShaderResources(0, 1, srv0.put());
+            
+               // get RTV0
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+            
+               // create Resources if not exist
+               [[unlikely]] if (!Resources::srv)
+               {
+                  // query resolution
+                  ComPtr<ID3D11Resource> rtv0_resource;
+                  rtv0->GetResource(rtv0_resource.put());
+            
+                  ComPtr<ID3D11Texture2D> rtv0_texture;
+                  auto hr = rtv0_resource->QueryInterface(rtv0_texture.put());
+                  ASSERT_MSG(SUCCEEDED(hr), "AntiAliasing: hr");
+            
+                  D3D11_TEXTURE2D_DESC tex_desc;
+                  rtv0_texture->GetDesc(&tex_desc);
+            
+                  Resources::size = { tex_desc.Width, tex_desc.Height };
+                  reshade::log::message(reshade::log::level::info, std::format("AntiAliasing: creating Resources for size {}x{}", Resources::size.x, Resources::size.y).c_str());
+            
+                  // create
+                  D3D11_TEXTURE2D_DESC new_tex_desc;
+                  new_tex_desc.Width = Resources::size.x;
+                  new_tex_desc.Height = Resources::size.y;
+                  new_tex_desc.MipLevels = 1;
+                  new_tex_desc.ArraySize = 1;
+                  new_tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  new_tex_desc.SampleDesc.Count = 1;
+                  new_tex_desc.SampleDesc.Quality = 0;
+                  new_tex_desc.Usage = D3D11_USAGE_DEFAULT;
+                  new_tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                  new_tex_desc.CPUAccessFlags = 0;
+                  new_tex_desc.MiscFlags = 0;
+               
+                  ComPtr<ID3D11Texture2D> new_texture;
+                  auto hr0 = native_device->CreateTexture2D(&new_tex_desc, nullptr, new_texture.put());
+                  ASSERT_MSG(SUCCEEDED(hr0), "AntiAliasing: hr0");
+            
+                  auto hr1 = native_device->CreateShaderResourceView(new_texture.get(), nullptr, Resources::srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr1), "AntiAliasing: hr1");
+            
+                  auto hr2 = native_device->CreateRenderTargetView(new_texture.get(), nullptr, Resources::rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr2), "AntiAliasing: hr2");
+               
+                  reshade::log::message(reshade::log::level::info, "AntiAliasing: created Resources");
+               }
+            
+               // VS
+               native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Luma_DLAA_VS)).get(), nullptr, 0);
+            
+               // prefilter
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv, nullptr);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_DLAA_PreFilter)).get(), nullptr, 0);
+               native_device_context->Draw(4,0);
+            
+               // resolve
+               native_device_context->OMSetRenderTargets(1, &rtv0, nullptr);
+               native_device_context->PSSetShaderResources(0, 1, &Resources::srv);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_DLAA_Resolve)).get(), nullptr, 0);
+               native_device_context->Draw(4,0);
+            }
+            else if (enabled == Disable) // Disable
+            {
+               // CopyResource SRV0 to RTV0
+               ComPtr<ID3D11ShaderResourceView> srv0;
+               native_device_context->PSGetShaderResources(0, 1, srv0.put());
+               ComPtr<ID3D11Resource> srv0_resource;
+               srv0->GetResource(srv0_resource.put());
+            
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+            
+               native_device_context->CopyResource(rtv0_resource.get(), srv0_resource.get());
+            }
+            
+            return DrawOrDispatchOverrideType::Replaced;
+         }
+         case Done:
+         default:
+            break;
+      }
+      
+      return DrawOrDispatchOverrideType::None;
+   }
+   
    void OnInit()
    {
-      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Combine_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_combine_ps"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_DLAA_VS), ShaderDefinition(Luma_DLAA, reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "fullscreen_vs"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_DLAA_PreFilter), ShaderDefinition(Luma_DLAA, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "prefilter_ps"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_DLAA_Resolve), ShaderDefinition(Luma_DLAA, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "resolve_ps"));
+   }
+   
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      int enabled_int = enabled;
+      if (reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled_int)) enabled = static_cast<Enabled>(enabled_int);
+   }
+
+   void OnPresent()
+   {
+      state = MLAAEdges0;
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
+   }
+}
+
+namespace DepthOfField
+{
+   enum Enabled : uint8_t
+   {
+      Vanilla,
+      Disable,
+      // Enhanced, //TODO: implement
+   };
+   Enabled enabled = Vanilla;
+   constexpr const char* reshadesave_enabled = "DepthOfFieldEnabled";
+
+   enum State : uint8_t
+   {
+      TileCreate, // 0x83AE9A79
+      TileExpand, // 0x8814AF0D
+      PreSort, // 0x043F4B65
+      Blur, // 0x7D2DE42C
+      Resolve, // 0xD7064E88
+      Done,
+   };
+   State state; // denotes next shader to be drawn
+
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (enabled == Vanilla) return DrawOrDispatchOverrideType::None;
+      if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
+
+      switch (state)
+      {
+         case TileCreate:
+         {
+            if (ps == 0x83AE9A79)
+            {
+               state = TileExpand;
+               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
+            }
+            break;
+         }
+         case TileExpand:
+         {
+            if (ps == 0x8814AF0D)
+            {
+               state = PreSort;            
+               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
+            }
+            break;
+         }
+         case PreSort:
+         {
+            if (ps == 0x043F4B65)
+            {
+               state = Blur;
+               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
+            }
+            break;
+         }
+         case Blur:
+         {
+            if (ps == 0x7D2DE42C)
+            {
+               state = Resolve;
+               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
+            }
+            break;
+         }
+         case Resolve:
+         {
+            if (ps == 0xD7064E88)
+            {
+               state = Done;
+
+               if (enabled == Disable)
+               {
+                  // CopyResource SRV3 to RTV0
+                  ComPtr<ID3D11ShaderResourceView> srv3;
+                  native_device_context->PSGetShaderResources(3, 1, srv3.put());
+                  ComPtr<ID3D11Resource> srv3_resource;
+                  srv3->GetResource(srv3_resource.put());
+
+                  ComPtr<ID3D11RenderTargetView> rtv0;
+                  native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+                  ComPtr<ID3D11Resource> rtv0_resource;
+                  rtv0->GetResource(rtv0_resource.put());
+
+                  native_device_context->CopyResource(rtv0_resource.get(), srv3_resource.get());
+
+                  return DrawOrDispatchOverrideType::Replaced;
+               }
+            }
+            break;
+         }
+         case Done:
+         default:
+            break;
+      }
+
+      return DrawOrDispatchOverrideType::None;
+   }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      int enabled_int = enabled;
+      if (reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled_int)) enabled = static_cast<Enabled>(enabled_int);
+   }
+
+   void OnPresent()
+   {
+      state = TileCreate;
+   }
+
+   void HardReset()
+   {
+      
+   }
+}
+
+namespace PS4Blur
+{
+   namespace Resources
+   {
+      ComPtr<ID3D11ShaderResourceView> srv0 = nullptr;
+      ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
+
+      ComPtr<ID3D11ShaderResourceView> srv1 = nullptr;
+      ComPtr<ID3D11RenderTargetView> rtv1 = nullptr;
+
+      uint2 size = { 0, 0 };
+
+      bool flipflop = false; // false = srv0/rtv0, true = srv1/rtv1
+
+      void Reset()
+      {
+         srv0.reset(); rtv0.reset();
+         srv1.reset(); rtv1.reset();
+         size = { 0, 0 };
+         flipflop = false;
+      }
+
+      void Create(ID3D11Device* native_device, uint2 s)
+      {
+         size = s;
+
+         D3D11_TEXTURE2D_DESC tex_desc;
+         tex_desc.Width = size.x;
+         tex_desc.Height = size.y;
+         tex_desc.MipLevels = 1;
+         tex_desc.ArraySize = 1;
+         tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+         tex_desc.SampleDesc.Count = 1;
+         tex_desc.SampleDesc.Quality = 0;
+         tex_desc.Usage = D3D11_USAGE_DEFAULT;
+         tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+         tex_desc.CPUAccessFlags = 0;
+         tex_desc.MiscFlags = 0;
+
+         ComPtr<ID3D11Texture2D> tex0;
+         auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex0.put());
+         ASSERT_MSG(SUCCEEDED(hr0), "PS4Blur: Create tex0 hr0");
+         auto hr1 = native_device->CreateShaderResourceView(tex0.get(), nullptr, srv0.put());
+         ASSERT_MSG(SUCCEEDED(hr1), "PS4Blur: Create srv0 hr1");
+         auto hr2 = native_device->CreateRenderTargetView(tex0.get(), nullptr, rtv0.put());
+         ASSERT_MSG(SUCCEEDED(hr2), "PS4Blur: Create rtv0 hr2");
+
+         auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, tex0.put());
+         ASSERT_MSG(SUCCEEDED(hr3), "PS4Blur: Create tex1 hr3");
+         auto hr4 = native_device->CreateShaderResourceView(tex0.get(), nullptr, srv1.put());
+         ASSERT_MSG(SUCCEEDED(hr4), "PS4Blur: Create srv1 hr4");
+         auto hr5 = native_device->CreateRenderTargetView(tex0.get(), nullptr, rtv1.put());
+         ASSERT_MSG(SUCCEEDED(hr5), "PS4Blur: Create rtv1 hr5");
+
+         reshade::log::message(reshade::log::level::info, std::format("PS4Blur: Created Resources for size {}x{}", size.x, size.y).c_str());
+      }
+   }
+
+   void OnDrawFinal(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      if (!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_PS4BLUR_1)) return;
+      if (DEVELOPMENT && !IsModEnabled()) return;
+
+      // get RTV0 size
+      ComPtr<ID3D11RenderTargetView> rtv0;
+      native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+      ASSERT_MSG(rtv0 != nullptr, "PS4Blur: RTV0 is null in OnDrawFinal");
+
+      [[unlikely]] if (Resources::size.x == 0)
+      {
+         ComPtr<ID3D11Resource> rtv0_resource;
+         rtv0->GetResource(rtv0_resource.put());
+         
+         ComPtr<ID3D11Texture2D> rtv0_texture;
+         auto hr = rtv0_resource->QueryInterface(rtv0_texture.put());
+         ASSERT_MSG(SUCCEEDED(hr), "PS4Blur: OnDrawFinal hr");
+         
+         D3D11_TEXTURE2D_DESC tex_desc;
+         rtv0_texture->GetDesc(&tex_desc);
+
+         // create
+         Resources::Create(native_device, { tex_desc.Width, tex_desc.Height });
+      }
+
+      // bind SRV1 to out new blur result
+      native_device_context->PSSetShaderResources(1, 1, !Resources::flipflop ? &Resources::srv0 : &Resources::srv1);
+
+      // set RTV to {orig, prev frame}
+      const std::array<ID3D11RenderTargetView*, 2> rtv = { rtv0.get(), !Resources::flipflop ? Resources::rtv1.get() : Resources::rtv0.get() };
+      native_device_context->OMSetRenderTargets(rtv.size(), rtv.data(), nullptr);
+
+      // dual viewport
+      D3D11_VIEWPORT viewports[2];
+      viewports[0].TopLeftX = 0;
+      viewports[0].TopLeftY = 0;
+      viewports[0].Width = static_cast<float>(Resources::size.x);
+      viewports[0].Height = static_cast<float>(Resources::size.y);
+      viewports[0].MinDepth = 0;
+      viewports[0].MaxDepth = 1;
+      viewports[1].TopLeftX = 0;
+      viewports[1].TopLeftY = 0;
+      viewports[1].Width = static_cast<float>(Resources::size.x);
+      viewports[1].Height = static_cast<float>(Resources::size.y);
+      viewports[1].MinDepth = 0;
+      viewports[1].MaxDepth = 1;
+      native_device_context->RSSetViewports(2, viewports);
+
+      // ++
+      Resources::flipflop = !Resources::flipflop;
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
    }
 }
 
@@ -2658,8 +3409,14 @@ public:
       // XeGTAO
       XeGTAO::OnInit();
 
+      // SSS
+      SSS::OnInit();
+
       // Bloom
       Bloom::OnInit();
+
+      // AntiAliasing
+      AntiAliasing::OnInit();
 
       // Global default
       use_os_reference_white_level = false;
@@ -2668,7 +3425,6 @@ public:
       // default_luma_global_game_settings.TonemapperRolloffStart = cb_luma_global_settings.GameSettings.TonemapperRolloffStart = 36.f;
       default_luma_global_game_settings.BloomStrength = cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
       default_luma_global_game_settings.BloomStrengths = cb_luma_global_settings.GameSettings.BloomStrengths = float4(1.f, 1.f, 1.f, 1.f);
-      default_luma_global_game_settings.AAMultiplier = cb_luma_global_settings.GameSettings.AAMultiplier = 2.f;
       default_luma_global_game_settings.PerChannelLuminanceReductionEmulateStrength = cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength = 0.25f;
       
       default_luma_global_game_settings.GammaCorrection22PaperWhite = cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = 203.f;
@@ -2753,6 +3509,18 @@ public:
       // Bloom
       Bloom::HardReset();
 
+      // SpotLightShadows
+      SpotLightShadows::HardReset();
+
+      // AntiAliasing
+      AntiAliasing::HardReset();
+
+      // DepthOfField
+      DepthOfField::HardReset();
+
+      // PS4Blur
+      PS4Blur::HardReset();
+
       // // UISeparation
       // UISeparation::ResetOnSwapchain();
       
@@ -2768,6 +3536,10 @@ public:
       // // skip not ps
       // [[unlikely]]
       // if (ps == 0) return DrawOrDispatchOverrideType::None;
+
+      // SpotLightShadows ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+      SpotLightShadows::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
 
       // XeGTAO ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2814,7 +3586,12 @@ public:
 
          return allow_draw ? DrawOrDispatchOverrideType::None : DrawOrDispatchOverrideType::Skip;
       }
-      
+
+      // Depth of Field /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      {
+         auto r = DepthOfField::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+         if (r != DrawOrDispatchOverrideType::None) return r;
+      }
       // TONEMAP UBER //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) && //if final drawn, no tonemap possible
          !TonemapInfo::GetDrawnTonemap(cb_luma_global_settings.GameSettings.TonemapInfo))
@@ -2832,19 +3609,17 @@ public:
             device_data.cb_luma_global_settings_dirty = true; //reupload for later shaders
 
             Bloom::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
+            SpotLightShadows::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             
             return DrawOrDispatchOverrideType::None;
          }
       }
-      
-      // FULLSCREEN OVERLAY FX ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-      //See EXTRA
 
       // AA ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-      // Detect MLAA
-      
+      {
+         auto r = AntiAliasing::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+         if (r != DrawOrDispatchOverrideType::None) return r;
+      }
       // FINAL /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       
       if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
@@ -2861,6 +3636,9 @@ public:
          //    //give token
          //    UISeparation::IsFinalCopyToken = true;
          // }
+
+         // OnDrawFinal
+         PS4Blur::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data);
 
          return DrawOrDispatchOverrideType::None;
       }
@@ -2990,28 +3768,20 @@ public:
       //UI
       if (TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
          !DrawingState::IsDrawnToSwapchain &&
-         ps != ShaderHashesLists::Mov /*!original_shader_hashes.Contains(ShaderHashesLists::Mov)*/)
+         ps != ShaderHashesLists::Mov)
       {
          //skip IsUI
          if (!GlobalsMegaMix::IsUI) return DrawOrDispatchOverrideType::Skip;
 
          //skip SpritesText
-         if (GlobalsMegaMix::IsSkipTextAfterFinal
-            && ps == ShaderHashesLists::UISpritesText /*original_shader_hashes.Contains(ShaderHashesLists::UISpritesText)*/)
+         if (!GlobalsMegaMix::IsUIText
+            && ps == ShaderHashesLists::UISpritesText)
             return DrawOrDispatchOverrideType::Skip; 
          
          // //UI Transparency: Replace RTV
          // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f)
          //    native_device_context->OMSetRenderTargets(1, &UISeparation::UIOutputRtv, nullptr);
       }
-
-      // //IsSkipUntilUI
-      // if (Globals::IsSkipUntilUI &&
-      //    !TonemapInfo::GetDrawnTonemap(cb_luma_global_settings.GameSettings.TonemapInfo) &&
-      //    !TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
-      // {
-      //    return DrawOrDispatchOverrideType::Skip;
-      // }
       
       return DrawOrDispatchOverrideType::None;
    }
@@ -3026,26 +3796,38 @@ public:
       DrawingState::ResetOnPresent();
       device_data.has_drawn_main_post_processing = false;
 
-      // XeGTAO 
-      XeGTAO::OnPresent();
+      // CachedCB
+      CachedCB::Update(); 
 
+      // IndividualPVTuning
+      IndividualPVTuning::OnPresent();
+      
       // HighFPS
       HighFPS::Patch();
-
-      // Bloom
-      Bloom::OnPresent();
 
       // ProgressBar
       ProgressBar::OnPresent();
 
-      // IndividualPVTuning
-      IndividualPVTuning::OnPresent();
-
       // SeparateUIBrightness
       SeparateUIBrightness::OnPresent();
+      
+      // XeGTAO 
+      XeGTAO::OnPresent();
 
-      // CachedCB
-      CachedCB::Update(device_data);
+      // SSS
+      SSS::OnPresent();
+
+      // Bloom
+      Bloom::OnPresent();
+
+      // SpotLightShadows
+      SpotLightShadows::OnPresent();
+
+      // AntiAliasing
+      AntiAliasing::OnPresent();
+
+      // DepthOfField
+      DepthOfField::OnPresent();
    }
 
    void LoadConfigs() override
@@ -3057,18 +3839,14 @@ public:
 
       //try force 400 nits
       if (!reshade::get_config_value(runtime, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite)) cb_luma_global_settings.ScenePeakWhite = 400.f;
-      
-      // TonemapHDRStops
-      cb_luma_global_settings.GameSettings.TonemapHDRStops = log2(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite);
 
       //Load custom settings
-      reshade::get_config_value(runtime, NAME, "TonemapperMaxExpected", CachedCB::white_clip/*cb_luma_global_settings.GameSettings.TonemapperMaxExpected*/);
+      reshade::get_config_value(runtime, NAME, "TonemapperMaxExpected", CachedCB::white_clip /*cb_luma_global_settings.GameSettings.TonemapperMaxExpected*/);
       reshade::get_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
       reshade::get_config_value(runtime, NAME, "BloomStrengthsX", cb_luma_global_settings.GameSettings.BloomStrengths.x);
       reshade::get_config_value(runtime, NAME, "BloomStrengthsY", cb_luma_global_settings.GameSettings.BloomStrengths.y);
       reshade::get_config_value(runtime, NAME, "BloomStrengthsZ", cb_luma_global_settings.GameSettings.BloomStrengths.z);
       reshade::get_config_value(runtime, NAME, "BloomStrengthsW", cb_luma_global_settings.GameSettings.BloomStrengths.w);
-      reshade::get_config_value(runtime, NAME, "AAMultiplier", cb_luma_global_settings.GameSettings.AAMultiplier);
       reshade::get_config_value(runtime, NAME, "PerChannelLuminanceReductionEmulateStrength", cb_luma_global_settings.GameSettings.PerChannelLuminanceReductionEmulateStrength);
       
       reshade::get_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
@@ -3116,15 +3894,19 @@ public:
       reshade::get_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
       
       reshade::get_config_value(runtime, NAME, "IsUI", GlobalsMegaMix::IsUI);
-      reshade::get_config_value(runtime, NAME, "IsSkipTextAfterFinal", GlobalsMegaMix::IsSkipTextAfterFinal);
+      reshade::get_config_value(runtime, NAME, "IsUIText", GlobalsMegaMix::IsUIText);
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", GlobalsMegaMix::UIIsAdvanced);
       reshade::get_config_value(runtime, NAME, "UIIsReadmeDone", GlobalsMegaMix::UIIsReadmeDone);
-      reshade::get_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
-
+      
       reshade::get_config_value(runtime, NAME, "HighFPS_enabled", HighFPS::enabled);
       reshade::get_config_value(runtime, NAME, "HighFPS_limit", HighFPS::limit);
       reshade::get_config_value(runtime, NAME, "HighFPS_menu_clamp", HighFPS::menu_clamp);
+
+      reshade::get_config_value(runtime, NAME, "IsGammaCorrectionSyncPaperWhite", GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite);
+      if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
+
+      AutoExposureFix::OnLoad(runtime);
 
       ProgressBar::OnLoad(runtime);
 
@@ -3137,6 +3919,12 @@ public:
       SSS::OnLoad(runtime);
 
       Bloom::OnLoad(runtime);
+
+      SpotLightShadows::OnLoad(runtime);
+
+      AntiAliasing::OnLoad(runtime);
+
+      DepthOfField::OnLoad(runtime);
       
       // if (custom_sdr_gamma == 0) custom_sdr_gamma = 2.2f;
       // reshade::get_config_value(runtime, NAME, "EOTFGammaCorrection", custom_sdr_gamma);
@@ -3151,26 +3939,19 @@ public:
       
       bool is_disabled; //for Begin/EndDisabled();
 
-      // //SpecialK mode
-      // if (Globals::IsSKMode && ImGui::CollapsingHeader("SpecialK Mode README"))
-      // {
-      //    ImGui::BulletText("\"ReShade64.dll\" is detected in the game folder, meaning SpecialK mode is on!\n(Delete if false positive.)");
-      //    ImGui::BulletText("Luma has somewhat relinquished control of the swapchain.");
-      //    ImGui::BulletText("Please have SpecialK upgrade swapchain to scRGB in HDR Options submenu and choose the 3rd preset (scRGB native/passthrough, Shift+F3)!");
-      // }
-
       //CUSTOM_SDR sync
-      bool is_sdr = cb_luma_global_settings.DisplayMode == DisplayModeType::SDR;
-      {
-         auto def = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_SDR);
-         bool is_dirty = def > 0 != is_sdr;
-         if (is_dirty) ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_SDR, is_sdr ? 1 : 0);
-      }
+      bool is_sdr = cb_luma_global_settings.DisplayMode != DisplayModeType::HDR;
+      ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_SDR, is_sdr ? 1 : 0);
 
       //SWAPCHAIN_TEST_USER_PEAK
-      std::string test_peak_label = std::format("Test Display Peak (HDR Stops: +{:.2f})", cb_luma_global_settings.GameSettings.TonemapHDRStops);
-      if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles within a bigger one.\nTo calibrate to display maximum, set to:\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\nOtherwise, just don't let Middle fully disappear/clip!");
-      else ShaderDefineInfo::Set(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, 0); //force off in SDR
+      {
+         float stops = log2(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite);
+         std::string test_peak_label_hdt_stops_plural = stops > 1.f ? "s" : "";
+         std::string test_peak_label = std::format("Test Display Peak Brightness (HDR Stop{}: +{:.2f})", test_peak_label_hdt_stops_plural, stops);
+         
+         if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles within a bigger one.\n\nTo calibrate to display maximum, set to:\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nOtherwise, just don't let Middle fully disappear/clip!");
+         else ShaderDefineInfo::Set(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, 0); //force off in SDR
+      }
       
       if (!GlobalsMegaMix::UIIsReadmeDone)
       {
@@ -3181,27 +3962,30 @@ public:
          
          ImGui::NewLine();
          
-         DrawColoredSubHeader("HDR README");
+         DrawColoredSubHeader("README");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This mod is most consistent at +1 stops (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.).\nFor many PVs, going higher looks exceptional!\nBut for many others, intentional blowout & white clip will be lost.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) This mod is most consistent and faithful at +1 HDR Stop (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.)."
+                                                                "\nFor many PVs, going higher looks exceptional! But for many others, intentional blowout & white clip will be lost."
+                                                                "\nIn other words, deliberate filmic techniques are ruined as tonemapping algorithms become strained when greater than +1 HDR Stop.");
          ImGui::PopStyleColor();
          
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Unfortunately, UI elems of PV (e.g. lens flare) can be after HDR tonemap, affected by UI Brightness slider.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon shading (Non-Physical Rendering) is clamped to SDR unless changed otherwise.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) UI elems of PV (e.g. lens flare) can be drawn after HDR tonemap, affected by UI Brightness slider.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) Toon shading (Non-Physical Rendering) is clamped to SDR unless changed otherwise.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For those new to ImGUI, CTRL click a slider for keyboard input.");
 
-         ImGui::NewLine(); //////
-         
-         DrawColoredSubHeader("Recommended Mods");
-
-         if (ImGui::Button("Clean Interface: Remove all but the notes."))
-            Website::OpenWebsite("https://gamebanana.com/mods/524644");
-         
-         if (ImGui::Button("Remove Forced Toon Shader: Toon shading sucks!"))
-            Website::OpenWebsite("https://gamebanana.com/mods/578377");
-         
-         if (ImGui::Button("Future Tone Customization: Toon shading sucks!"))
-            Website::OpenWebsite("https://gamebanana.com/mods/386869");
+         // ImGui::NewLine(); //////
+         //
+         // DrawColoredSubHeader("Recommended Mods");
+         //
+         // if (ImGui::Button("Clean Interface: Remove all but the notes."))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/524644");
+         //
+         // if (ImGui::Button("Remove Forced Toon Shader: Toon shading sucks!"))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/578377");
+         //
+         // if (ImGui::Button("Future Tone Customization: Toon shading sucks!"))
+         //    Website::OpenWebsite("https://gamebanana.com/mods/386869");
          
          ImGui::NewLine(); //////
 
@@ -3215,60 +3999,83 @@ public:
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      //set CUSTOM_GAMMACORRECT22 define based on if paper white is above 0 or not
-      ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_GAMMACORRECT22, cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite > 0.f);
-      
-      if (!is_sdr && ImGui::CollapsingHeader("Gamma"))
+      if (DrawCollapsingHeaderEnabledColored("Gamma", (!is_sdr && ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_GAMMACORRECT22)) || (ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_HDTVREC709_1))))
       {
-         DrawColoredSubHeader("Reintroduce SDR's gamma mismatch to lower shadows.");
+         if (!is_sdr)
+         {
+            DrawColoredSubHeader("Reintroduce SDR's gamma mismatch to lower shadows matching original intent.");
          
-         //paper white
-         if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
-            reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The threshold / paper white, so values lower are effected.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
-
-         //link test
-         if (ImGui::Button("Further Explanation (Google Slides)"))
-            Website::OpenWebsite("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=false&loop=false&slide=id.g3e007eafba8_0_0");
-
-         ImGui::NewLine();////////////////
-         
-         //mode
-         is_disabled = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMACORRECT22) == 0; 
-         if (is_disabled) ImGui::BeginDisabled();
-         {            
-            //CUSTOM_GAMMA_CORRECTION_MODE dropdown
+            // sync
+            if (ImGui::Checkbox("Sync to Scene Paper White", &GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite))
             {
-               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE, "Gamma Correction Mode",
-                   { "Per-Channel (Hue Shifts)", "Perceptual (Hue Corrected)" },
-                   "How should the gamma correction operate?\n\nPer-Channel hue shifts shadows.\nPerceptual retains the hues of the original sRGB gamma output, only darkening luminance.");
+               reshade::set_config_value(runtime, NAME, "IsGammaCorrectionSyncPaperWhite", GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite);
+               if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
             }
-
-            //GammaPerceptualChrominanceCorrect
-            bool is_disabled_perceptual = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE) != 1;
-            if (is_disabled_perceptual) ImGui::BeginDisabled();
+            
+            //paper white
+            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::BeginDisabled();
             {
-               if (ImGui::SliderFloat("Perceptual Chrominance Gain Reduction", &cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, 0.f, 1.f, "%.4f"))
-                  reshade::set_config_value(runtime, NAME, "GammaPerceptualChrominanceCorrect", cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect);
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce chrominance/saturation increase from Gamma Correction in Perceptual mode,\npreventing it from becoming too artificial.");
-               DrawResetButton(cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, default_luma_global_game_settings.GammaPerceptualChrominanceCorrect, "GammaPerceptualChrominanceCorrect", runtime);
+               if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
+                  reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Encodes weaker sRGB and decodes stronger 2.2, lowering shadows like SDR.\nThis is the threshold, so values only needed/lower are affected.");
+               DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
             }
-            if (is_disabled_perceptual) ImGui::EndDisabled();
+            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::EndDisabled();
+            
+            //link test
+            if (ImGui::Button("Further Explanation (Google Slides)"))
+               Website::OpenWebsite("https://docs.google.com/presentation/d/e/2PACX-1vSXeLHlbm6repcS7fels1-SXYGRmzziRrnuJ8nDO8J5rsWV3dT1-nVyCKp0Tj_stwx-9qlCI-N6rYIT/pub?start=false&loop=false&slide=id.g3e007eafba8_0_0");
+
+            if (GlobalsMegaMix::UIIsAdvanced)
+            {
+               ImGui::NewLine();////////////////
+            
+               //mode
+               is_disabled = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMACORRECT22) == 0; 
+               if (is_disabled) ImGui::BeginDisabled();
+               {            
+                  //CUSTOM_GAMMA_CORRECTION_MODE dropdown
+                  {
+                     ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE, "Gamma Correction Mode",
+                         { "Per-Channel (Hue Shifts)", "Perceptual (Hue Corrected)" },
+                         "How should the gamma correction operate?\n\nPer-Channel hue shifts shadows.\nPerceptual retains the hues of the original sRGB gamma output, only darkening luminance.");
+                  }
+
+                  //GammaPerceptualChrominanceCorrect
+                  bool is_disabled_perceptual = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_GAMMA_CORRECTION_MODE) != 1;
+                  if (is_disabled_perceptual) ImGui::BeginDisabled();
+                  {
+                     if (ImGui::SliderFloat("Perceptual Chrominance Gain Reduction", &cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, 0.f, 1.f, "%.4f"))
+                        reshade::set_config_value(runtime, NAME, "GammaPerceptualChrominanceCorrect", cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect);
+                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce chrominance/saturation increase from Gamma Correction in Perceptual mode,\npreventing it from becoming too artificial.");
+                     DrawResetButton(cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect, default_luma_global_game_settings.GammaPerceptualChrominanceCorrect, "GammaPerceptualChrominanceCorrect", runtime);
+                  }
+                  if (is_disabled_perceptual) ImGui::EndDisabled();
+               }
+               if (is_disabled) ImGui::EndDisabled();
+            }
+            
+            ImGui::NewLine();////////////////
          }
-         if (is_disabled) ImGui::EndDisabled();
-
-         ImGui::NewLine();////////////////
          
          DrawColoredSubHeader("PS4 Gamma");
 
          //CUSTOM_HDTVREC709_1
          {
-            bool b = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_HDTVREC709_1) == 1;
-            if (ImGui::Checkbox("Rec. 709 Gamma", &b)) ShaderDefineInfo::ToggleBool(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Do aggressive HDTV Rec. 709 gamma seen on PS4.\n\nWatch out for crushed shadows!\nPerhaps disable Gamma Correction above.");
+            bool b = ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
+            if (ImGui::Checkbox("HDTV Rec. 709 Gamma", &b)) ShaderDefineInfo::ToggleBool(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Do aggressive HDTV Rec. 709 gamma like PS4 Future Tone."
+                                                                                             "\n"
+                                                                                             "\nBtw, since the original arcade on Sega RingEdge & Nu are Windows based,"
+                                                                                             "\nit is PS4's Rec. 709 gamma that is the outlier.");
          }
       }
+
+      //set CUSTOM_GAMMACORRECT22 define based on if paper white is above 0 or not
+      ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_GAMMACORRECT22, cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite > 0.f);
+
+      // sync?
+      if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
@@ -3336,21 +4143,12 @@ public:
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
-      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Individual PV Tuning", IndividualPVTuning::current_pv.item != nullptr))
+      if (!is_sdr && DrawCollapsingHeaderEnabledColored("Individual PV Peak Brightness", IndividualPVTuning::current_pv.item != nullptr))
       {
          IndividualPVTuning::OnUI(runtime);
       }
 
-      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      
-      if (DrawCollapsingHeaderEnabledColored("Progress Bar", ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) > 0))
-      {
-         DrawColoredSubHeader("OSU looking ahh progress bar for PVs.");
-
-         ProgressBar::OnUI(runtime);
-      }
-
-      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       // XEGTAO_MANUALSIZE auto toggle
       if (XeGTAO::FoundResource::IsSizeValid())
@@ -3363,18 +4161,16 @@ public:
       ImGui::PushID("###XeGTAO");
       if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion (XeGTAO)", XeGTAO::enabled))
       {
-         
-         DrawColoredSubHeader("Insert a Ground Truth Ambient Occlusion pass for indirect shading.");
+         DrawColoredSubHeader("Insert Ground Truth Ambient Occlusion for indirect shadowing.");
 
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
+         ImGui::PopStyleColor();
+         
          if (ImGui::Checkbox("Enabled", &XeGTAO::enabled))
             reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_enabled, XeGTAO::enabled);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("");
-         
-         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Toon (Non-Physical Rendering) doesn't benefit and is untested.");
-         ImGui::PopStyleColor();
+            ImGui::SetTooltip("Insert Intel's implementation of Ground Truth Ambient Occlusion (GTAO).\n\nDebuting in Call of Duty: Black Ops 3 (or Advanced Warfare?),\nit's a screen space AO solution estimating path tracing level quality at a fraction of the cost.\n\nHere, the pass is inserted before transparency rendering & post FX, so no overlapping like generic ReShade FX solutions.\n(Please report if otherwise, especially concerning mod support.)");
 
          // TODO: presets
 
@@ -3399,25 +4195,25 @@ public:
             if (ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD) && XeGTAO::denoise_count > 2) XeGTAO::denoise_count = 2;
             if (XeGTAO::denoise_count != denoise_prev) reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_denoise, XeGTAO::denoise_count);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-               ImGui::SetTooltip("After AO, do denoising passes.");
+               ImGui::SetTooltip("After AO, do denoising passes to blur out noise while respecting edges.");
             DrawResetButton(XeGTAO::denoise_count, 3, XeGTAO::reshadesave_denoise, runtime);
          }
 
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_NOISE, "Noise", { "Unclamped Phases", "Static", "2 Phases", "3 Phases", "4 Phases", "5 Phases", "6 Phases", "7 Phases", "8 Phases (Better for 120 FPS?)" }, "Noise allow samples to evenly shoot out in all direction.\nInstead of staying static, allow noise to jitter so that it can perceptually mask individual grains.");
          
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::XEGTAO_CHECKBOARD, "Rate", { "Full", "Half (Unnoticeable, especially 120 FPS?)", "Quarter (Rather unusable smearing.)" }, "Render every other pixel to save performance."); 
-
-         // if (GlobalsMegaMix::UIIsAdvanced)
-         {
-            ImGui::NewLine();
-            DrawColoredSubHeader("Half Resolution");
-            bool is_halfres = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-            ImGui::PushStyleColor(ImGuiCol_Text, !is_halfres ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f));
-            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_HALFRES, "Half Resolution", "Render AO at half resolution to GREATLY save performance.\n\n(Full resolution not only hits the GPU's ALU, but VRAM!\nHigh FPS will scale nearly exponentially.)");
-            ImGui::PopStyleColor();
-            bool is_halfres_after = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-            if (is_halfres != is_halfres_after) XeGTAO::ResetCreatedResource();
          
+         ImGui::NewLine();
+         DrawColoredSubHeader("Half Resolution");
+         bool is_halfres = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
+         ImGui::PushStyleColor(ImGuiCol_Text, !is_halfres ? ImVec4(1.f, 0.4f, 0.4f, 1.f) : ImVec4(0.4f, 1.f, 0.4f, 1.f));
+         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_HALFRES, "Half Resolution", "Render AO at half resolution to GREATLY save performance.\n\n(Full resolution not only hits the GPU's ALU, but VRAM!\nHigh FPS will scale nearly exponentially.)");
+         ImGui::PopStyleColor();
+         bool is_halfres_after = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
+         if (is_halfres != is_halfres_after) XeGTAO::ResetCreatedResource();
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
             if (!is_halfres_after) ImGui::BeginDisabled();
             ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::XEGTAO_UPSAMPLE, "Joint Bilateral Upsample", "Upscale AO results while preventing leaks by using the spatial difference between half vs full res.");
             if (!is_halfres_after) ImGui::EndDisabled();
@@ -3465,7 +4261,6 @@ public:
 #if DEVELOPMENT
          ImGui::NewLine();
          DrawColoredSubHeader("DEVELOPMENT");
-         ImGui::SliderInt("Debug Break", &XeGTAO::debug_mode, 0, 14);
          ImGui::Checkbox("Debug Late", &XeGTAO::debug_late);
          ImGui::Checkbox("debug_skip_smooth", &XeGTAO::debug_skipsmooth);
          ImGui::Checkbox("Fog Dodge", &XeGTAO::is_fog_dodge);
@@ -3517,13 +4312,17 @@ public:
             reshade::set_config_value(runtime, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
             if (!Bloom::enabled) Bloom::HardReset();
          }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blur to downsample.\nThere's slight inefficiency decoupling from Auto-Exposure downsampling.\nThis will not look 100%% the same to vanilla due to the new blur weights.");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blur to downsample with a unbroken chain of mipmaps."
+                                                                                          "\nThere's slight inefficiency decoupling from Auto-Exposure downsampling."
+                                                                                          "\nThis will not look 100%% the same to vanilla due to the new blur weights.");
 
          if (!Bloom::enabled) ImGui::BeginDisabled();
          {
             if (ImGui::SliderFloat("Gaussian Sigma", &Bloom::sigma, 0.1f, 2.f))
                reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur, where higher = more blur.\nIncreasing will suppresses tiny highlights that cause bloom flickering, but also cost a bit of performance as texture sampling count increases.");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur, where higher = more blur."
+                                                                                             "\nIncreasing will suppresses tiny highlights that cause bloom flickering,"
+                                                                                             "\nbut also cost a bit of performance as texture sampling count increases.");
             DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
 
             if (ImGui::SliderFloat("Gaussian Sigma Increase", &Bloom::sigma_increase, 0.f, 1.f))
@@ -3535,7 +4334,9 @@ public:
          
          if (Bloom::enabled && GlobalsMegaMix::UIIsAdvanced)
          {
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Mipmap Levels: %d", Bloom::Resources::nmips);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Mipmaps: %d", Bloom::Resources::nmips);
+            ImGui::PopStyleColor();
          }
 
          ImGui::NewLine();
@@ -3569,58 +4370,137 @@ public:
          DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
       }
       ImGui::PopID();
-      
+
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
-      if (ImGui::CollapsingHeader("Miscellaneous"))
+      ImGui::PushID("###AntiAliasing");
+      if (DrawCollapsingHeaderEnabledColored("Anti-Aliasing", AntiAliasing::enabled > AntiAliasing::Vanilla))
       {
-         DrawColoredSubHeader("Miscellaneous Settings for Post FXs");
-         
-         if (ImGui::SliderInt("Auto-Exposure: History Write Rate", &AutoExposureFix::rate_replacement, 0, 120, "%d FPS"))
-            reshade::set_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Auto-Exposure history (32px ring buffer) is done per-frame.\nOn high FPS, this cause rapid exposure changes as older history is rapidly overriden.\n\nThis feature will limit Auto-Exposure rate (60 FPS default),\nwhile still allowing history clearing on camera cut.");
-         DrawResetButton(AutoExposureFix::rate_replacement, 60, AutoExposureFix::reshadesave, runtime);
-         
-         // ImGui::NewLine(); ///////////
-         
-         if (is_sdr) goto AfterVanillaColorGrade; //skip if SDR
-         
-         if (ImGui::SliderFloat("MLAA Weights", &cb_luma_global_settings.GameSettings.AAMultiplier, 1.f, 5.f))
-            reshade::set_config_value(runtime, NAME, "AAMultiplier", cb_luma_global_settings.GameSettings.AAMultiplier);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on the input color into MLAA.\nIncrease to have it detect more edges, but may cause false positives.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.AAMultiplier, default_luma_global_game_settings.AAMultiplier, "AAMultiplier", runtime);
-         
-         ImGui::NewLine(); ///////////
-         
-         is_disabled = !ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN, "LUT Gaussian Blur Sampling", "Sample the YCbCr LUT in charged of causing blowout with a gaussian blur,\nbiased towards higher chrominance, helping reduce steep chrominance falloff.");
-         if (is_disabled) ImGui::BeginDisabled();
-         if (GlobalsMegaMix::UIIsAdvanced)
+         DrawColoredSubHeader("Anti-Aliasing Customization");
+
+         // dropdown Vanilla, Disable, DLAA
+         auto curr = static_cast<int>(AntiAliasing::enabled);
+         if (ImGui::Combo("Mode", &curr, "Vanilla Morphological Anti-Aliasing (MLAA)\0Disallow\0Directional Localized Anti-Aliasing (DLAA)\0"))
          {
-            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS, "LUT Gaussian Blur: Respond to HDR Stops", "Increases step size as HDR stops increases.");
-            
-            if (ImGui::SliderFloat("LUT Gaussian Blur: Step", &cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, 1.f, 80.f, "%.1f"))
-               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurStep", cb_luma_global_settings.GameSettings.LUTGaussianBlurStep);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The step size for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will be recover and smooth out chrominance falloff.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, default_luma_global_game_settings.LUTGaussianBlurStep, "LUTGaussianBlurStep", runtime);
-            
-            if (ImGui::SliderFloat("LUT Gaussian Blur: Bias", &cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, 0.f, 10.f, "%.4f"))
-               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurBias", cb_luma_global_settings.GameSettings.LUTGaussianBlurBias);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The bias for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will bias the sampling towards higher chrominance, which recovers chrominance.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, default_luma_global_game_settings.LUTGaussianBlurBias, "LUTGaussianBlurBias", runtime); 
+            reshade::set_config_value(runtime, NAME, AntiAliasing::reshadesave_enabled, curr);
+            AntiAliasing::enabled = static_cast<AntiAliasing::Enabled>(curr);
          }
-         if (is_disabled) ImGui::EndDisabled();
-         
-         if (GlobalsMegaMix::UIIsAdvanced)
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Options for Anti-Aliasing."
+                                                                                          "\n"
+                                                                                          "\n[Directional Localized Anti-Aliasing (DLAA)]"
+                                                                                          "\nMore lenient, DLAA will result in a more blurred/filmic look."
+                                                                                          "\nDLAA was created to address difficulties implementing MLAA, resulting in an algorithm that blurs along the direction of edges for massive smoothing."
+                                                                                          "\nDebuting in Star Wars: The Force Unleashed II, it's one of the last AA methods before temporal solutions took over.");
+
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Requires MLAA selected in graphics settings!");
+         ImGui::PopStyleColor();
+
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Btw, FXAA never seems to draw.");
+         ImGui::PopStyleColor();
+      }
+      ImGui::PopID();
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###DepthOfField");
+      if (DrawCollapsingHeaderEnabledColored("Depth of Field", DepthOfField::enabled > DepthOfField::Vanilla))
+      {
+         DrawColoredSubHeader("Depth of Field Customization");
+
+         // dropdown Vanilla, Disable, DLAA
+         auto curr = static_cast<int>(DepthOfField::enabled);
+         if (ImGui::Combo("Mode", &curr, "Vanilla\0Disallow\0"))
          {
-            if (ImGui::SliderFloat("LUT Scaling & Makeup: Multiplier", &cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, 0.8f, 1.0f, "%.4f"))
-               reshade::set_config_value(runtime, NAME, "LUTScalingAndMakeUp", cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on LUT results and the makeup gain (reciprocal) afterwards.\nLower to give LUT lookup just a bit of headroom, increasing saturation from the YCbCr tonemap, which is usable by Per-Channel Blowout.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, default_luma_global_game_settings.LUTScalingAndMakeUp, "LUTScalingAndMakeUp", runtime);
+            reshade::set_config_value(runtime, NAME, DepthOfField::reshadesave_enabled, curr);
+            DepthOfField::enabled = static_cast<DepthOfField::Enabled>(curr);
          }
-      } AfterVanillaColorGrade:
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Options for Depth of Field."
+                                                                                          "\n"
+                                                                                          "\n TODO");
+
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HQ DoF is WIP.)");
+         ImGui::PopStyleColor();
+      }
+      ImGui::PopID();
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###SpotLightShadows");
+      if (DrawCollapsingHeaderEnabledColored("Spot Light Shadows", SpotLightShadows::enabled))
+      {
+         DrawColoredSubHeader("Full Resolution Spot Light Resolve");
+
+         if (ImGui::Checkbox("Full Resolution", &SpotLightShadows::enabled))
+            reshade::set_config_value(runtime, NAME, SpotLightShadows::reshadesave_enabled, SpotLightShadows::enabled);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Make the separated spot light shadows pass resolve to a full resolution color buffer.\nProbably has some performance cost.");
+
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This FX is rather rare. 2 PVs using this are Meiteki Cybernetics & Gaikotsu Gakudan to Riria.");
+         ImGui::PopStyleColor();
+      }
+      ImGui::PopID();
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
+      ImGui::PushID("###PS4Blur");
+      if (DrawCollapsingHeaderEnabledColored("PS3/PS4 Frame Blending", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_PS4BLUR_1)))
+      {
+         DrawColoredSubHeader("Insert 1-frame delay blending/ghosting seen in Dreamy Theater (PS3) & Future Tone (PS4).");
+
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PS4BLUR_1, "Mode", { "Off", "On", "Horizontal Interlacing" }, "Interlacing doesn't save performance.");
+
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For 60 FPS, and doesn't affect UI like original.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(This is barf inducing lol, but it's here for preservation.)");
+         ImGui::PopStyleColor();
+      }
+      ImGui::PopID();
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###AutoExposure");
+      if (DrawCollapsingHeaderEnabledColored("Auto-Exposure", AutoExposureFix::rate_replacement > 0))
+      {
+         DrawColoredSubHeader("Limit how fast Auto-Exposure history is written, reducing rapid exposure changes on high FPS.");
+         
+         if (ImGui::SliderInt("Rate", &AutoExposureFix::rate_replacement, 0, 60, "%d FPS"))
+            reshade::set_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Auto-Exposure history (32px ring buffer) is done per-frame.\nOn high FPS, this causes rapid exposure changes as older history is rapidly overriden.\n\nThis feature will limit Auto-Exposure rate,\nwhile allowing camera cuts to clear history.");
+         DrawResetButton(AutoExposureFix::rate_replacement, 60, AutoExposureFix::reshadesave, runtime);
+      }
+      ImGui::PopID();
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###ProgressBar");
+      if (DrawCollapsingHeaderEnabledColored("Progress Bar", ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_PROGRESSBAR) > 0))
+      {
+         ProgressBar::OnUI(runtime);
+      }
+      ImGui::PopID();
+      
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      if (DrawCollapsingHeaderEnabledColored("UI", !GlobalsMegaMix::IsUI || !GlobalsMegaMix::IsUIText))
+      {
+         if (ImGui::Checkbox("Draw UI", &GlobalsMegaMix::IsUI))
+            reshade::set_config_value(runtime, NAME, "IsUI", GlobalsMegaMix::IsUI);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Toggle UI.\nIf off, will discard all UI sprite shaders after the final shader.");
+         DrawResetButton(GlobalsMegaMix::IsUI, true, "IsUI", runtime);
+         
+         if (ImGui::Checkbox("Draw UI Text", &GlobalsMegaMix::IsUIText))
+            reshade::set_config_value(runtime, NAME, "IsUIText", GlobalsMegaMix::IsUIText);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Skips text (at least subtitles) after final shader has drawn.");
+         DrawResetButton(GlobalsMegaMix::IsUIText, true, "IsUIText", runtime);
+      }
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      
       //show advanced
       if (!GlobalsMegaMix::UIIsAdvanced)
       {
@@ -3638,6 +4518,37 @@ public:
          ImGui::Separator();
       }
       
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###LUTBlowoutReduction");
+      if (!is_sdr && DrawCollapsingHeaderEnabledColored("LUT Blowout Reduction", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN)))
+      {
+         DrawColoredSubHeader("Regain chrominance for HDR highlights by creating bias on blowout curve through gaussian weighted sampling.");
+         
+         is_disabled = !ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN, "LUT Gaussian Blur Sampling", "Sample the YCbCr LUT in charged of causing blowout with a gaussian blur,\nbiased towards higher chrominance, helping reduce steep chrominance falloff.");
+         if (is_disabled) ImGui::BeginDisabled();
+         {
+            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS, "LUT Gaussian Blur: Respond to HDR Stops", "Increases step size as HDR stops increases.");
+            
+            if (ImGui::SliderFloat("LUT Gaussian Blur: Step", &cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, 1.f, 80.f, "%.1f"))
+               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurStep", cb_luma_global_settings.GameSettings.LUTGaussianBlurStep);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The step size for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will be recover and smooth out chrominance falloff.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, default_luma_global_game_settings.LUTGaussianBlurStep, "LUTGaussianBlurStep", runtime);
+            
+            if (ImGui::SliderFloat("LUT Gaussian Blur: Bias", &cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, 0.f, 10.f, "%.4f"))
+               reshade::set_config_value(runtime, NAME, "LUTGaussianBlurBias", cb_luma_global_settings.GameSettings.LUTGaussianBlurBias);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The bias for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will bias the sampling towards higher chrominance, which recovers chrominance.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, default_luma_global_game_settings.LUTGaussianBlurBias, "LUTGaussianBlurBias", runtime); 
+         }
+         if (is_disabled) ImGui::EndDisabled();
+         
+         if (ImGui::SliderFloat("LUT Scaling & Makeup: Multiplier", &cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, 0.8f, 1.0f, "%.4f"))
+            reshade::set_config_value(runtime, NAME, "LUTScalingAndMakeUp", cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on LUT results and the makeup gain (reciprocal) afterwards.\nLower to give LUT lookup just a bit of headroom, increasing saturation from the YCbCr tonemap, which is usable by Per-Channel Blowout.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, default_luma_global_game_settings.LUTScalingAndMakeUp, "LUTScalingAndMakeUp", runtime);
+      }
+      ImGui::PopID();
+
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       //HDR Tonemapper Settings
@@ -3684,7 +4595,6 @@ public:
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_CLAMP_PEAK, "Output Clamp Peak",
             { "Unclamped (Up to Display)", "Per-Channel Clamp (Blows Out / Vanilla)", "Max Channel Clamp (Unnatural Saturation Preserve?)", "Per-Channel Rolloff Slightly Above Peak (Blows Out / Vanilla+)" },
             "Clamp of the very final output color to display.");
-         
       }
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
@@ -3886,33 +4796,7 @@ public:
       if (ImGui::CollapsingHeader("Miscellaneous Pipeline Options (Debug)"))
       {
          DrawColoredSubHeader("Various debug views.");
-
-         ImGui::Text("(FYI) Render Order: BG Sprites -> 3D -> Tonemap -> MLAA -> Final -> UI Sprites -> Swapchain");
          
-         // if (ImGui::Checkbox("Fullscreen Overlay FX", &Globals::IsFullscreenOverlayFx))
-         //    reshade::set_config_value(runtime, NAME, "IsFullscreenOverlayFx", Globals::IsFullscreenOverlayFx);
-         // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         //    ImGui::SetTooltip("Toggle IsFullscreenOverlayFx.\nWill discard all shaders after the tonemap shader up until the final shader.");
-         // DrawResetButton(Globals::IsFullscreenOverlayFx, true, "IsFullscreenOverlayFx", runtime);
-      
-         if (ImGui::Checkbox("Draw UI", &GlobalsMegaMix::IsUI))
-            reshade::set_config_value(runtime, NAME, "IsUI", GlobalsMegaMix::IsUI);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Toggle UI.\nIf off, will discard all UI sprite shaders after the final shader.");
-         DrawResetButton(GlobalsMegaMix::IsUI, true, "IsUI", runtime);
-
-         // if (ImGui::Checkbox("Skip Until UI", &Globals::IsSkipUntilUI))
-         //    reshade::set_config_value(runtime, NAME, "IsSkipUntilUI", Globals::IsSkipUntilUI);
-         // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         //    ImGui::SetTooltip("Skip as much draw calls as possible until UI starts drawing.");
-         // DrawResetButton(Globals::IsSkipUntilUI, false, "IsSkipUntilUI", runtime);
-
-         if (ImGui::Checkbox("Skip UI Text (For Lyrics)", &GlobalsMegaMix::IsSkipTextAfterFinal))
-            reshade::set_config_value(runtime, NAME, "IsSkipTextAfterFinal", GlobalsMegaMix::IsSkipTextAfterFinal);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("For turning off lyrics, skips all text after final shader has drawn.");
-         DrawResetButton(GlobalsMegaMix::IsSkipTextAfterFinal, false, "IsSkipTextAfterFinal", runtime);
-      
          // if (ImGui::SliderFloat("UI Transparency", &cb_luma_global_settings.GameSettings.UITransparency, 0.f, 1.f))
          //    reshade::set_config_value(runtime, NAME, "UITransparency", cb_luma_global_settings.GameSettings.UITransparency);
          // if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Do some crazy backend RTV switcheroo to separate out UI.\nMay cost performance.");
@@ -3979,13 +4863,14 @@ public:
          // std::string s2 = "SK Mode: " + std::to_string(Globals::IsSKMode);
          // ImGui::BulletText(s2.c_str());
 
-         // cb_luma_global_settings.GameSettings.TonemapperPeakCached
          std::string s3 = "Tonemapper Peak Cached: " + std::to_string(cb_luma_global_settings.GameSettings.TonemapperPeakCached);
          ImGui::BulletText(s3.c_str());
          
-         // cb_luma_global_settings.GameSettings.TonemapperMaxExpectedCached
          std::string s8 = "Tonemapper Max Expected Cached: " + std::to_string(cb_luma_global_settings.GameSettings.TonemapperMaxExpectedCached);
          ImGui::BulletText(s8.c_str());
+
+         std::string s10 = "Intermediate Scaling Cached: " + std::to_string(cb_luma_global_settings.GameSettings.IntermediateScalingCached);
+         ImGui::BulletText(s10.c_str());
       }
 
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
@@ -4059,14 +4944,20 @@ public:
       ImGui::BulletText("NVIDIA");
       ImGui::BulletText("AMD");
       ImGui::BulletText("DICE");
+      ImGui::BulletText("Intel");
       
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
+      ImGui::Text("Referenced Shader Source Code:");
+      ImGui::BulletText("XeGTAO");  ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/GameTechDev/XeGTAO");
+      ImGui::BulletText("Barbatos XeGTAO (for JointBilateralUpsample() weights)");  ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/BarbatosAWLS/Reshade-Shaders/blob/main/Shaders/BaBa_XeGTAO.fx");
+      ImGui::BulletText("Barbatos DLAA");  ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/BarbatosAWLS/Reshade-Shaders/blob/main/Shaders/BaBa_DLAA-T.fx");
+
+      ImGui::NewLine();
+      
       ImGui::Text("High FPS:");
-      ImGui::BulletText("SpecialK (memory addresses)");
-      ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/SpecialKO/SpecialK/blob/6fe51ee1eca4aee26a59e227ee5402ad3b55fcc0/src/plugins/unclassified.cpp#L1264");
-      ImGui::BulletText("Display Commander (limit replacement)");
-      ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/pmnoxx/display-commander");
+      ImGui::BulletText("SpecialK (memory addresses)"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/SpecialKO/SpecialK/blob/6fe51ee1eca4aee26a59e227ee5402ad3b55fcc0/src/plugins/unclassified.cpp#L1264");
+      ImGui::BulletText("Display Commander (limit replacement)"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/pmnoxx/display-commander");
    }
 };
 
@@ -4081,24 +4972,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       prevent_fullscreen_state = true;
       force_borderless = false;
       
-      // //enable_ui_separation
-      // enable_ui_separation = true;
-      
       //swapchain upgrade
       swapchain_upgrade_type         = SwapchainUpgradeType::scRGB;
       swapchain_format_upgrade_type  = TextureFormatUpgradesType::AllowedEnabled;
 
-      // //Globals::IsSKMode (check for ReShade64.dll file next to exe)
-      // {
-      //    std::filesystem::path dll_path = std::filesystem::current_path() / "ReShade64.dll";
-      //    Globals::IsSKMode = std::filesystem::exists(dll_path);
-      //    if (Globals::IsSKMode) swapchain_format_upgrade_type = TextureFormatUpgradesType::None;
-      // }
-
       //texture upgrade
       texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
-      //enable_indirect_texture_format_upgrades = true;
-      //enable_automatic_indirect_texture_format_upgrades = true;
       texture_upgrade_formats = {
          reshade::api::format::r8g8b8a8_unorm
       };

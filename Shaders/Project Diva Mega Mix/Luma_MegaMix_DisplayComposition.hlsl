@@ -2,6 +2,44 @@
 #include "../Includes/ColorGradingLUT.hlsl" // Use this as it has some gamma correction helpers
 #include "./common1.hlsl"
 
+//CUSTOM_SDR defs
+#if CUSTOM_SDR == 1
+  #ifdef CUSTOM_GAMMACORRECT22
+    #undef CUSTOM_GAMMACORRECT22
+  #endif
+  #define CUSTOM_GAMMACORRECT22 0
+
+  #ifdef CUSTOM_FAKEBT2020
+    #undef CUSTOM_FAKEBT2020
+  #endif
+  #define CUSTOM_FAKEBT2020 0
+
+  #ifdef CUSTOM_COLORGRADE_SATORDER
+    #undef CUSTOM_COLORGRADE_SATORDER
+  #endif
+  #define CUSTOM_COLORGRADE_SATORDER 0
+#endif
+
+// Enocding defs
+#ifdef POST_PROCESS_SPACE_TYPE
+	#undef POST_PROCESS_SPACE_TYPE
+	#define POST_PROCESS_SPACE_TYPE 1 // force linear as BRUHHHAll() will handle
+#endif
+
+#ifdef VANILLA_ENCODING_TYPE 
+	#undef VANILLA_ENCODING_TYPE 
+	#define VANILLA_ENCODING_TYPE 0 // do sRGB, treat as if correct/matching, letting SDR mismatch by itself
+#endif
+
+#ifdef EARLY_DISPLAY_ENCODING
+	#undef EARLY_DISPLAY_ENCODING
+	#define EARLY_DISPLAY_ENCODING 0
+#endif
+
+#if GAMMA_CORRECTION_TYPE_HASH != 0
+	THIS_SHOULDNT_HAPPEN
+#endif
+
 Texture2D<float4> sourceTexture : register(t0);
 Texture2D<float4> uiTexture : register(t1); // Optional: Pre-multiplied UI
 #if DEVELOPMENT
@@ -298,28 +336,6 @@ float3 DrawRect(float2 uv, float4 rect, float3 color, float3 rectColor)
 	return rectColor;
 }
 
-//CUSTOM_SDR defs
-#if CUSTOM_SDR == 1
-  #ifdef CUSTOM_GAMMACORRECT22
-    #undef CUSTOM_GAMMACORRECT22
-  #endif
-  #define CUSTOM_GAMMACORRECT22 0
-
-  #ifdef CUSTOM_FAKEBT2020
-    #undef CUSTOM_FAKEBT2020
-  #endif
-  #define CUSTOM_FAKEBT2020 0
-
-  #ifdef CUSTOM_COLORGRADE_SATORDER
-    #undef CUSTOM_COLORGRADE_SATORDER
-  #endif
-  #define CUSTOM_COLORGRADE_SATORDER 0
-#endif
-
-#ifdef POST_PROCESS_SPACE_TYPE
-	#undef POST_PROCESS_SPACE_TYPE
-	#define POST_PROCESS_SPACE_TYPE 1
-#endif
 float3 BRUHHHAll(float3 x, float2 v1) 
 {
   x = max(0, x);
@@ -343,13 +359,21 @@ float3 BRUHHHAll(float3 x, float2 v1)
       const bool r = 1-v1.y < 0.0035f;
     #endif
 
+		// color setup
+		uint pcp = (uint)GS.ProgressBarColorPacked;
+		float3 pc = float3(
+			float(pcp & 0xFFu) / 255.0,
+			float((pcp >> 8) & 0xFFu) / 255.0,
+			float((pcp >> 16) & 0xFFu) / 255.0
+		);
+
     if (GS.ProgressBarRatio >= 0 && r) {
       if (v1.x <= GS.ProgressBarRatio) { //played
-        x = lerp(x, 0.8, 0.5f);
+        x = lerp(x, pc * 0.8, 0.5f);
       } else if (v1.x > GS.ProgressBarRatio && v1.x <= GS.ProgressBarRatio + 0.0025f) { //curr
-        x = lerp(x, 1, 0.9f);
+        x = lerp(x, pc * 1, 0.9f);
       } else { //future
-        x = lerp(x, 0, 0.5f);
+        x = lerp(x, pc * 0, 0.5f);
       }
 
       // x = lerp(x, 0, 0.25f);
@@ -368,16 +392,18 @@ float3 BRUHHHAll(float3 x, float2 v1)
     x = DrawBinary(TonemapInfo::GetIndexOnlyIfDrawn(GS.TonemapInfo), x, v1.xy);
   #endif
 
-  //intermediate decode
-  x = gamma_sRGB_to_linear(x);
-  x /= HDR_INTSCALING;
-  
-  #if CUSTOM_HDTVREC709_1 == 0
-    //noop
-  #else
-    x = EncodeRec709(x);
-    x = gamma_sRGB_to_linear(x);
-  #endif
+  // intermediate decode
+  x = DecodeIntermediate(x);
+
+  // intermediate inv scaling
+  x /= GS.IntermediateScalingCached;
+
+	// Rec709 correction
+	#if CUSTOM_HDTVREC709_1 == 1
+	  x = EncodeRec709(x); // linear to Rec709
+		x = DecodeSrgb(x); // Rec709 to linear (output is sRGB)
+		// (which extracts Rec709 change / correction
+	#endif
 
   //Gamma Correction & Mode / Fake BT2020 / Saturation (bruh moment)
   const float3 xBack = UCSTo(x, CS_BT709);

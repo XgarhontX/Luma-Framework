@@ -3,7 +3,6 @@
 #include "../Includes/Color.hlsl"
 #include "../Includes/Tonemap.hlsl"
 #include "../Includes/Reinhard.hlsl"
-#include "./Includes/PerChannelCorrect.hlsl"
 #include "./Includes/ColorGrade.hlsl"
 #include "./Includes/DrawBinary.hlsl"
 #include "./Includes/ictcp_portable.hlsl"
@@ -18,8 +17,8 @@
 #if CUSTOM_SDR == 1
   #ifdef CUSTOM_TESTSDR
     #undef CUSTOM_TESTSDR
-    #define CUSTOM_TESTSDR 1
   #endif
+  #define CUSTOM_TESTSDR 1
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -43,15 +42,9 @@ bool CheckCustom(float4 x, float4 target, float leniency) {
 //REC709
 #define DECODEREC709(T)\
 T DecodeRec709(T x) {\
-  T r0, r2, r3, r4;\
-  r0 = x;\
-  r2 = 0.0989999995 + r0; \
-  r2 = 0.909918129 * r2;\
-  r2 = pow(r2, 2.22222233);\
-  r3 = cmp(0.0810000002 >= r0);\
-  r4 = 0.222222224 * r0;\
-  r2 = r3 ? r4 : r2;\
-  return r2;\
+  return 0.0810000002 >= x\
+    ? 0.222222224 * x\
+    : pow(0.909918129 * (0.0989999995 + x), 2.22222233);\
 }
 DECODEREC709(float)
 DECODEREC709(float2)
@@ -61,20 +54,58 @@ DECODEREC709(float4)
 
 #define ENCODEREC709(T)\
 T EncodeRec709(T x) {\
-  T r0, r1, r2;\
-  r1 = x;\
-  r0 = pow(r1, 0.449999988);\
-  r0 = r0 * 1.09899998 + -0.0989999995;\
-  r2 = cmp(0.0179999992 >= r1);\
-  r1 = 4.5 * r1;\
-  r0 = r2 ? r1 : r0;\
-  return r0;\
+  return 0.0179999992 >= x\
+    ? 4.5 * x\
+    : 1.09899998 * pow(x, 0.449999988) - 0.0989999995;\
 }
 ENCODEREC709(float)
 ENCODEREC709(float2)
 ENCODEREC709(float3)
 ENCODEREC709(float4)
 #undef ENCODEREC709
+
+float EncodeSrgb(float x) {
+  return linear_to_sRGB_gamma1(x, GCT_NONE);
+}
+float3 EncodeSrgb(float3 x) {
+  return linear_to_sRGB_gamma(x, GCT_NONE);
+}
+float DecodeSrgb(float x) {
+  return gamma_sRGB_to_linear1(x, GCT_NONE);
+}
+float3 DecodeSrgb(float3 x) {
+  return gamma_sRGB_to_linear(x, GCT_NONE);
+}
+
+#define INTERMEDIATE_GAMMA 1 // do sRGB, treat as if correct/matching, letting SDR mismatch by itself
+float EncodeIntermediate(float x) {
+  #if INTERMEDIATE_GAMMA == 0
+    return pow(x, 1/2.2);
+  #else
+    return EncodeSrgb(x);
+  #endif
+}
+float3 EncodeIntermediate(float3 x) {
+  #if INTERMEDIATE_GAMMA == 0
+    return pow(x, 1/2.2);
+  #else
+    return EncodeSrgb(x);
+  #endif
+}
+float DecodeIntermediate(float x) {
+  #if INTERMEDIATE_GAMMA == 0
+    return pow(x, 2.2);
+  #else
+    return DecodeSrgb(x);
+  #endif
+}
+float3 DecodeIntermediate(float3 x) {
+  #if INTERMEDIATE_GAMMA == 0
+    return pow(x, 2.2);
+  #else
+    return DecodeSrgb(x);
+  #endif
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //From RenoDX
@@ -466,12 +497,12 @@ float3 Tonemap_BloomSample(Texture2D<float4> t, SamplerState s, float2 uv) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 float3 Tonemap_SaveSprites_UpgradeSpritesOnly(float3 sprites) {
   #if CUSTOM_TESTSDR == 1
-    // return saturate(sprites);
-    return max(0, sprites);
+    return saturate(sprites);
+    // return max(0, sprites);
   #endif
 
   //gamma decode
-  sprites = gamma_sRGB_to_linear(sprites, GCT_POSITIVE); //requires GCT_POSITIVE
+  sprites = DecodeIntermediate(max(0, sprites));
 
   const float maxIn = GS.UpscaleBGSpritesMax;
   sprites = min(maxIn - 0.00001f, sprites);
@@ -481,7 +512,7 @@ float3 Tonemap_SaveSprites_UpgradeSpritesOnly(float3 sprites) {
   sprites = Reinhard::inverse::ReinhardScalable(sprites, maxIn, 0, GS.UpscaleBGSpritesExp, 0.18f);
 
   //gamma encode
-  sprites = linear_to_sRGB_gamma(sprites, GCT_POSITIVE); //max(0)
+  sprites = EncodeIntermediate(max(0, sprites));
 
   return sprites;
 }
@@ -608,7 +639,7 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
       #if CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS == 0 //sampling step size
         const float lutStep = (1.0f / 512.f) * GS.LUTGaussianBlurStep;
       #else
-        const float lutStep = (1.0f / 512.f) * GS.LUTGaussianBlurStep * (GS.TonemapHDRStops * 0.5f + 0.5f); 
+        const float lutStep = (1.0f / 512.f) * GS.LUTGaussianBlurStep * (HDR_STOPS * 0.5f + 0.5f); 
       #endif 
       const float softMaxStr = GS.LUTGaussianBlurBias; //higher = stronger bias toward peak sat
 
@@ -665,9 +696,7 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
 }
 float Tonemap_Complex_GetExposure(float mgg, float mg, float4 v3) {
   float3 x = Tonemap_Complex(mgg, v3, false, false);
-  //  x = pow(x, 2.2);
-  x *= x;
-  // x = gamma_sRGB_to_linear1(x, GCT_POSITIVE);
+  x = DecodeIntermediate(x);
   float y = GetLuminance(x, CS_BT709);
   return y / mg;
 }
@@ -678,26 +707,11 @@ void Tonemap_ResolveComplexWithExposure(inout float3 colorT, inout float3 colorU
   #if CUSTOM_TESTSDR == 1
     colorT = Tonemap_Complex(colorT, v3, false, false);
     return;
+  #else
+    colorT = Tonemap_Complex(colorT, v3, true, false); //tonemap
+    colorU *= Tonemap_Complex_GetExposure(0.46, 0.18, v3); //exposure
   #endif
-
-  //tonemap
-  colorT = Tonemap_Complex(colorT, v3, true, false);
-
-  // //extend luminance
-  // {
-  //   float3 colorTEx = colorTBak;
-  //   colorTEx = Tonemap_Complex(colorTEx, v3, false, true);
-  //   float colorTExY = GetLuminance(colorTEx, CS_BT709);
-  //   float colorTY = GetLuminance(colorT, CS_BT709);
-  //   float extendRatio = safeDivision(colorTExY, colorTY, 1);
-  //   colorT *= extendRatio;
-  //   // colorT = colorTEx; //debug: replaced
-  // }
-
-  // exposure
-  colorU *= Tonemap_Complex_GetExposure(0.46, 0.18, v3); //best for neutral
-  // colorU *= Tonemap_Complex_GetExposure(0.63, 0.36, v3);
-  // colorU *= Tonemap_Complex_GetExposure(0.795, 0.6036, v3); //best for troll
+  return;
 }
 #endif
 #ifdef TONEMAP_FADE
@@ -742,9 +756,7 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
   #endif
 
   // gamma decode
-  colorT = max(0, colorT); // required safe
-  colorT = gamma_sRGB_to_linear(colorT, GCT_NONE);
-  // colorT = pow(colorT, 1/g_tone_offset.w); //g_tone_offset.w is the game's gamma?!?! but there's no benefit to using it now.
+  colorT = DecodeIntermediate(max(0, colorT));
 
   //y
   float colorUy;
@@ -825,7 +837,7 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
         #endif
       }
 
-      //Per Channel Blowout (agressive near peak)
+      //Per Channel Blowout (aggressive near peak)
       {
         float3 colorTS = color_scaled;
         float y = color_scaled_y;
@@ -871,12 +883,12 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
       #elif CUSTOM_UPGRADE_DEBUG == 2
         colorT = colorU * (y_tonemapped / GetLuminance(colorU, CS_BT709));
         colorT = max(0, colorT);
-        colorT = linear_to_sRGB_gamma(colorT);
+        colorT = EncodeIntermediate(colorT);
         return colorT;
       #elif CUSTOM_UPGRADE_DEBUG == 3
         colorT = colorT;
         colorT = max(0, colorT);
-        colorT = linear_to_sRGB_gamma(colorT);
+        colorT = EncodeIntermediate(colorT);
         return colorT;
       #endif
     }
@@ -928,15 +940,8 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
   #endif
 
   // gamme encode
-  colorT = max(0, colorT);
-  colorT = linear_to_sRGB_gamma(colorT);
+  colorT = EncodeIntermediate(max(0, colorT));
 
   return colorT;
-}
-
-void Tonemap_Out(inout float4 o0) {
-  float3 x = o0.xyz;
-
-  o0.xyz = x;
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
