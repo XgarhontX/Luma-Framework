@@ -46,12 +46,6 @@ namespace CB
 {
    struct LumaGameSettings
    {
-      // float FakeBT2020Gamma;
-      // float AAMultiplier;
-      // float UITransparency;
-      // float SDRTonemapToeStrength;
-      // float SDRTonemapToeLowPass;
-
       float4 BloomStrengths;
 
       float BloomStrength;
@@ -59,7 +53,7 @@ namespace CB
       float TonemapperPeakCached;
       float TonemapperMaxExpectedCached;
       
-      float TonemapHDRStops;
+      float IntermediateScalingCached;
       float PerChannelLuminanceReductionEmulateStrength;
       float GammaCorrection22PaperWhite;
       float GammaPerceptualChrominanceCorrect;
@@ -97,7 +91,7 @@ namespace CB
       float XeGTAOFinalPower;
       float SSSRadius;
       float ProgressBarRatio;
-      int ProgressBarColorPacked; 
+      int   ProgressBarColorPacked; 
    };
    
    struct LumaGameData

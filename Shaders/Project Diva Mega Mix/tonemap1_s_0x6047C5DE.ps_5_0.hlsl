@@ -139,8 +139,7 @@ void main(
   }
 
   //linear colorU
-  //colorUntonemapped = gamma_to_linear(colorUntonemapped, GCT_POSITIVE, 2.2);
-  colorUntonemapped = gamma_sRGB_to_linear(colorUntonemapped, GCT_POSITIVE);
+  colorUntonemapped = DecodeIntermediate(max(0, colorUntonemapped));
 
   //tonemapper
   {
@@ -178,7 +177,6 @@ void main(
 
   //out
   o0 = r0;
-  Tonemap_Out(o0);
   return;
 }
 
