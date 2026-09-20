@@ -831,40 +831,63 @@ namespace ProgressBar
 namespace SeparateUIBrightness
 {
    bool enabled = true;
+   
    constexpr float brightness_menu_def = 203.f;
    constexpr float brightness_game_def = 300.f;
    float brightness_menu = brightness_menu_def;
    float brightness_game = brightness_game_def;
 
+   constexpr auto reshadesave_enabled = "SeparateUIBrightnessEnabled";
+   constexpr auto reshadesave_menu = "SeparateUIBrightnessMenu";
+   constexpr auto reshadesave_game = "SeparateUIBrightnessGame";
+
+   void OnUIAlways(reshade::api::effect_runtime* runtime)
+   {
+      // detect change
+      static bool use_os_reference_white_level_prev = false; // start false, since we don't need to do anything if so
+      if (use_os_reference_white_level_prev != use_os_reference_white_level)
+      {
+         if (use_os_reference_white_level) enabled = false; // force off
+         else reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled); // reapply user setting
+      }
+      use_os_reference_white_level_prev = use_os_reference_white_level;
+   }
+
    void OnUI(reshade::api::effect_runtime* runtime)
    {
+      if (use_os_reference_white_level)
+      {
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.f, 0.f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Please disable \"Link to OS Reference White Level\" first.");
+         ImGui::PopStyleColor();
+         return;
+      }
+      
       //enabled checkmark
-      ImGui::PushID("Separate UI Brightness: Enabled");
       if (ImGui::Checkbox("Enabled", &enabled))
       {
-         reshade::set_config_value(nullptr, NAME, "SeparateUIBrightnessEnabled", enabled);
+         reshade::set_config_value(runtime, NAME, reshadesave_enabled, enabled);
 #ifdef DAV_CORE
          ui_brightness_slider_enabled = !enabled;
 #endif
       }
-      ImGui::PopID();
       
       bool is_disabled = !enabled;
       if (is_disabled) ImGui::BeginDisabled();
       {
          ImGui::PushID("Separate UI Brightness: Menu");
          if (ImGui::SliderFloat("Menu Brightness", &brightness_menu, 1.f, 1000.f, "%.0f nits"))
-            reshade::set_config_value(runtime, NAME, "SeparateUIBrightnessMenu", brightness_menu);
+            reshade::set_config_value(runtime, NAME, reshadesave_menu, brightness_menu);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("UI paper white when browsing menus.");
-         DrawResetButton(brightness_menu, brightness_menu_def, "SeparateUIBrightnessMenu", runtime);
+         DrawResetButton(brightness_menu, brightness_menu_def, reshadesave_menu, runtime);
 
          ImGui::PushID("Separate UI Brightness: Gameplay");
          if (ImGui::SliderFloat("Game Brightness", &brightness_game, 1.f, 1000.f, "%.0f nits"))
-            reshade::set_config_value(runtime, NAME, "SeparateUIBrightnessGame", brightness_game);
+            reshade::set_config_value(runtime, NAME, reshadesave_game, brightness_game);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("UI paper white when playing a PV / in gameplay.");
-         DrawResetButton(brightness_game, brightness_game_def, "SeparateUIBrightnessGame", runtime);
+         DrawResetButton(brightness_game, brightness_game_def, reshadesave_game, runtime);
       }
       if (is_disabled) ImGui::EndDisabled();
    }
@@ -884,13 +907,15 @@ namespace SeparateUIBrightness
 
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
-      reshade::get_config_value(runtime, NAME, "SeparateUIBrightnessEnabled", enabled);
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
 #ifdef DAV_CORE
       ui_brightness_slider_enabled = !enabled;
 #endif
+
+      if (use_os_reference_white_level) enabled = false; // conflicts if not.
       
-      reshade::get_config_value(runtime, NAME, "SeparateUIBrightnessMenu", brightness_menu);
-      reshade::get_config_value(runtime, NAME, "SeparateUIBrightnessGame", brightness_game);
+      reshade::get_config_value(runtime, NAME, reshadesave_menu, brightness_menu);
+      reshade::get_config_value(runtime, NAME, reshadesave_game, brightness_game);
    }
 }
 
@@ -4213,11 +4238,14 @@ public:
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
+      ImGui::PushID("###SeparateUIBrightness");
+      SeparateUIBrightness::OnUIAlways(runtime);
       if (!is_sdr && DrawCollapsingHeaderEnabledColored("Separate UI Brightness", SeparateUIBrightness::enabled))
       {
          DrawColoredSubHeader("Detects when in gameplay to change UI Brightness accordingly.");
          SeparateUIBrightness::OnUI(runtime);
       }
+      ImGui::PopID();
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
