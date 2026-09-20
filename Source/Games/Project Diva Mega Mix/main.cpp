@@ -3384,6 +3384,47 @@ namespace PS4Blur
    }
 }
 
+#if DEVELOPMENT
+namespace LUTBuilderScan
+{
+   std::unordered_set<uint64_t> scanned_lut_res;
+   uint64_t prev_used_res = 0;
+
+   void OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData&device_data, uint32_t ps)
+   {
+      
+   }
+
+   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      // get SRV2 (LUT)
+      ComPtr<ID3D11ShaderResourceView> srv;
+      native_device_context->PSGetShaderResources(2, 1, srv.put());
+
+      // skip if null
+      if (!srv) return;
+
+      // RES
+      ComPtr<ID3D11Resource> res;
+      srv->GetResource(res.put());
+      prev_used_res = reinterpret_cast<uint64_t>(res.get());
+
+      // skip if old
+      if (scanned_lut_res.contains(reinterpret_cast<uint64_t>(res.get()))) return;
+
+      // insert
+      scanned_lut_res.insert(reinterpret_cast<uint64_t>(res.get()));
+      reshade::log::message(reshade::log::level::info, std::format("LUTBuilderScan: Found LUTBuilder LUT at SRV2, res={}.", reinterpret_cast<uint64_t>(res.get())).c_str());
+   }
+
+   void OnInitSwapchain()
+   {
+      scanned_lut_res.clear();
+      reshade::log::message(reshade::log::level::info, "LUTBuilderScan: Cleared resource_hashes on swapchain init.");
+   }
+}
+#endif
+
 } // unnamed namespace
 
 class ProjectDivaMegaMix final : public Game
@@ -3521,6 +3562,11 @@ public:
       // PS4Blur
       PS4Blur::HardReset();
 
+      // LUTBuilderScan
+#if DEVELOPMENT
+      LUTBuilderScan::OnInitSwapchain();
+#endif
+
       // // UISeparation
       // UISeparation::ResetOnSwapchain();
       
@@ -3536,6 +3582,11 @@ public:
       // // skip not ps
       // [[unlikely]]
       // if (ps == 0) return DrawOrDispatchOverrideType::None;
+
+      // LUTBuilderScan
+#if DEVELOPMENT
+      LUTBuilderScan::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+#endif
 
       // SpotLightShadows ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -3610,6 +3661,11 @@ public:
 
             Bloom::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             SpotLightShadows::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
+
+            // LUTBuilderScan
+#if DEVELOPMENT
+            LUTBuilderScan::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
+#endif
             
             return DrawOrDispatchOverrideType::None;
          }
@@ -4872,7 +4928,23 @@ public:
          std::string s10 = "Intermediate Scaling Cached: " + std::to_string(cb_luma_global_settings.GameSettings.IntermediateScalingCached);
          ImGui::BulletText(s10.c_str());
       }
+      
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
+#if DEVELOPMENT
+      if (ImGui::CollapsingHeader("(DEVELOPMENT) LUTBuilderScan"))
+      {
+         // for each list scanned_lut_res
+         ImGui::Text("LUT Resource Handles:");
+         for (const uint64_t lut_res : LUTBuilderScan::scanned_lut_res)
+         {
+            if (LUTBuilderScan::prev_used_res == lut_res) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+            ImGui::BulletText(std::to_string(lut_res).c_str());
+            if (LUTBuilderScan::prev_used_res == lut_res) ImGui::PopStyleColor();
+         }
+      }
+#endif
+      
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
       
       if (ImGui::Checkbox("Show Advanced Settings", &GlobalsMegaMix::UIIsAdvanced))
