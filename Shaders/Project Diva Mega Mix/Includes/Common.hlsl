@@ -13,4 +13,6 @@
 #define HDR_MAXEXPECTED GS.TonemapperMaxExpected / GamePaperWhiteNits
 #define HDR_STOPS log2(HDR_PEAK)
 
+#define LUT_CACHE_OUTPUT_SIZE 2048 // remember CPU-side too!
+
 #endif

@@ -58,7 +58,7 @@ namespace CB
       float GammaCorrection22PaperWhite;
       float GammaPerceptualChrominanceCorrect;
       
-      float LUTScalingAndMakeUp;
+      float p0;
       float LUTGaussianBlurStep;
       float LUTGaussianBlurBias;
       float FakeBT2020Chroma;

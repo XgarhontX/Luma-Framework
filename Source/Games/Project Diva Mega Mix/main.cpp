@@ -3384,6 +3384,91 @@ namespace PS4Blur
    }
 }
 
+namespace LUTBiasCached
+{
+   constexpr const char* Luma_LUTBiasCached = "Luma_LUTBiasCached";
+
+   constexpr int LUT_OUTPUT_SIZE = 2048;
+   
+   namespace Resources
+   {
+      ComPtr<ID3D11ShaderResourceView> srv = nullptr;
+      ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
+   }
+
+   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      // gatekeep
+      if (cb_luma_global_settings.DisplayMode != DisplayModeType::HDR) return;
+      if (!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN)) return;
+      if (DEVELOPMENT && !IsModEnabled()) return;
+
+      // nulls
+      constexpr ID3D11UnorderedAccessView* null_uav = nullptr;
+      constexpr ID3D11ShaderResourceView* null_srv = nullptr;
+      constexpr ID3D11ComputeShader* null_cs = nullptr;
+      constexpr ID3D11SamplerState* null_sampler = nullptr;
+      constexpr ID3D11Buffer* null_cb = nullptr;
+
+      // create resources
+      [[unlikely]] if (!Resources::srv.get())
+      {
+         D3D11_TEXTURE2D_DESC tex_desc;
+         tex_desc.Width = LUT_OUTPUT_SIZE;
+         tex_desc.Height = 1;
+         tex_desc.MipLevels = 1;
+         tex_desc.ArraySize = 1;
+         tex_desc.Format = DXGI_FORMAT_R16_FLOAT;
+         tex_desc.SampleDesc.Count = 1;
+         tex_desc.SampleDesc.Quality = 0;
+         tex_desc.Usage = D3D11_USAGE_DEFAULT;
+         tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+         tex_desc.CPUAccessFlags = 0;
+         tex_desc.MiscFlags = 0;
+
+         ComPtr<ID3D11Texture2D> tex;
+         auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+         ASSERT_MSG(SUCCEEDED(hr0), "LUTBiasCache: Create hr0");
+         auto hr1 = native_device->CreateShaderResourceView(tex.get(), nullptr, Resources::srv.put());
+         ASSERT_MSG(SUCCEEDED(hr1), "LUTBiasCache: Create hr1");
+         auto hr2 = native_device->CreateUnorderedAccessView(tex.get(), nullptr, Resources::uav.put());
+         ASSERT_MSG(SUCCEEDED(hr2), "LUTBiasCache: Create hr2");
+      }
+
+      // get & unbind PS SRV2
+      ComPtr<ID3D11ShaderResourceView> srv2;
+      native_device_context->PSGetShaderResources(2, 1, srv2.put());
+      if (!srv2) return; // skip if null (so tonemap will also not use LUT)
+      native_device_context->PSSetShaderResources(2, 1, &null_srv);
+      
+      // draw CS
+      native_device_context->CSSetShaderResources(0, 1, &srv2);
+      native_device_context->CSSetUnorderedAccessViews(0, 1, &Resources::uav, nullptr);
+      native_device_context->CSSetSamplers(0, 1, &device_data.sampler_state_point);
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+      native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_LUTBiasCached)).get(), nullptr, 0);
+      native_device_context->Dispatch((LUT_OUTPUT_SIZE + 63) / 64, 1, 1);
+
+      // clean CS
+      native_device_context->CSSetShaderResources(0, 1, &null_srv);
+      native_device_context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
+      native_device_context->CSSetShader(null_cs, nullptr, 0);
+      native_device_context->CSSetSamplers(0, 1, &null_sampler);
+      native_device_context->CSSetConstantBuffers(luma_data_cbuffer_index, 1, &null_cb);
+
+      // rebind PS SRV6
+      native_device_context->PSSetShaderResources(2, 1, &srv2);
+      
+      // bind PS SRV11 as LUTBiasCache
+      native_device_context->PSSetShaderResources(11, 1, &Resources::srv);
+   }
+
+   void OnInit()
+   {
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_LUTBiasCached), ShaderDefinition(Luma_LUTBiasCached, reshade::api::pipeline_subobject_type::compute_shader));
+   }
+}
+
 #if DEVELOPMENT
 namespace LUTBuilderScan
 {
@@ -3392,7 +3477,7 @@ namespace LUTBuilderScan
 
    void OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData&device_data, uint32_t ps)
    {
-      
+      // LUT isn't built by GPU (TEX DESC doesn't allow RTV)
    }
 
    void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
@@ -3459,6 +3544,9 @@ public:
       // AntiAliasing
       AntiAliasing::OnInit();
 
+      // LUTBiasCache
+      LUTBiasCached::OnInit();
+
       // Global default
       use_os_reference_white_level = false;
       
@@ -3473,13 +3561,6 @@ public:
       
       // default_luma_global_game_settings.UITransparency = cb_luma_global_settings.GameSettings.UITransparency = 1.f;
       
-      // default_luma_global_game_settings.SDRTonemapToeStrength = cb_luma_global_settings.GameSettings.SDRTonemapToeStrength = 2.f;
-      // default_luma_global_game_settings.SDRTonemapToeLowPass = cb_luma_global_settings.GameSettings.SDRTonemapToeLowPass = 0.9f;
-      
-      // default_luma_global_game_settings.LUTNeutralize = cb_luma_global_settings.GameSettings.LUTNeutralize = 0.5f;
-      // default_luma_global_game_settings.LUTBlowoutReduction = cb_luma_global_settings.GameSettings.LUTBlowoutReduction = 0.1685f;
-      // default_luma_global_game_settings.LUTBlowoutReductionLookBack = cb_luma_global_settings.GameSettings.LUTBlowoutReductionLookBack = 0.525f;
-      default_luma_global_game_settings.LUTScalingAndMakeUp = cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp = 0.995f;
       default_luma_global_game_settings.LUTGaussianBlurStep = cb_luma_global_settings.GameSettings.LUTGaussianBlurStep = 40.f;
       default_luma_global_game_settings.LUTGaussianBlurBias = cb_luma_global_settings.GameSettings.LUTGaussianBlurBias = 3.1f;
       
@@ -3489,7 +3570,6 @@ public:
       // default_luma_global_game_settings.PCBlowoutPerChannel2ndStartRatio = cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndStartRatio = 0.93f;
       // default_luma_global_game_settings.PCBlowoutPerChannel2ndEnd = cb_luma_global_settings.GameSettings.PCBlowoutPerChannel2ndEnd = 2.517f;
       
-      // default_luma_global_game_settings.FakeBT2020Gamma = cb_luma_global_settings.GameSettings.FakeBT2020Gamma = 1.5f;
       default_luma_global_game_settings.FakeBT2020Chroma = cb_luma_global_settings.GameSettings.FakeBT2020Chroma = 0.125f;
       default_luma_global_game_settings.FakeBT2020Luma = cb_luma_global_settings.GameSettings.FakeBT2020Luma = 0.125f;
       
@@ -3661,11 +3741,10 @@ public:
 
             Bloom::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             SpotLightShadows::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
-
-            // LUTBuilderScan
 #if DEVELOPMENT
             LUTBuilderScan::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
 #endif
+            LUTBiasCached::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             
             return DrawOrDispatchOverrideType::None;
          }
@@ -3910,7 +3989,6 @@ public:
 
       // reshade::get_config_value(runtime, NAME, "UITransparency", cb_luma_global_settings.GameSettings.UITransparency);
       
-      reshade::get_config_value(runtime, NAME, "LUTScalingAndMakeUp", cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp);
       reshade::get_config_value(runtime, NAME, "LUTGaussianBlurStep", cb_luma_global_settings.GameSettings.LUTGaussianBlurStep);
       reshade::get_config_value(runtime, NAME, "LUTGaussianBlurBias", cb_luma_global_settings.GameSettings.LUTGaussianBlurBias);
       
@@ -4597,11 +4675,6 @@ public:
             DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, default_luma_global_game_settings.LUTGaussianBlurBias, "LUTGaussianBlurBias", runtime); 
          }
          if (is_disabled) ImGui::EndDisabled();
-         
-         if (ImGui::SliderFloat("LUT Scaling & Makeup: Multiplier", &cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, 0.8f, 1.0f, "%.4f"))
-            reshade::set_config_value(runtime, NAME, "LUTScalingAndMakeUp", cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multiplier on LUT results and the makeup gain (reciprocal) afterwards.\nLower to give LUT lookup just a bit of headroom, increasing saturation from the YCbCr tonemap, which is usable by Per-Channel Blowout.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.LUTScalingAndMakeUp, default_luma_global_game_settings.LUTScalingAndMakeUp, "LUTScalingAndMakeUp", runtime);
       }
       ImGui::PopID();
 

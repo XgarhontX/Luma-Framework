@@ -559,6 +559,8 @@ static struct ExposureBracket {
 //   r0.y = g;
 //   return r0.xyz;
 // }
+
+Texture2D<float> g_textures_lut_biased : register(t11); // orig uses up to 7 + optional 10 (depth)
 float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool isExtend = true) {
   /*
     r0.y = dot(r0.xyz, float3(0.300000012,0.589999974,0.109999999));
@@ -578,9 +580,9 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
     isLookBack = false; //force no
   #endif
 
-  // colorT *= colorT;
-  // colorT *= DVS7; //Doing exposure here doesn't hue and sat shift, unlike v3.y
-  // colorT = sqrt(colorT);
+  #if CUSTOM_LUT_BLOWOUT_GAUSSIAN == 0
+    isLookBack = false; //force no
+  #endif
 
   float4 r0, r1;
   r0.xyz = colorT;
@@ -589,108 +591,90 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
   r0.y = dot(r0.xyz, float3(0.300000012, 0.589999974, 0.109999999)); //Y'CbCr (partial, close to BT601 coeffs)
   r0.xz = r0.xz + -r0.y; //UV
   r1.x = v3.y * r0.y; // exposure on Y
-  // r1.x *= DVS1; //debug: exposure multiplier
-  // return sqrt(r1.x); //debug: linearized luminance
   float backUpY = r1.x;
-  // float moddedY;
-  // {
-  //   float3 x = Tonemap_Complex_FromCbYCr(float3(r0.x, r1.x, r0.z));
-  //   x = pow(x, 1/2.2);
-  //   return x; //debug: exposure applied but not tonemapped
-  //   // x = pow(x, 2.2);
-  //   // moddedY = GetLuminance(x, CS_BT709);
-  //   // return moddedY / v3.y; //debug: modded luminance before tonemap
-  // }
 
-//   #if CUSTOM_LUT_BLOWOUT_REDUCTION > 0
-//   if (isLookBack)
-//   {
-//      //  if (r1.x > 1) return float3(1, 0, 1); //debug: highlight lut clippings
-//     //  return sqrt(r1.x); //debug: return LUT input
-// 
-//      // rolloff luminance so LUT doesnt clip
-//      const float c = DVS6;
-//      r1.x = ExponentialRollOff(r1.x, 0.9, 1.001);
-//   }
-//   #endif
+#if 1 // used cached biased LUT
+  // orig LUT
+  r1.xy = g_textures_2_.SampleLevel(g_samplers_2__s, float2(r1.x, 0), 0).yx; // dumb decomp swizzle!
 
-  r1.xy = g_textures_2_.SampleLevel(g_samplers_2__s, float2(r1.x, 0), 0).yx;
-    // Maybe Neutral LUT https://www.desmos.com/calculator/u3bhz0bn62
-    // r1.x = Saturation (Rolls off to 0 way before 1)
-    // r1.y = SDR Tonemapped Luma (Rolls off to 1 as it approaches 1)
-    // r1.x *= DVS2;
-    // r1.y *= DVS3;
+  // biased LUT
+  if (isLookBack) {
+    float lutInput = backUpY * (512./LUT_CACHE_OUTPUT_SIZE); // encode
+    r1.x = g_textures_lut_biased.SampleLevel(g_samplers_2__s, float2(lutInput, 0), 0).x;
+    r1.y *= 0.995f;
 
-  #if CUSTOM_TESTSDR == 0 && CUSTOM_SDR == 0
-    r1.xy *= GS.LUTScalingAndMakeUp;
-  #endif
+    // debug: overshoot
+#if DEVELOPMENT
+    if (lutInput > 1.0f) return float3(5, 0, 0);
+#endif
+  }
+#else // calculate per pixel
+  /*
+    Maybe Neutral LUT https://www.desmos.com/calculator/u3bhz0bn62
+    r1.x = Saturation (Rolls off to 0 way before 1)
+    r1.y = SDR Tonemapped Luma (Rolls off to 1 as it approaches 1)
+    r1.x *= DVS2;
+    r1.y *= DVS3;
+  */
+  r1.xy = g_textures_2_.SampleLevel(g_samplers_2__s, float2(r1.x, 0), 0).yx; // dumb decomp swizzle!
+
+  // "headroom"
+  float satBeforeHeadroom = r1.x;
+  if (isLookBack) r1.xy *= float2(0.9975f, 0.995f);
 
   // blowout reduction
   if (isLookBack)
   {
     float newSat = r1.x;
 
-    //Gaussian, soft-max biased towards higher saturation
-    #if CUSTOM_LUT_BLOWOUT_GAUSSIAN > 0
+    // Gaussian, soft-max biased towards higher saturation
     {
-      float yLB = backUpY;
+      float y = backUpY;
+      float satOrig = r1.x;
 
-      
-      #if CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS == 0 //sampling step size
+      #if CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS == 0 // sampling step size
         const float lutStep = (1.0f / 512.f) * GS.LUTGaussianBlurStep;
       #else
         const float lutStep = (1.0f / 512.f) * GS.LUTGaussianBlurStep * (HDR_STOPS * 0.5f + 0.5f); 
       #endif 
-      const float softMaxStr = GS.LUTGaussianBlurBias; //higher = stronger bias toward peak sat
+      const float softMaxStr = GS.LUTGaussianBlurBias; // higher = stronger bias toward peak sat
 
       float blurredSat = 0, totalWeight = 0;
-      [unroll]
-      for (int k = -4; k <= 2; k++) { //biased towards lower luminance (more negative index)
-        float ySample = max(0.0430528375734, yLB + k * lutStep); //neutral LUT peak
-        float sat = g_textures_2_.SampleLevel(g_samplers_2__s, float2(ySample, 0), 0).y; //sat channel
-        float w = exp(-0.5f * (k * k)) * exp(sat * softMaxStr); //gaussian * soft-max bias //TODO: simpler?
-        blurredSat = mad(sat, w, blurredSat);
-        totalWeight += w;
+      [unroll] for (int k = -4; k <= 2; k++) { // biased towards lower luminance (more negative index)
+        float ySample = max(0.0430528375734, k * lutStep + y); // neutral LUT peak
+        float sat = g_textures_2_.SampleLevel(g_samplers_2__s, float2(ySample, 0), 0).y; // sat channel
+        if (sat > satOrig)
+        {
+          float w = exp(-0.5f * (k * k)) * exp(sat * softMaxStr); // gaussian * soft-max bias
+          blurredSat = mad(sat, w, blurredSat);
+          totalWeight += w;
+        }
       }
 
       float m = blurredSat / totalWeight; //avg
       newSat = max(newSat, m); //clamp chrominance loss
     }
-    #endif
 
-    //look back
-    #if CUSTOM_LUT_BLOWOUT_REDUCTION > 0
-    {
-      float yLB = backUpY * GS.LUTBlowoutReductionLookBack;
-      yLB = max(0.0430528375734, yLB); //neutral LUT peak
-      float2 m = g_textures_2_.SampleLevel(g_samplers_2__s, float2(yLB, 0), 0).yx;
-      m = max(newSat, m); //clamp chrominance loss
-      newSat = lerp(newSat, m.x, GS.LUTBlowoutReduction);
-    }
-    #endif
-
-    //high pass (else, shadows may change luminance)
-    #if CUSTOM_LUT_BLOWOUT_REDUCTION > 0 || CUSTOM_LUT_BLOWOUT_GAUSSIAN > 0
+    // high pass (else, shadows may change luminance)
     {
       float hp = backUpY;
       hp *= 8;
       hp = pow(hp, 2.5f);
-      // return hp; //debug
       hp = saturate(hp);
       r1.x = lerp(r1.x, newSat, hp);
     }
-    #endif
   }
 
-  r0.y = v3.x * r1.x; //editor saturation slider, usually 1
+  // // headroom // TODO: this is what it was intended for, but it looks worse than above.
+  // if (isLookBack) r1.y *= 0.995f;
+#endif
+
+  r0.y = v3.x * r1.x; // editor saturation slider, usually 1
   r1.xz = r0.y * r0.xz;
-  r0.xz = r0.y * r0.xz + r1.y; //r & b channel
-  r0.y = dot(r1.xyz, float3(-0.508475006, 1, -0.186441004)); //g channel (recovered)
-  //(there is a mismatch from coeffs, creating de/sat from exposure changes?)
+  r0.xz = r0.y * r0.xz + r1.y; // r & b channel
+  r0.y = dot(r1.xyz, float3(-0.508475006, 1, -0.186441004)); // g channel (recovered)
 
-  r0.xyz = r0.xyz * g_tone_scale.xyz + g_tone_offset.xyz; //gamma color grade gain-offset slope
-
-  // r0.xyz = saturate(r0.xyz); //per channel blowout
+  r0.xyz = r0.xyz * g_tone_scale.xyz + g_tone_offset.xyz; // gamma color grade gain-offset slope
 
   return r0.xyz;
 }
@@ -808,6 +792,9 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
       //backup
       float3 color_scaled_bak = color_scaled;
 
+      // TODO: it blows since luminance is gamma curved & orig perchannel is saturate().
+      // it's hard to do tonemapping without ruining hue instanly and too much PerChannelTonemapLuminanceReduction will make white too OP.
+
       //Per Channel Blowout (gradual)
       {
         float3 colorTS = color_scaled;
@@ -898,7 +885,7 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
   // LUT decrease makeup
   #ifdef TONEMAP_COMPLEX
   {
-    float e = rcp(GS.LUTScalingAndMakeUp);
+    float e = rcp(0.995f);
     e *= e;
     colorT *= e;
   }
