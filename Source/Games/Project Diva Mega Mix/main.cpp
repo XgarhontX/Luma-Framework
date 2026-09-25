@@ -30,6 +30,29 @@ namespace
    }
 
    bool IsModEnabled() {return custom_shaders_enabled || !ignore_indirect_upgraded_textures || !ignore_upgraded_samplers;}
+
+#if DEVELOPMENT
+   // returns if previewing
+   bool PreviewShaderOutput(DeviceData& device_data, uint32_t hash)
+   {
+      // purge
+      device_data.debug_draw_texture = nullptr;
+      device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
+      device_data.debug_draw_texture_size = {};
+
+      // set
+      if (debug_draw_shader_hash != hash)
+      {
+         debug_draw_shader_hash = hash;
+         return true;
+      }
+      else
+      {
+         debug_draw_shader_hash = 0;
+         return false;
+      }
+   }
+#endif
    
 namespace TonemapInfo
 {
@@ -203,6 +226,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_TONEMAP_IDENTIFY           = char_ptr_crc32("CUSTOM_TONEMAP_IDENTIFY");
    constexpr uint32_t CUSTOM_SDR                        = char_ptr_crc32("CUSTOM_SDR");
    constexpr uint32_t CUSTOM_PERCHANNELLUMAEMULATE      = char_ptr_crc32("CUSTOM_PERCHANNELLUMAEMULATE");
+   constexpr uint32_t CUSTOM_BLOOM_THRESHOLD            = char_ptr_crc32("CUSTOM_BLOOM_THRESHOLD");
    constexpr uint32_t XEGTAO_SLICECOUNT                 = char_ptr_crc32("XEGTAO_SLICECOUNT");
    constexpr uint32_t XEGTAO_STEPSPERSLICE              = char_ptr_crc32("XEGTAO_STEPSPERSLICE");
    constexpr uint32_t XEGTAO_HALFRES                    = char_ptr_crc32("XEGTAO_HALFRES");
@@ -250,6 +274,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_PROGRESSBAR", '0', true, false, "Play head progress bar.", 2},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
          {"CUSTOM_PS4BLUR_1", '0', true, false, "PS4 frame blur / ghosting.", 2},
+         {"CUSTOM_BLOOM_THRESHOLD", '0', true, false, "Bloom threshold mode.", 2},
          {"XEGTAO_SLICECOUNT", '1', true, false, "XeGTAO samples.", 6},
          {"XEGTAO_STEPSPERSLICE", '0', true, false, "XeGTAO samples.", 2},
          {"XEGTAO_HALFRES", '1', true, false, "XeGTAO half resolution.", 1},
@@ -423,7 +448,7 @@ namespace AutoExposureFix
 
 namespace CachedCB
 {
-   constexpr float white_clip_def = /*0.022f*/0.1650;
+   constexpr float white_clip_def = /*0.022f*//*0.1650*/0.1350;
    float white_clip = white_clip_def;
 
    float Encode_sRGB(float x)
@@ -2128,13 +2153,16 @@ namespace Bloom
       bool enabled = false;
 
    constexpr const char* reshadesave_sigma = "BloomSigma";
-   constexpr float sigma_def = 0.5f;
+   constexpr float sigma_def = 0.46f;
       float sigma = sigma_def;
 
    constexpr const char* reshadesave_sigma_increase = "BloomSigmaIncrease";
-   constexpr float sigma_increase_def = 0.46f;
+   constexpr float sigma_increase_def = 0.36f;
       float sigma_increase = sigma_increase_def;
+
+   PUBLISHING_CONSTEXPR bool is_vanilla_bloom_blur_rtv_hq = true;
    
+   constexpr const char* Bloom_Downsample1_PS = "Bloom Downsample1 PS";
    constexpr const char* Bloom_Combine_PS = "Bloom Combine PS";
    constexpr const char* Bloom_Blur0_PS = "Bloom Blur0 PS";
    constexpr const char* Bloom_Blur0_VS = "Bloom Blur0 VS";
@@ -2172,9 +2200,6 @@ namespace Bloom
    namespace Resources
    {
       int nmips = 0;
-
-      uint2 size_full = { 0, 0 };
-      uint2 size_down0 = { 0, 0 };
       
       ComPtr<ID3D11ShaderResourceView> orig_full_srv = nullptr;
 
@@ -2183,31 +2208,27 @@ namespace Bloom
       
       std::vector<ID3D11RenderTargetView*> rtv_mips_y(10); // also used as bloom upsample outputs
       std::vector<ID3D11ShaderResourceView*> srv_mips_y(10);
-      
-      ComPtr<ID3D11RenderTargetView> rtv_mip0 = nullptr; // for whatever reason where we need 2nd buffer to alternate
-      ComPtr<ID3D11ShaderResourceView> srv_mip0 = nullptr;
+
+      std::vector<ID3D11RenderTargetView*> rtv_mips_y1(10); // used to replace blurring
+      std::vector<ID3D11ShaderResourceView*> srv_mips_y1(10);
+
+      std::vector<D3D11_VIEWPORT> rtv_mips_y_viewports(10); // TODO: this needs copied to in-scope instance to successfully set 
 
       // bool IsValid() { return rtv_mips_x[0]; }
 
-      void ResetAndResizeVectorsToCurrentMips()
+      void ResetArrays()
       {
          ResetCOMArray(rtv_mips_x);
          ResetCOMArray(srv_mips_x);
          ResetCOMArray(rtv_mips_y);
          ResetCOMArray(srv_mips_y);
-         
-         // rtv_mips_x.resize(nmips);
-         // srv_mips_x.resize(nmips);
+         ResetCOMArray(rtv_mips_y1);
+         ResetCOMArray(srv_mips_y1);
       }
 
-      void Reset()
+      void HardReset()
       {
-         ResetCOMArray(rtv_mips_x);
-         ResetCOMArray(srv_mips_x);
-         ResetCOMArray(rtv_mips_y);
-         ResetCOMArray(srv_mips_y);
-         rtv_mip0.reset();
-         srv_mip0.reset();
+         ResetArrays();
          nmips = 0;
       }
    }
@@ -2231,7 +2252,6 @@ namespace Bloom
             // SRV0 orig_full_srv
             native_device_context->PSGetShaderResources(0, 1, Resources::orig_full_srv.put());
             
-            // next state
             state = Downsample1;
             break;
          }
@@ -2300,6 +2320,7 @@ namespace Bloom
                   // Setup
                   D3D11_TEXTURE2D_DESC tex_desc;
                   ComPtr<ID3D11Texture2D> tex;
+                  ComPtr<ID3D11Texture2D> tex1;
                   ComPtr<ID3D11Resource> resource;
                   
                   Resources::orig_full_srv->GetResource(resource.put());
@@ -2316,11 +2337,8 @@ namespace Bloom
                
                   y_mip0_width  = tex_desc.Width / 2;
                   y_mip0_height = tex_desc.Height / 2;
-               
-                  Resources::size_full = { scene_width, scene_height }; // for outside use
-                  Resources::size_down0 = { y_mip0_width, y_mip0_height };
-
-                  reshade::log::message(reshade::log::level::info, std::format("Bloom: scene size {}x{}, downsample0 size {}x{}, x_mip0 size {}x{}, y_mip0 size {}x{}", scene_width, scene_height, Resources::size_down0.x, Resources::size_down0.y, x_mip0_width, x_mip0_height, y_mip0_width, y_mip0_height).c_str());
+                  
+                  reshade::log::message(reshade::log::level::info, std::format("Bloom: scene size {}x{}, x_mip0 size {}x{}, y_mip0 size {}x{}", scene_width, scene_height, x_mip0_width, x_mip0_height, y_mip0_width, y_mip0_height).c_str());
 
                   // while loop to find when x <= 32 and resize nmips
                   Resources::nmips = 0;
@@ -2333,7 +2351,7 @@ namespace Bloom
                      }
                      Resources::nmips = std::clamp(Resources::nmips, 4, static_cast<int>(Resources::rtv_mips_x.size()));
                   }
-                  Resources::ResetAndResizeVectorsToCurrentMips();
+                  Resources::ResetArrays();
 
                   reshade::log::message(reshade::log::level::info, std::format("Bloom: mips {}", Resources::nmips).c_str());
                   
@@ -2341,10 +2359,12 @@ namespace Bloom
                   tex_desc.Width = y_mip0_width;
                   tex_desc.Height = y_mip0_height;
                   tex_desc.MipLevels = Resources::nmips;
-                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  tex_desc.Format = /*DXGI_FORMAT_R16G16B16A16_FLOAT*/ DXGI_FORMAT_R11G11B10_FLOAT;
                   tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
                   auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
                   ASSERT_MSG(SUCCEEDED(hr0), "Bloom hr0");
+                  auto hr0a = native_device->CreateTexture2D(&tex_desc, nullptr, tex1.put());
+                  ASSERT_MSG(SUCCEEDED(hr0a), "Bloom hr0a");
             
                   D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
                   rtv_desc.Format = tex_desc.Format;
@@ -2354,27 +2374,29 @@ namespace Bloom
                   srv_desc.Format = tex_desc.Format;
                   srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                   srv_desc.Texture2D.MipLevels = 1;
-            
+
                   for (int i = 0; i < Resources::nmips; ++i)
                   {
                      rtv_desc.Texture2D.MipSlice = i;
                      auto hr1 = native_device->CreateRenderTargetView(tex.get(), &rtv_desc, &Resources::rtv_mips_y[i]);
                      ASSERT_MSG(SUCCEEDED(hr1), "Bloom hr1");
+                     auto hr1a = native_device->CreateRenderTargetView(tex1.get(), &rtv_desc, &Resources::rtv_mips_y1[i]);
+                     ASSERT_MSG(SUCCEEDED(hr1a), "Bloom hr1a");
+                     
                      srv_desc.Texture2D.MostDetailedMip = i;
                      auto hr2 = native_device->CreateShaderResourceView(tex.get(), &srv_desc, &Resources::srv_mips_y[i]);
                      ASSERT_MSG(SUCCEEDED(hr2), "Bloom hr2");
-                  }
+                     auto hr2a = native_device->CreateShaderResourceView(tex1.get(), &srv_desc, &Resources::srv_mips_y1[i]);
+                     ASSERT_MSG(SUCCEEDED(hr2a), "Bloom hr2a");
 
-                  // Create extra for alternating MIP0 and views.
-                  tex_desc.MipLevels = 1;
-                  rtv_desc.Texture2D.MipSlice = 0;
-                  srv_desc.Texture2D.MostDetailedMip = 0;
-                  auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
-                  ASSERT_MSG(SUCCEEDED(hr3), "Bloom hr3");
-                  auto hr4 = native_device->CreateRenderTargetView(tex.get(), &rtv_desc, Resources::rtv_mip0.put());
-                  ASSERT_MSG(SUCCEEDED(hr4), "Bloom hr4");
-                  auto hr5 = native_device->CreateShaderResourceView(tex.get(), &srv_desc, Resources::srv_mip0.put());
-                  ASSERT_MSG(SUCCEEDED(hr5), "Bloom hr5");
+                     Resources::rtv_mips_y_viewports[i].TopLeftX = 0.f;
+                     Resources::rtv_mips_y_viewports[i].TopLeftY = 0.f;
+                     Resources::rtv_mips_y_viewports[i].Width  = y_mip0_width  >> i;
+                     Resources::rtv_mips_y_viewports[i].Height = y_mip0_height >> i;
+                     Resources::rtv_mips_y_viewports[i].MinDepth = 0.f;
+                     Resources::rtv_mips_y_viewports[i].MaxDepth = 1.f;
+                     // reshade::log::message(reshade::log::level::info, std::format("Bloom: created Y mip {} with size {}x{}", i, Resources::rtv_mips_y_viewports[i].Width, Resources::rtv_mips_y_viewports[i].Height).c_str());
+                  }
                   
                   // Create X MIP0 and views.
                   tex_desc.Width = x_mip0_width;
@@ -2402,7 +2424,8 @@ namespace Bloom
 
                   reshade::log::message(reshade::log::level::info, std::format("Bloom: created textures and views for {} mips", Resources::nmips).c_str());
                }
-            
+
+               //
                // Create bloom CB.
                //
             
@@ -2430,7 +2453,6 @@ namespace Bloom
                };
             
                //
-            
                // Prefilter + downsample pass
                //
             
@@ -2449,7 +2471,7 @@ namespace Bloom
                native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_x[0], nullptr);
                native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
                native_device_context->VSSetShader(device_data.native_vertex_shaders.at(Math::CompileTimeStringHash("Bloom VS")).get(), nullptr, 0);
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(Math::CompileTimeStringHash("Bloom Downsample PS")).get(), nullptr, 0);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(Math::CompileTimeStringHash(Bloom_Downsample1_PS)).get(), nullptr, 0);
                native_device_context->PSSetConstantBuffers(11, 1, &managed_resources.buffers["luma_bloom_cb"_h]);
                const std::array ps_samplers = { device_data.sampler_state_linear.get() };
                native_device_context->PSSetSamplers(0, ps_samplers.size(), ps_samplers.data());
@@ -2480,15 +2502,14 @@ namespace Bloom
                native_device_context->Draw(3, 0);
             
                //
-            
                // Downsample passes
                //
             
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Downsample PS"_h).get(), nullptr, 0);
-            
                // Render downsample passes.
-               for (UINT i = 1; i < Resources::nmips; ++i)
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Downsample PS"_h).get(), nullptr, 0); // 1st special downsample
+               for (UINT i = 1; i < Resources::nmips; i++)
                {
+                  // view port
                   viewport_x.Width = max(1u, x_mip0_width >> i);
                   viewport_x.Height = max(1u, x_mip0_height >> i);
             
@@ -2526,12 +2547,10 @@ namespace Bloom
                }
             
                //
-            
                // Upsample passes
                //
-            
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Upsample PS"_h).get(), nullptr, 0);
-               
+
+               // blend
                [[unlikely]] if (!managed_resources.blends["luma_bloom_blend"_h])
                {
                   CD3D11_BLEND_DESC blend_desc(D3D11_DEFAULT);
@@ -2540,31 +2559,33 @@ namespace Bloom
                   blend_desc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
                   ensure(native_device->CreateBlendState(&blend_desc, managed_resources.blends["luma_bloom_blend"_h].put()), >= 0);
                }
-               
 
-               // // upsample 4 mips up
-               // // for (int i = Resources::nmips - 1; i > 0; --i)
-               // for (int i = Resources::nmips - 1; i > Resources::nmips - 1 - 4; --i)
-               // {
-               //    // If both dst and src are D3D10_BLEND_BLEND_FACTOR
-               //    // factor of 0.5 will be enegrgy preserving.
-               //    static constexpr FLOAT blend_factor[] = { 0.5f, 0.5f, 0.5f, 0.0f };
-               //
-               //    // Update CB.
-               //    cb_data.src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
-               //    cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
-               //    update_constant_buffer();
-               //
-               //    native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i - 1], nullptr);
-               //    native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i]);
-               //    native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
-               //    native_device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
-               //
-               //    native_device_context->Draw(3, 0);
-               // }
-            
-               //
-            
+               // upsample 4 mips up
+               uint8_t budget = 4;
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Upsample PS"_h).get(), nullptr, 0);
+               for (int i = Resources::nmips - 1; i > 0; i--)
+               {
+                  // do only necessary
+                  if (budget == 0) break; //TODO: use i
+                  budget--;
+                  
+                  // If both dst and src are D3D10_BLEND_BLEND_FACTOR
+                  // factor of 0.5 will be energy preserving.
+                  static constexpr FLOAT blend_factor[] = { 0.5f, 0.5f, 0.5f, 0.0f };
+               
+                  // Update CB.
+                  cb_data.src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
+                  cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+                  update_constant_buffer();
+               
+                  native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i - 1], nullptr);
+                  native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i]);
+                  native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
+                  native_device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
+               
+                  native_device_context->Draw(3, 0);
+               }
+               
                // // Return the final bloom.
                // *srv_bloom = Resources::srv_mips_y[0];
                // (*srv_bloom)->AddRef();
@@ -2596,10 +2617,10 @@ namespace Bloom
                // LumaCallbacks::on_init_swapchain.try_emplace("luma_bloom"_h, reset_mips);
             }
             
-            // next state
             state = BloomDown0;
             break;
          }
+         // (Auto Exposure downsample is independent from our new bloom)
          case BloomDown0: 
          {
             // wait until shader
@@ -2608,9 +2629,16 @@ namespace Bloom
             // SRV0 set to 3rd last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 3]);
 
-            //TODO: RTV too
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // RTV0 set to 3rd last mip
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[Resources::nmips - 3], nullptr);
+            
+               // viewport
+               D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 3];
+               native_device_context->RSSetViewports(1, &viewport);
+            }
 
-            // skip to next
             state = BloomDown1;
             break;
          }
@@ -2621,10 +2649,17 @@ namespace Bloom
 
             // SRV0 set to 2nd last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 2]);
-            
-            //TODO: RTV too
 
-            // skip to next
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // RTV0 set to 2nd last mip
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[Resources::nmips - 2], nullptr);
+            
+               // viewport
+               D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 2];
+               native_device_context->RSSetViewports(1, &viewport);
+            }
+
             state = BloomDown2;
             break;
          }
@@ -2636,9 +2671,16 @@ namespace Bloom
             // SRV0 set to last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 1]);
 
-            //TODO: RTV too
-
-            // skip to next
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // RTV0 set to last mip
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[Resources::nmips - 1], nullptr);
+            
+               // viewport
+               D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 1];
+               native_device_context->RSSetViewports(1, &viewport);
+            }
+            
             state = BloomDown3;
             break;
          }
@@ -2647,9 +2689,19 @@ namespace Bloom
             // wait until shader
             if (ps != 0x7B4E4533) break;
 
-            //TODO: SRV & RTV
-
-            // skip to next
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // SRV0 set to 3rd last mip (flipped)
+               native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y1[Resources::nmips - 3]);
+            
+               // RTV0 set to 3rd last mip (flipped)
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[Resources::nmips - 3], nullptr);
+            
+               // viewport
+               D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 3];
+               native_device_context->RSSetViewports(1, &viewport);
+            }
+            
             state = BloomDown4;
             break;
          }
@@ -2657,8 +2709,19 @@ namespace Bloom
          {
             // wait until shader
             if (ps != 0x7B4E4533) break;
+
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // SRV0 set to 2nd last mip (flipped)
+               native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y1[Resources::nmips - 2]);
             
-            //TODO: SRV & RTV
+               // RTV0 set to 2nd last mip (flipped)
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[Resources::nmips - 2], nullptr);
+            
+               // viewport
+               D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 2];
+               native_device_context->RSSetViewports(1, &viewport);
+            }
 
             state = BloomDown5;
             break;
@@ -2667,8 +2730,19 @@ namespace Bloom
          {
             // wait until shader
             if (ps != 0x7B4E4533) break;
+
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // SRV0 set to last mip (flipped)
+               native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y1[Resources::nmips - 1]);
             
-            //TODO: SRV & RTV
+               // RTV0 set to last mip (flipped)
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[Resources::nmips - 1], nullptr);
+            
+               // viewport
+               D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 1];
+               native_device_context->RSSetViewports(1, &viewport);
+            }
 
             state = BloomBlur0;
             break;
@@ -2681,6 +2755,16 @@ namespace Bloom
             // SRV0 set to 4rd last mip
             native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 4]);
 
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // RTV0 set to 4rd last mip
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[Resources::nmips - 4], nullptr);
+            
+               // viewport
+               D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 4];
+               native_device_context->RSSetViewports(1, &viewport);
+            }
+            
             // Set VS PS
             native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Bloom_Blur0_VS)).get(), nullptr, 0);
             native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Bloom_Blur0_PS)).get(), nullptr, 0);
@@ -2692,27 +2776,24 @@ namespace Bloom
          {
             // skip until shader
             if (ps != 0xCD83E95E) return DrawOrDispatchOverrideType::Skip;
-            
-            // SRV 0-3 are last 4 mip levels of bloom, descending order (0 is largest, 3 is smallest)
-            // const std::array<ID3D11ShaderResourceView*, 4> bloom_srvs = { Resources::srv_mips_y[Resources::nmips - 1 - 3], Resources::srv_mips_y[Resources::nmips - 1 - 2], Resources::srv_mips_y[Resources::nmips - 1 - 1], Resources::srv_mips_y[Resources::nmips - 1 - 0] };
-            // native_device_context->PSSetShaderResources(0, bloom_srvs.size(), bloom_srvs.data());
-            
+
+            if (is_vanilla_bloom_blur_rtv_hq)
+            {
+               // SRV 0-3 are last 4 mip levels of bloom, descending order (0 is largest, 3 is smallest)
+               const std::array<ID3D11ShaderResourceView*, 4> bloom_srvs = { Resources::srv_mips_y1[Resources::nmips - 4], Resources::srv_mips_y[Resources::nmips - 3], Resources::srv_mips_y[Resources::nmips - 2], Resources::srv_mips_y[Resources::nmips - 1] };
+               native_device_context->PSSetShaderResources(0, bloom_srvs.size(), bloom_srvs.data());
+            }
+
             // set RTV0 as our buffer
-            native_device_context->OMSetRenderTargets(1, &Resources::rtv_mip0, nullptr);
+            native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[0], nullptr);
 
             // set our combine shader
             native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Bloom_Combine_PS)).get(), nullptr, 0);
             
             // viewport to size of mip0
-            D3D11_VIEWPORT viewport;
-            viewport.TopLeftX = 0;
-            viewport.TopLeftY = 0;
-            viewport.Width = Resources::size_down0.x;
-            viewport.Height = Resources::size_down0.y;
-            viewport.MinDepth = 0;
-            viewport.MaxDepth = 1;
-            native_device_context->RSSetViewports(1, &viewport);
-
+            D3D11_VIEWPORT viewport_mip0 = Resources::rtv_mips_y_viewports[0];
+            native_device_context->RSSetViewports(1, &viewport_mip0);
+            
             state = Tonemap;
             break;
          }
@@ -2729,13 +2810,14 @@ namespace Bloom
       if (state != Tonemap) return;
 
       // set SRV1 as out new bloom output
-      native_device_context->PSSetShaderResources(1, 1, &Resources::srv_mip0);
+      native_device_context->PSSetShaderResources(1, 1, &Resources::srv_mips_y1[0]);
       
       state = Done;
    }
 
    void OnInit()
    {
+      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Downsample1_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_downsample1_ps"));
       native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Combine_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_combine_ps"));
       native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_blur0_ps"));
       native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_VS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "bloom_blur0_vs"));
@@ -2748,13 +2830,14 @@ namespace Bloom
 
    void HardReset()
    {
-      Resources::Reset();
+      Resources::HardReset();
    }
 
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
       reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
       reshade::get_config_value(runtime, NAME, reshadesave_sigma, sigma);
+      reshade::get_config_value(runtime, NAME, reshadesave_sigma_increase, sigma_increase);
    }
 }
 
@@ -3623,6 +3706,11 @@ public:
       default_luma_global_game_settings.XeGTAOFinalPower = cb_luma_global_settings.GameSettings.XeGTAOFinalPower = 1.f;
       
       default_luma_global_game_settings.SSSRadius = cb_luma_global_settings.GameSettings.SSSRadius = 1.f;
+
+#if DEVELOPMENT
+      // debug_draw_options edit
+      debug_draw_options = debug_draw_options & ~(uint)DebugDrawTextureOptionsMask::Tonemap;
+#endif
    }
    
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -4108,7 +4196,7 @@ public:
          std::string test_peak_label_hdt_stops_plural = stops > 1.f ? "s" : "";
          std::string test_peak_label = std::format("Test Display Peak Brightness (HDR Stop{}: +{:.2f})", test_peak_label_hdt_stops_plural, stops);
          
-         if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles within a bigger one.\n\nTo calibrate to display maximum, set to:\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nOtherwise, just don't let Middle fully disappear/clip!");
+         if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, test_peak_label.c_str(), "3 rectangles within a bigger one.\n\nTo find display maximum, set to:\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nOtherwise, just don't let Middle fully disappear/clip!");
          else ShaderDefineInfo::Set(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, 0); //force off in SDR
       }
       
@@ -4123,15 +4211,16 @@ public:
          
          DrawColoredSubHeader("README");
 
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For those new to Dear ImGUI (library for ReShade UI), CTRL click a slider for keyboard input.");
+         
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) This mod is most consistent and faithful at +1 HDR Stop (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.)."
-                                                                "\nFor many PVs, going higher looks exceptional! But for many others, intentional blowout & white clip will be lost."
-                                                                "\nIn other words, deliberate filmic techniques are ruined as tonemapping algorithms become strained when greater than +1 HDR Stop.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) This mod is tuned for a faithful at +1 HDR Stop (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.)."
+                                                                "\nFor some PVs, going higher looks exceptional! But for many others, intentional blowout & white clip will be lost."
+                                                                "\nIn other words, deliberate camera/filmic emulation is ruined as tonemapping algorithms become strained when greater than +1 HDR Stop.");
          ImGui::PopStyleColor();
          
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) UI elems of PV (e.g. lens flare) can be drawn after HDR tonemap, affected by UI Brightness slider.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) Toon shading (Non-Physical Rendering) is clamped to SDR unless changed otherwise.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For those new to ImGUI, CTRL click a slider for keyboard input.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) Toon shading (Non-Physical Rendering) is clamped to SDR (+0 Stops) unless changed otherwise (for the worst tbh).");
 
          // ImGui::NewLine(); //////
          //
@@ -4170,16 +4259,18 @@ public:
                reshade::set_config_value(runtime, NAME, "IsGammaCorrectionSyncPaperWhite", GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite);
                if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite = cb_luma_global_settings.ScenePaperWhite;
             }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Encodes weaker sRGB and decodes stronger 2.2, lowering shadows like SDR.");
             
             //paper white
-            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::BeginDisabled();
+            // if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::BeginDisabled();
+            if (!GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite)
             {
                if (ImGui::SliderFloat("EOTF / Gamma Correction 2.2", &cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 0.f, 500.f, "%.0f"))
                   reshade::set_config_value(runtime, NAME, "GammaCorrection22PaperWhite", cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite);
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Encodes weaker sRGB and decodes stronger 2.2, lowering shadows like SDR.\nThis is the threshold, so values only needed/lower are affected.");
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("This is the threshold, so values only needed/lower are affected.");
                DrawResetButton(cb_luma_global_settings.GameSettings.GammaCorrection22PaperWhite, 203.f, "GammaCorrection22PaperWhite", runtime);
             }
-            if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::EndDisabled();
+            // if (GlobalsMegaMix::IsGammaCorrectionSyncPaperWhite) ImGui::EndDisabled();
             
             //link test
             if (ImGui::Button("Further Explanation (Google Slides)"))
@@ -4327,6 +4418,7 @@ public:
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though nowhere near the cost of generic ReShade FX solutions, this is not free.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("There are slight errors (e.g. occlusion in fog & sky). I might account per PV if it's too noticeable.");
          ImGui::PopStyleColor();
          
          if (ImGui::Checkbox("Enabled", &XeGTAO::enabled))
@@ -4459,6 +4551,12 @@ public:
                ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("%d. %dx%d", i, item->size.x, item->size.y);
             }
          }
+
+#if DEVELOPMENT
+         ImGui::NewLine();
+         DrawColoredSubHeader("DEVELOPMENT");
+         if (ImGui::Button("Preview Toggle")) PreviewShaderOutput(device_data, 0x54415551);
+#endif
       }
       ImGui::PopID();
 
@@ -4467,69 +4565,102 @@ public:
       ImGui::PushID("###Bloom");
       if (DrawCollapsingHeaderEnabledColored("Bloom", Bloom::enabled))
       {
-         DrawColoredSubHeader("Bloom Alternative High Quality Blurring");
+         DrawColoredSubHeader("Alternative High Quality Blurring");
 
          if (ImGui::Checkbox("Enable", &Bloom::enabled))
          {
             reshade::set_config_value(runtime, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
             if (!Bloom::enabled) Bloom::HardReset();
          }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blur to downsample with a unbroken chain of mipmaps."
-                                                                                          "\nThere's slight inefficiency decoupling from Auto-Exposure downsampling."
-                                                                                          "\nThis will not look 100%% the same to vanilla due to the new blur weights.");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blurring to downsample with a unbroken chain of mipmaps."
+                                                                                          "\nThough impossible to be 100%% direct vanilla upgrades due to new weights, it's tuned to be extremely respectful."
+                                                                                          "\n"
+                                                                                          "\n(There's slight inefficiency decoupling from Auto-Exposure downsampling.)");
 
-         if (!Bloom::enabled) ImGui::BeginDisabled();
+         if (GlobalsMegaMix::UIIsAdvanced)
          {
-            if (ImGui::SliderFloat("Gaussian Sigma", &Bloom::sigma, 0.1f, 2.f))
-               reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur, where higher = more blur."
-                                                                                             "\nIncreasing will suppresses tiny highlights that cause bloom flickering,"
-                                                                                             "\nbut also cost a bit of performance as texture sampling count increases.");
-            DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
+            if (!Bloom::enabled) ImGui::BeginDisabled();
+            {
+               if (ImGui::SliderFloat("Gaussian Sigma", &Bloom::sigma, 0.1f, 2.f))
+                  reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur, where higher = more blur radius."
+                                                                                                "\nIncreasing will suppress tiny highlights that cause bloom flickering,"
+                                                                                                "\nbut also cost a bit of performance as texture sampling count increases.");
+               DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
 
-            if (ImGui::SliderFloat("Gaussian Sigma Increase", &Bloom::sigma_increase, 0.f, 1.f))
-               reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma_increase, Bloom::sigma_increase);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Additional sigma increase per deeper mipmap level.");
-            DrawResetButton(Bloom::sigma_increase, Bloom::sigma_increase_def, Bloom::reshadesave_sigma_increase, runtime);
+               if (ImGui::SliderFloat("Gaussian Sigma Increase", &Bloom::sigma_increase, 0.f, 1.f))
+                  reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma_increase, Bloom::sigma_increase);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Additional sigma (blur radius) increase per deeper mipmap level.");
+               DrawResetButton(Bloom::sigma_increase, Bloom::sigma_increase_def, Bloom::reshadesave_sigma_increase, runtime);
+            }
+            if (!Bloom::enabled) ImGui::EndDisabled();
          }
-         if (!Bloom::enabled) ImGui::EndDisabled();
          
-         if (Bloom::enabled && GlobalsMegaMix::UIIsAdvanced)
-         {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Mipmaps: %d", Bloom::Resources::nmips);
-            ImGui::PopStyleColor();
-         }
+         ImGui::NewLine();
+         ImGui::PushID("###BloomThreshold");
+         DrawColoredSubHeader("Threshold");
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_BLOOM_THRESHOLD, "Mode",
+            { "Vanilla (Crude)", "Slightly Neutral (Recommended)", "More Neutral (Alternative Style)" },
+            "The high pass filter for bloom. How should it operate?"
+            "\n"
+            "\nThe original is a crude per-channel subtraction, horribly shifting hues and boosting saturation."
+            "\nA prime example is \"When First Love Ends\", where red blobs of bloom ruins close ups of skin."
+            "\n"
+            "\nWe can do better by using luminance to make it more neutral."
+            "\n(Deliberate tinting still applies afterwards.)");
+         ImGui::PopID();
 
          ImGui::NewLine();
-         
-         DrawColoredSubHeader("Bloom Multipliers");
+         DrawColoredSubHeader("Multipliers");
 
-         // BloomStrengths float4
-         if (ImGui::SliderFloat("Level 0", &cb_luma_global_settings.GameSettings.BloomStrengths.x, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "BloomStrengthsX", cb_luma_global_settings.GameSettings.BloomStrengths.x);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 0 Strength: Tightest blur level/radius.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.x, default_luma_global_game_settings.BloomStrengths.x, "BloomStrengthsX", runtime);
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            if (ImGui::SliderFloat("Level 0", &cb_luma_global_settings.GameSettings.BloomStrengths.x, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsX", cb_luma_global_settings.GameSettings.BloomStrengths.x);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 0 Strength: Tightest blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.x, default_luma_global_game_settings.BloomStrengths.x, "BloomStrengthsX", runtime);
+            
+            if (ImGui::SliderFloat("Level 1", &cb_luma_global_settings.GameSettings.BloomStrengths.y, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsY", cb_luma_global_settings.GameSettings.BloomStrengths.y);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 1 Strength: Medium blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.y, default_luma_global_game_settings.BloomStrengths.y, "BloomStrengthsY", runtime);
+            
+            if (ImGui::SliderFloat("Level 2", &cb_luma_global_settings.GameSettings.BloomStrengths.z, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsZ", cb_luma_global_settings.GameSettings.BloomStrengths.z);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 2 Strength: Wide blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.z, default_luma_global_game_settings.BloomStrengths.z, "BloomStrengthsZ", runtime);
+            
+            if (ImGui::SliderFloat("Level 3", &cb_luma_global_settings.GameSettings.BloomStrengths.w, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsW", cb_luma_global_settings.GameSettings.BloomStrengths.w);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 3 Strength: Widest blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.w, default_luma_global_game_settings.BloomStrengths.w, "BloomStrengthsW", runtime);
+         }
          
-         if (ImGui::SliderFloat("Level 1", &cb_luma_global_settings.GameSettings.BloomStrengths.y, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "BloomStrengthsY", cb_luma_global_settings.GameSettings.BloomStrengths.y);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 1 Strength: Medium blur level/radius.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.y, default_luma_global_game_settings.BloomStrengths.y, "BloomStrengthsY", runtime);
-         
-         if (ImGui::SliderFloat("Level 2", &cb_luma_global_settings.GameSettings.BloomStrengths.z, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "BloomStrengthsZ", cb_luma_global_settings.GameSettings.BloomStrengths.z);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 2 Strength: Wide blur level/radius.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.z, default_luma_global_game_settings.BloomStrengths.z, "BloomStrengthsZ", runtime);
-         
-         if (ImGui::SliderFloat("Level 3", &cb_luma_global_settings.GameSettings.BloomStrengths.w, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "BloomStrengthsW", cb_luma_global_settings.GameSettings.BloomStrengths.w);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 3 Strength: Widest blur level/radius.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.w, default_luma_global_game_settings.BloomStrengths.w, "BloomStrengthsW", runtime);
-
          if (ImGui::SliderFloat("Final", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
             reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom final multiplier.");
          DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            ImGui::NewLine();
+            DrawColoredSubHeader("Auxiliary Resources");
+            
+            ImGui::TextWrapped("Mipmaps: %d", Bloom::Resources::nmips);
+            for (int i = 0; i < Bloom::Resources::rtv_mips_y_viewports.size(); i++)
+            {
+               auto vp = Bloom::Resources::rtv_mips_y_viewports[i];
+               if (vp.Width == 0) break; // reached end
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("%d. %dx%d", i, (uint)vp.Width, (uint)vp.Height);
+            }
+         }
+         
+#if DEVELOPMENT
+         ImGui::NewLine();
+         DrawColoredSubHeader("DEVELOPMENT");
+         if (ImGui::Button("Preview Toggle")) PreviewShaderOutput(device_data, 0xCD83E95E);
+         ImGui::Checkbox("is_vanilla_bloom_blur_rtv_hq", &Bloom::is_vanilla_bloom_blur_rtv_hq);
+#endif
       }
       ImGui::PopID();
 
@@ -4687,17 +4818,17 @@ public:
       {
          DrawColoredSubHeader("Regain chrominance for HDR highlights by creating bias on blowout curve through gaussian weighted sampling.");
          
-         is_disabled = !ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN, "LUT Gaussian Blur Sampling", "Sample the YCbCr LUT in charged of causing blowout with a gaussian blur,\nbiased towards higher chrominance, helping reduce steep chrominance falloff.");
+         is_disabled = !ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN, "Enabled", "Sample the YCbCr LUT in charged of causing blowout with a gaussian blur,\nbiased towards higher chrominance, helping reduce steep chrominance falloff for HDR's additional stops.");
          if (is_disabled) ImGui::BeginDisabled();
          {
-            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS, "LUT Gaussian Blur: Respond to HDR Stops", "Increases step size as HDR stops increases.");
+            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS, "Respond to HDR Stops", "Increases step size as HDR stops increases.");
             
-            if (ImGui::SliderFloat("LUT Gaussian Blur: Step", &cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, 1.f, 80.f, "%.1f"))
+            if (ImGui::SliderFloat("Step", &cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, 1.f, 80.f, "%.1f"))
                reshade::set_config_value(runtime, NAME, "LUTGaussianBlurStep", cb_luma_global_settings.GameSettings.LUTGaussianBlurStep);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The step size for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will be recover and smooth out chrominance falloff.");
             DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurStep, default_luma_global_game_settings.LUTGaussianBlurStep, "LUTGaussianBlurStep", runtime);
             
-            if (ImGui::SliderFloat("LUT Gaussian Blur: Bias", &cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, 0.f, 10.f, "%.4f"))
+            if (ImGui::SliderFloat("Bias", &cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, 0.f, 10.f, "%.4f"))
                reshade::set_config_value(runtime, NAME, "LUTGaussianBlurBias", cb_luma_global_settings.GameSettings.LUTGaussianBlurBias);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The bias for the gaussian blur when sampling the LUT for blowout reduction.\nHigher values will bias the sampling towards higher chrominance, which recovers chrominance.");
             DrawResetButton(cb_luma_global_settings.GameSettings.LUTGaussianBlurBias, default_luma_global_game_settings.LUTGaussianBlurBias, "LUTGaussianBlurBias", runtime); 
@@ -5165,4 +5296,4 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    CoreMain(hModule, ul_reason_for_call, lpReserved);
 
    return TRUE;
-}
+} 

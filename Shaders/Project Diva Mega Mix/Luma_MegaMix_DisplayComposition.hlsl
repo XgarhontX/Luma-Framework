@@ -400,6 +400,9 @@ float3 BRUHHHAll(float3 x, float2 v1)
 
 	// Rec709 correction
 	#if CUSTOM_HDTVREC709_1 == 1
+		// x = EncodeSrgb(x); // gamma correct down
+		// x = pow(x, 2.2); // gamma correct down
+
 	  x = EncodeRec709(x); // linear to Rec709
 		x = DecodeSrgb(x); // Rec709 to linear (output is sRGB)
 		// (which extracts Rec709 change / correction

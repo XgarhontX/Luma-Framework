@@ -427,6 +427,42 @@ float3 PerChannelTonemapLuminanceReductionEmulatation(float3 color_upgraded, flo
   return color_upgraded * ratio;
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+float3 BloomThreshold(float3 x, float3 threshold) {
+  float3 csum = x;
+  float3 csumBack = x;
+
+  // apply
+  csum -= threshold;
+  csum = max(0, csum);
+
+#if CUSTOM_BLOOM_THRESHOLD > 0
+  float csumY = GetLuminance(csum);
+
+  #if CUSTOM_BLOOM_THRESHOLD == 1
+    csumBack -= 0.955; // good fudge TODO: if g_color.xyz != 1.1, make dynamic
+    csumBack = max(0, SetChrominance(csumBack, 1.088)); // makeup
+  #elif CUSTOM_BLOOM_THRESHOLD == 2
+    // dumb curve
+    float anchor = 0.18;
+    csumBack *= anchor;
+    float3 upper = pow(csumBack, 2.4); // gamma decode
+    float3 lower = pow(csumBack, 3.66); // gamma decode + mimics subtraction without being too powerful
+    csumBack = lerp(lower, upper, saturate(csumBack));
+    csumBack /= anchor;
+
+    // hue shift
+    float p = 40000 / 203.f;
+    csumBack = csumBack / ((csumBack / p) + 1); // reinhard for blowout
+    csumBack = max(0, SetChrominance(csumBack, 1.055)); // makeup
+  #endif
+
+  // y correct
+  csum = csumBack * safeDivision(csumY, GetLuminance(csumBack), 0);
+#endif
+
+  return csum;
+}
+
 float4 BloomUpsample1(float2 position, Texture2D tex, SamplerState smp, float sizeScale) {
   uint2 texSize;
   tex.GetDimensions(texSize.x, texSize.y);
@@ -463,7 +499,7 @@ float4 BloomUpsample1(float2 position, Texture2D tex, SamplerState smp, float si
   // weigh along the x-direction
   return lerp(tex10, tex00, g0.x);
 }
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 float3 Tonemap_BloomSample(Texture2D<float4> t, SamplerState s, float2 uv) {
     // uint w;
     // uint h;
@@ -604,7 +640,7 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
     r1.y *= 0.995f;
 
     // debug: overshoot
-#if DEVELOPMENT
+#if TEST
     if (lutInput > 1.0f) return float3(5, 0, 0);
 #endif
   }
