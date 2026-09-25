@@ -97,7 +97,7 @@ namespace
 #if LUMA_HAS_RECIPE_PROVIDERS
    bool BindPatchedResources(ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, reshade::api::shader_stage stages, bool& updated_cbuffers)
    {
-      if ((stages & reshade::api::shader_stage::pixel) == 0 || original_shader_hashes.pixel_shaders[0] == UINT64_MAX)
+      if ((stages & reshade::api::shader_stage::pixel) == 0 || original_shader_hashes.pixel_shaders[0] == SHADER_HASH_NONE)
       {
          return false;
       }
@@ -1250,7 +1250,6 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-#if LUMA_PATCH_PROVIDERS != 0
    void OnPatchedShadersPublished(DeviceData& device_data, const std::vector<uint32_t>& published_shader_hashes) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
@@ -1274,7 +1273,6 @@ public:
       return dithering_patch_enabled.load(std::memory_order_relaxed)
          && type == reshade::api::pipeline_subobject_type::pixel_shader;
    }
-#endif
 
    static void UpdateLODBias(reshade::api::device* device)
    {

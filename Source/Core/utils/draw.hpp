@@ -363,7 +363,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
       }
       return ptr;
    };
-   auto FlagUpgradedResources = [&](auto* rv)
+   auto FlagUpgradedResources = [&](auto* rv, TraceDrawCallData::DepthStateType depth_state = TraceDrawCallData::DepthStateType::Invalid, TraceDrawCallData::DepthStateType stencil_state = TraceDrawCallData::DepthStateType::Invalid)
    {
       com_ptr<ID3D11Resource> resource;
       if (rv)
@@ -377,7 +377,6 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
          }();
 
          using ViewType = std::remove_pointer_t<decltype(rv)>;
-         // Note: depth/stencil views are ignored for now
          if constexpr (std::is_same_v<ViewType, ID3D11ShaderResourceView>)
          {
             trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
@@ -394,6 +393,25 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
             trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
             trace_draw_call_data.any_input_resources_scaled |= scaled;
             trace_draw_call_data.any_output_resources_scaled |= scaled;
+         }
+         else if constexpr (std::is_same_v<ViewType, ID3D11DepthStencilView>)
+         {
+            if (depth_state == TraceDrawCallData::DepthStateType::TestOnly ||
+                depth_state == TraceDrawCallData::DepthStateType::TestAndWrite ||
+                stencil_state == TraceDrawCallData::DepthStateType::TestOnly ||
+                stencil_state == TraceDrawCallData::DepthStateType::TestAndWrite)
+            {
+               trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
+               trace_draw_call_data.any_input_resources_scaled |= scaled;
+            }
+            if (depth_state == TraceDrawCallData::DepthStateType::WriteOnly ||
+               depth_state == TraceDrawCallData::DepthStateType::TestAndWrite ||
+               stencil_state == TraceDrawCallData::DepthStateType::WriteOnly ||
+               stencil_state == TraceDrawCallData::DepthStateType::TestAndWrite)
+            {
+               trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+               trace_draw_call_data.any_output_resources_scaled |= scaled;
+            }
          }
       }
    };
@@ -512,10 +530,14 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
             {
                trace_draw_call_data.dsv_format = dsv_desc.Format;
                ASSERT_ONCE(dsv_desc.Format != DXGI_FORMAT_UNKNOWN); // Unexpected?
+
+               FlagUpgradedResources(dsv.get(), trace_draw_call_data.depth_state, trace_draw_call_data.stencil_state);
+
                com_ptr<ID3D11Resource> ds_resource;
                dsv->GetResource(&ds_resource);
                uint4 ds_size = {};
                GetResourceInfo(ds_resource.get(), ds_size, trace_draw_call_data.ds_format, nullptr, &trace_draw_call_data.ds_hash, &trace_draw_call_data.ds_debug_name);
+
                trace_draw_call_data.ds_size.x = ds_size.x;
                trace_draw_call_data.ds_size.y = ds_size.y;
             }
@@ -1080,30 +1102,34 @@ bool IsBlendInverted(const T& blend_desc, UINT render_targets = 1, bool check_al
       case D3D11_BLEND_INV_SRC_ALPHA:
       case D3D11_BLEND_INV_DEST_ALPHA:
       case D3D11_BLEND_INV_SRC1_ALPHA:
+      case D3D11_BLEND_SRC_ALPHA_SAT: // This is "min(src alpha, 1 - dest alpha)", so it inverts too
          return check_alpha;
       }
       return false;
    };
 
-   for (UINT i = first_render_target; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT && i < (render_targets - first_render_target); i++)
+   for (UINT i = first_render_target; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT && i < (first_render_target + render_targets); i++)
    {
-      if (blend_desc.RenderTarget[i].BlendEnable)
+      // Without independent blending, render target 0 describes all of them (so "first_render_target" doesn't apply)
+      const auto& render_target_blend_desc = blend_desc.RenderTarget[blend_desc.IndependentBlendEnable ? i : 0];
+
+      if (render_target_blend_desc.BlendEnable)
       {
-         if (blend_desc.RenderTarget[i].BlendOp == D3D11_BLEND_OP_SUBTRACT || blend_desc.RenderTarget[i].BlendOp == D3D11_BLEND_OP_REV_SUBTRACT)
+         if (render_target_blend_desc.BlendOp == D3D11_BLEND_OP_SUBTRACT || render_target_blend_desc.BlendOp == D3D11_BLEND_OP_REV_SUBTRACT)
          {
             return true;
          }
-         if (IsBlendInverted_Internal(blend_desc.RenderTarget[i].SrcBlend, check_alpha) || IsBlendInverted_Internal(blend_desc.RenderTarget[i].DestBlend, check_alpha))
+         if (IsBlendInverted_Internal(render_target_blend_desc.SrcBlend, check_alpha) || IsBlendInverted_Internal(render_target_blend_desc.DestBlend, check_alpha))
          {
             return true;
          }
          if (check_alpha)
          {
-            if (blend_desc.RenderTarget[i].BlendOpAlpha == D3D11_BLEND_OP_SUBTRACT || blend_desc.RenderTarget[i].BlendOpAlpha == D3D11_BLEND_OP_REV_SUBTRACT)
+            if (render_target_blend_desc.BlendOpAlpha == D3D11_BLEND_OP_SUBTRACT || render_target_blend_desc.BlendOpAlpha == D3D11_BLEND_OP_REV_SUBTRACT)
             {
                return true;
             }
-            if (IsBlendInverted_Internal(blend_desc.RenderTarget[i].SrcBlendAlpha, check_alpha) || IsBlendInverted_Internal(blend_desc.RenderTarget[i].DestBlendAlpha, check_alpha))
+            if (IsBlendInverted_Internal(render_target_blend_desc.SrcBlendAlpha, check_alpha) || IsBlendInverted_Internal(render_target_blend_desc.DestBlendAlpha, check_alpha))
             {
                return true;
             }

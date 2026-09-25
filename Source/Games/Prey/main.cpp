@@ -1,8 +1,6 @@
 // TODO: rename mod to "Prey (2017)" if possible (VS project, shaders and code folder, define, mod name in c++ etc)
 #define GAME_PREY 1
 
-#define ENABLE_NVAPI 0
-
 #include "..\..\Core\core.hpp"
 
 #define ENABLE_NATIVE_PLUGIN 1
@@ -137,22 +135,22 @@ namespace
    CBPerViewGlobal cb_per_view_global = { };
    CBPerViewGlobal cb_per_view_global_previous = cb_per_view_global;
 
-   ShaderHashesList shader_hashes_TiledShadingTiledDeferredShading;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Compute> shader_hashes_TiledShadingTiledDeferredShading;
    uint32_t shader_hash_DeferredShadingSSRRaytrace;
    uint32_t shader_hash_DeferredShadingSSReflectionComp;
    uint32_t shader_hash_PostEffectsGaussBlurBilinear;
    uint32_t shader_hash_PostEffectsTextureToTextureResampled;
-   ShaderHashesList shader_hashes_MotionBlur;
-   ShaderHashesList shader_hashes_HDRPostProcessHDRFinalScene;
-   ShaderHashesList shader_hashes_HDRPostProcessHDRFinalScene_Sunshafts;
-   ShaderHashesList shader_hashes_SMAA_EdgeDetection;
-   ShaderHashesList shader_hashes_PostAA;
-   ShaderHashesList shader_hashes_PostAA_TAA;
-   ShaderHashesList shader_hashes_PostAAComposites;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_MotionBlur;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_HDRPostProcessHDRFinalScene;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_HDRPostProcessHDRFinalScene_Sunshafts;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_SMAA_EdgeDetection;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_PostAA;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_PostAA_TAA;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_PostAAComposites;
    uint32_t shader_hash_PostAAUpscaleImage;
-   ShaderHashesList shader_hashes_LensOptics;
-   ShaderHashesList shader_hashes_DirOccPass;
-   ShaderHashesList shader_hashes_SSDO_Blur;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_LensOptics;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_DirOccPass;
+   ShaderHashesList<ShaderHashesCount::Multiple, ShaderHashesStages::Graphics> shader_hashes_SSDO_Blur;
 
 #if DEVELOPMENT
    std::vector<std::string> cb_per_view_globals_last_drawn_shader; // Not exactly thread safe but it's fine...
@@ -1992,7 +1990,6 @@ public:
       if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
       {
          ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-         DeviceData& device_data = *device->get_private_data<DeviceData>();
 
          D3D11_BUFFER_DESC buffer_desc;
          buffer->GetDesc(&buffer_desc);
@@ -2003,6 +2000,7 @@ public:
          // Some how these are not marked as "D3D11_BIND_CONSTANT_BUFFER", probably because it copies them over to some other buffer later?
          if (buffer_desc.ByteWidth == CBPerViewGlobal_buffer_size)
          {
+            DeviceData& device_data = *device->get_private_data<DeviceData>();
             device_data.cb_per_view_global_buffer = buffer;
             ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data);
             device_data.cb_per_view_global_buffer_map_data = *data;
@@ -2027,24 +2025,24 @@ public:
          {
 #if DEVELOPMENT && 0
             cb_per_view_globals.emplace_back(global_buffer_data);
-            cb_per_view_globals_last_drawn_shader.emplace_back(last_drawn_shader); // The shader hash could we unspecified if we didn't replace the shader
+            cb_per_view_globals_last_drawn_shader.emplace_back(last_drawn_shader != SHADER_HASH_NONE ? Shader::Hash_NumToStr(last_drawn_shader) : ""); // The shader hash could we unspecified if we didn't replace the shader
 #endif // DEVELOPMENT
 #if 1
             if (game->UpdateGlobalCB(device_data.cb_per_view_global_buffer_map_data, device))
 #else // TODO: delete
-         // The whole buffer size is theoretically "CBPerViewGlobal_buffer_size" but we actually don't have the data for the excessive (padding) bytes,
-         // they are never read by shaders on the GPU anyway.
-         char global_buffer_data[CBPerViewGlobal_buffer_size];
-         std::memcpy(&global_buffer_data[0], device_data.cb_per_view_global_buffer_map_data, CBPerViewGlobal_buffer_size);
-         if (game->UpdateGlobalCB(&global_buffer_data[0], device))
+            // The whole buffer size is theoretically "CBPerViewGlobal_buffer_size" but we actually don't have the data for the excessive (padding) bytes,
+            // they are never read by shaders on the GPU anyway.
+            char global_buffer_data[CBPerViewGlobal_buffer_size];
+            std::memcpy(&global_buffer_data[0], device_data.cb_per_view_global_buffer_map_data, CBPerViewGlobal_buffer_size);
+            if (game->UpdateGlobalCB(&global_buffer_data[0], device))
 #endif
-         {
-            // Write back the cbuffer data after we have fixed it up (we always do!)
-            std::memcpy(device_data.cb_per_view_global_buffer_map_data, &cb_per_view_global, sizeof(CBPerViewGlobal));
+            {
+               // Write back the cbuffer data after we have fixed it up (we always do!)
+               std::memcpy(device_data.cb_per_view_global_buffer_map_data, &cb_per_view_global, sizeof(CBPerViewGlobal));
 #if DEVELOPMENT
-            device_data.cb_per_view_global_buffers.emplace(buffer);
+               device_data.cb_per_view_global_buffers.emplace(buffer);
 #endif // DEVELOPMENT
-         }
+            }
          }
          device_data.cb_per_view_global_buffer_map_data = nullptr;
          device_data.cb_per_view_global_buffer = nullptr; // No need to keep this cached

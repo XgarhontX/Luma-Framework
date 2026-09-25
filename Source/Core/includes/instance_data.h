@@ -28,6 +28,16 @@
 
 // Forward declarations
 struct GameDeviceData;
+struct CommandListData;
+struct DeviceData;
+namespace
+{
+   namespace
+   {
+      // Defined in "ResourceUpgradeManager" (also aliased in "core.hpp")
+      using AutoTextureFormatUpgradeShaderHash = ResourceUpgradeManager::AutoTextureFormatUpgradeShaderHash;
+   }
+}
 
 enum class DrawOrDispatchOverrideType
 {
@@ -35,6 +45,9 @@ enum class DrawOrDispatchOverrideType
    Skip,
    Replaced,
 };
+
+// Same signature as "Game::OnDrawOrDispatch()". See "draw_callbacks_by_shader_hashes" and "dispatch_callbacks_by_shader_hashes".
+using DrawOrDispatchCallback = DrawOrDispatchOverrideType(*)(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const Shader::ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func);
 
 enum class ShaderReplaceDrawType
 {
@@ -254,12 +267,11 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    // Used when has_drawn_sr isn't available during recording, potential issue if sr fails to draw.
    bool force_scale = false;
 
-
    reshade::api::pipeline pipeline_state_original_compute_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_vertex_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_pixel_shader = reshade::api::pipeline(0);
 
-   // Patch clone handles (hash → clone pipeline). Original handle is always
+   // Patch clone handles (hash -> clone pipeline). Original handle is always
    // derivable from pipeline_state_original_*_shader (the bound pipeline).
    std::unordered_map<uint32_t, reshade::api::pipeline> patch_clone_handles;
 
@@ -269,6 +281,17 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    bool pipeline_state_has_custom_pixel_shader = false;
    bool pipeline_state_has_custom_graphics_shader = false;
    bool pipeline_state_has_custom_compute_shader = false;
+
+   // Determined by "draw_callbacks_by_shader_hashes" when binding shaders
+   DrawOrDispatchCallback draw_callback = nullptr;
+   // Determined by "dispatch_callbacks_by_shader_hashes" when binding shaders
+   DrawOrDispatchCallback dispatch_callback = nullptr;
+
+   // Pre-cached state to know if a target UI shader is bound, only relevant for the UI separation feature.
+   bool is_known_ui_shader_bound = false;
+
+   const AutoTextureFormatUpgradeShaderHash* auto_graphics_texture_format_upgrades = nullptr;
+   const AutoTextureFormatUpgradeShaderHash* auto_compute_texture_format_upgrades = nullptr;
 
    // ============================================================================
    // Patch variant API (game-facing). Per-context/per-bind state.
@@ -313,23 +336,38 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
       SetAndUpgraded,
    };
 
+   // Note: views can be silently unbound by the API in DX11 if set to a new incompatible stage (e.g. can't set an SRV resource as RTV at the same time, the last set will win),
+   // however, at worst we'll have false positives here, and we can always check for the current stage again.
    std::array<ViewState, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> ps_srvs_state = {};
    std::array<ViewState, D3D11_1_UAV_SLOT_COUNT> ps_uavs_state = {};
+   std::array<ViewState, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> ps_rtvs_state = {};
+   std::array<ViewState, 1> ps_dsvs_state = {};
    std::array<ViewState, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> cs_srvs_state = {};
    std::array<ViewState, D3D11_1_UAV_SLOT_COUNT> cs_uavs_state = {};
    bool any_upgraded_ps_srvs = false;
    bool any_upgraded_ps_uavs = false;
+   bool any_upgraded_ps_rtvs = false;
+   bool any_upgraded_ps_dsvs = false; // There's only one but we kept the name aligned
    bool any_upgraded_cs_srvs = false;
    bool any_upgraded_cs_uavs = false;
+
+   // Whether we already scaled the currently bound viewports/scissors to match scaled (indirect upgraded) render targets.
+   // Cleared whenever the game binds new ones (see "OnBindViewports()" and "OnBindScissorRects()"), so we never scale the same ones twice.
+   bool viewports_scaled = false;
+   bool scissors_scaled = false;
 
    void ResetUpgradedViews()
    {
       ps_srvs_state.fill(ViewState::NotSet);
       ps_uavs_state.fill(ViewState::NotSet);
+      ps_rtvs_state.fill(ViewState::NotSet);
+      ps_dsvs_state.fill(ViewState::NotSet);
       cs_srvs_state.fill(ViewState::NotSet);
       cs_uavs_state.fill(ViewState::NotSet);
       any_upgraded_ps_srvs = false;
       any_upgraded_ps_uavs = false;
+      any_upgraded_ps_rtvs = false;
+      any_upgraded_ps_dsvs = false;
       any_upgraded_cs_srvs = false;
       any_upgraded_cs_uavs = false;
    }
@@ -340,6 +378,14 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    void UpdateUpgradedPSUAVs()
    {
       any_upgraded_ps_uavs = std::any_of(ps_uavs_state.begin(), ps_uavs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
+   }
+   void UpdateUpgradedPSRTVs()
+   {
+      any_upgraded_ps_rtvs = std::any_of(ps_rtvs_state.begin(), ps_rtvs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
+   }
+   void UpdateUpgradedPSDSVs()
+   {
+      any_upgraded_ps_dsvs = std::any_of(ps_dsvs_state.begin(), ps_dsvs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
    }
    void UpdateUpgradedCSSRVs()
    {
@@ -496,7 +542,8 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 
    std::unordered_set<reshade::api::swapchain*> swapchains;
    std::unordered_set<uint64_t> back_buffers; // From all the swapchains (whether they are upgraded or not)
-   ID3D11Device* native_device = nullptr; // Doesn't need mutex, always valid given it's a ptr to itself
+   ID3D11Device* native_device = nullptr; // Doesn't need mutex, always valid given it's a ptr to "itself"
+   reshade::api::device* reshade_device = nullptr; // Always valid as it's our parent. Not owned by this.
    com_ptr<ID3D11DeviceContext> primary_command_list; // The immediate/primary command list is always valid
    CommandListData* primary_command_list_data = nullptr; // The immediate/primary command list is always valid
 

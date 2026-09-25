@@ -102,6 +102,9 @@
     <ClInclude Include="includes\com_ptr.h">
       <Filter>Includes</Filter>
     </ClInclude>
+    <ClInclude Include="includes\containers.h">
+      <Filter>Includes</Filter>
+    </ClInclude>
     <ClInclude Include="includes\overlay_log.h">
       <Filter>Includes</Filter>
     </ClInclude>
@@ -114,5 +117,13 @@
     <ClInclude Include="includes\patch.hpp">
       <Filter>Includes</Filter>
     </ClInclude>
+    <ClInclude Include="includes\resource_upgrades.hpp">
+      <Filter>Includes</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="includes\resource_upgrades.inl">
+      <Filter>Includes</Filter>
+    </None>
   </ItemGroup>
 </Project>

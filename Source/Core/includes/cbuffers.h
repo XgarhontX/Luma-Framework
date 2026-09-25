@@ -51,8 +51,12 @@ namespace CB
    // This is mirrored in shaders (it's described there).
    struct LumaGlobalSettings
    {
+      // The final output to the window/swapchain
       float2 SwapchainSize;
       float2 SwapchainInvSize;
+      // Usually the internal render/rasterization resolution (might not always be accurate, needs per project code)
+      float2 RenderSize;
+      float2 RenderInvSize;
       DisplayModeType DisplayMode;
       float ScenePeakWhite;
       float ScenePaperWhite;
@@ -84,8 +88,10 @@ namespace CB
 
       float2 RenderResolutionScale;
       float2 PreviousRenderResolutionScale;
-      
+
       uint RenderScaleActive;
+
+      // Make sure the game data below is aligned to 4x 32bit variables
       float3 Padding1;
 
       LumaGameData GameData; // Custom games data, with a per game struct

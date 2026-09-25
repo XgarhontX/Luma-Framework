@@ -29,6 +29,10 @@
     <ProjectName>Mass Effect Legendary Edition</ProjectName>
     <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
   </PropertyGroup>
+  <PropertyGroup>
+    <!-- Packaging defaults to off; enable via Project Properties -> Luma Properties -> Package after build. -->
+    <LumaPackage>false</LumaPackage>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
@@ -53,6 +57,13 @@
     <PlatformToolset>v145</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemGroup>
+    <!-- Luma per-game feature toggles shown in Project Properties -> Configuration
+         Properties -> Luma Properties (schema: ..\Luma.Properties.xml). -->
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)..\Luma.Properties.xml">
+      <Context>Project</Context>
+    </PropertyPageSchema>
+  </ItemGroup>
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
@@ -147,9 +158,9 @@
       </LinkLibraryDependencies>
     </ProjectReference>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_ME1_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME2_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME3_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_ME1LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME2LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME3LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3LE_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
@@ -197,9 +208,9 @@ IF DEFINED LUMA_ME3_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectN
       </LinkLibraryDependencies>
     </ProjectReference>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_ME1_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME2_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME3_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_ME1LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME2LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME3LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3LE_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
@@ -247,9 +258,9 @@ IF DEFINED LUMA_ME3_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectN
       </LinkLibraryDependencies>
     </ProjectReference>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_ME1_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME2_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME3_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_ME1LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME2LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME3LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3LE_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
@@ -297,15 +308,17 @@ IF DEFINED LUMA_ME3_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectN
       </LinkLibraryDependencies>
     </ProjectReference>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_ME1_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME2_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2_BIN_PATH%" || exit /B 0 )
-IF DEFINED LUMA_ME3_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_ME1LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME1LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME2LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME2LE_BIN_PATH%" || exit /B 0 )
+IF DEFINED LUMA_ME3LE_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_ME3LE_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\Core\unity_build.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
+  <!-- Apply feature settings after the final per-configuration properties. -->
+  <Import Project="..\Luma.DXP.props" Condition="Exists('..\Luma.DXP.props')" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
