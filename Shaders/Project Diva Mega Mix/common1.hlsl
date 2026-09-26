@@ -519,7 +519,7 @@ float3 Tonemap_BloomSample(Texture2D<float4> t, SamplerState s, float2 uv) {
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 float3 Tonemap_SaveSprites_UpgradeSpritesOnly(float3 sprites) {
-  #if CUSTOM_TESTSDR == 1
+#if CUSTOM_TESTSDR == 1 || CUSTOM_UPSCALE_BGSPRITES == 0
     return saturate(sprites);
     // return max(0, sprites);
   #endif
