@@ -524,7 +524,6 @@ void XeGTAO_ComputeViewspaceNormal(const uint2 pixCoord, const GTAOConstants con
 ///////////////////////
 
 // Smooths viewspace normal using its neighbors.
-// TODO: modded from AI fart, there must be better algorithm? but is it also faster?
 void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants consts)
 {
     Texture2D sourceViewspaceDepth32 = t0;
@@ -555,8 +554,8 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
         return;
     }
 
-    // stepUV
-    const float normalSmoothViewRadius = (EFFECT_RADIUS + (centerZ * EFFECT_RADIUS_DISTANCE_SCALE)) * RADIUS_MULTIPLIER * NORMAL_SMOOTH_SCALE; // TODO: dont copy main pass?
+    // stepUV (close = wider)
+    const float normalSmoothViewRadius = (EFFECT_RADIUS + (centerZ * EFFECT_RADIUS_DISTANCE_SCALE)) * RADIUS_MULTIPLIER * NORMAL_SMOOTH_SCALE; // TODO: dont copy main pass / use diff coeffs?
     const float2 viewspacePixelSizeAtDepth = centerZ * abs(consts.NDCToViewMul);
     const float2 stepUV = normalSmoothViewRadius * rcp(max(viewspacePixelSizeAtDepth, 1e-6));
 #if XE_GTAO_NORMALSMOOTH_2ND
@@ -584,7 +583,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
         const float4 depthWeights = saturate(depthDiff + 1.0);
 
         // normal-similarity term catches silhouettes/corners where depth stays smooth but the normal doesn't (plain depth bilateral would miss these)
-        float4 normalWeights = saturate(float4(dot(centerNormal, leftN), dot(centerNormal, rightN), dot(centerNormal, topN), dot(centerNormal, bottomN)));
+        float4 normalWeights = saturate(float4(dot(centerNormal, leftN), dot(centerNormal, rightN), dot(centerNormal, topN), dot(centerNormal, bottomN))); // TODO: weights is from AI fart. is there better?
         normalWeights *= normalWeights;
 
         const float4 weights = depthWeights * normalWeights;
@@ -594,38 +593,6 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
 
         smoothedNormal = normalize(normalSum * rcp(weightSum));
     }
-
-#if XEGTAO_NORMALSMOOTH_QUALITY == 2 //TODO: this doesnt do crap
-    stepUV *= 0.66; 
-    { 
-        const float leftZ   = sourceViewspaceDepth16.SampleLevel(depthSampler, sampleUV + float2(-1,  0) * stepUVScaled, DEPTH_MIP_SAMPLING_NORMALSSMOOTH).x;
-        const float rightZ  = sourceViewspaceDepth16.SampleLevel(depthSampler, sampleUV + float2( 1,  0) * stepUVScaled, DEPTH_MIP_SAMPLING_NORMALSSMOOTH).x;
-        const float topZ    = sourceViewspaceDepth16.SampleLevel(depthSampler, sampleUV + float2( 0, -1) * stepUVScaled, DEPTH_MIP_SAMPLING_NORMALSSMOOTH).x;
-        const float bottomZ = sourceViewspaceDepth16.SampleLevel(depthSampler, sampleUV + float2( 0,  1) * stepUVScaled, DEPTH_MIP_SAMPLING_NORMALSSMOOTH).x;
-
-        const float3 leftN   = NormalsDenormalize(sourceViewspaceNormal.SampleLevel(normalSampler, sampleUV + float2(-1,  0) * stepUVScaled, 0).xyz);
-        const float3 rightN  = NormalsDenormalize(sourceViewspaceNormal.SampleLevel(normalSampler, sampleUV + float2( 1,  0) * stepUVScaled, 0).xyz);
-        const float3 topN    = NormalsDenormalize(sourceViewspaceNormal.SampleLevel(normalSampler, sampleUV + float2( 0, -1) * stepUVScaled, 0).xyz);
-        const float3 bottomN = NormalsDenormalize(sourceViewspaceNormal.SampleLevel(normalSampler, sampleUV + float2( 0,  1) * stepUVScaled, 0).xyz);
-
-        const float4 depthDiff = abs(float4(leftZ, rightZ, topZ, bottomZ) - centerZ);
-        const float4 depthWeights = saturate(depthDiff + 1.0);
-
-        // normal-similarity term catches silhouettes/corners where depth stays smooth but the normal doesn't (plain depth bilateral would miss these)
-        float4 normalWeights = saturate(float4(dot(centerNormal, leftN), dot(centerNormal, rightN), dot(centerNormal, topN), dot(centerNormal, bottomN)));
-        normalWeights *= normalWeights;
-
-        const float4 weights = depthWeights * normalWeights;
-
-        float3 normalSum = centerNormal + leftN * weights.x + rightN * weights.y + topN * weights.z + bottomN * weights.w;
-        float weightSum = 1.0 + dot(weights, 1.0.xxxx);
-
-        float3 smoothedNormal1 = normalize(normalSum * rcp(weightSum));   
-
-        // blend with 1st
-        smoothedNormal = normalize(smoothedNormal + smoothedNormal1);
-    }
-#endif
 
     outputNormal[pixCoord] = float4(NormalsNormalize(smoothedNormal), viewspaceNormal4.w);
     // outputNormal[pixCoord] = NormalsNormalize(smoothedNormal);  
@@ -676,7 +643,7 @@ void XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, const GTAOConstants co
     // outWorkingAOTermAndEdges[pixCoord] = float2(viewspaceNormal.x * 0.5 + 0.5, 1); return;
 
 #if 1
-    // depth Gather
+    // depth Gather //TODO: why does this become offset from prev passes?!?!?! if not, we can skip 2 Gathers
     float4 valuesUL   = sourceViewspaceDepth16.GatherRed(depthSampler, sampleUV            );
     float4 valuesBR   = sourceViewspaceDepth16.GatherRed(depthSampler, sampleUV, int2(1, 1));
     float viewspaceZ  = valuesUL.y;

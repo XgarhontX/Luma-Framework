@@ -400,15 +400,19 @@ float3 BRUHHHAll(float3 x, float2 v1)
 
 	// Rec709 correction
 	#if CUSTOM_HDTVREC709_1 == 1
-		// x = EncodeSrgb(x); // gamma correct down
-		// x = pow(x, 2.2); // gamma correct down
+    // x = EncodeSrgb(x); // gamma correct down
+    // x = pow(x, 2.2); // gamma correct down
 
-	  x = EncodeRec709(x); // linear to Rec709
-		x = DecodeSrgb(x); // Rec709 to linear (output is sRGB)
-		// (which extracts Rec709 change / correction
+    // x = pow(x, 1 / 2.2); // gamma correct up
+    // x = DecodeSrgb(x); // gamma correct up
+
+    x = EncodeRec709(x); // linear to Rec709
+
+    x = DecodeSrgb(x); // Rec709 to linear
+    // x = pow(x, 2.2); // Rec709 to linear
 	#endif
 
-  //Gamma Correction & Mode / Fake BT2020 / Saturation (bruh moment)
+  // Gamma Correction & Mode / Fake BT2020 / Saturation (bruh moment)
   const float3 xBack = UCSTo(x, CS_BT709);
   const float gcScale = GamePaperWhiteNits / GS.GammaCorrection22PaperWhite;
   #if CUSTOM_GAMMACORRECT22 == 0 && CUSTOM_FAKEBT2020 == 0
@@ -450,8 +454,6 @@ float3 BRUHHHAll(float3 x, float2 v1)
 
     x /= gcScale;
   #elif CUSTOM_GAMMACORRECT22 == 0 && CUSTOM_FAKEBT2020 == 1
-    // x *= gcScale;
-
     float3 x709 = x;
     float3 x2020 = x;
 
@@ -469,8 +471,6 @@ float3 BRUHHHAll(float3 x, float2 v1)
       x.yz *= GS.CGSaturation;
     #endif
     x = UCSFrom(x, CS_BT2020);
-
-    // x /= gcScale;
   #elif CUSTOM_GAMMACORRECT22 == 1 && CUSTOM_FAKEBT2020 == 1
     x *= gcScale;
 
@@ -584,16 +584,6 @@ float4 main(float4 pos : SV_Position) : SV_Target0
 
 	// BRUHHHAll
 	color.xyz = BRUHHHAll(color.xyz, uv);
-
-#if SWAPCHAIN_SKIPALL > 0
-    return color;
-#endif
-
-	//rec709 decode, doing 0x8324B585
-  #if CUSTOM_HDTVREC709 > 0
-    color.rgb = gamma_sRGB_to_linear(color.rgb, GCT_MIRROR);
-  	color.rgb = sign(color.rgb) * EncodeRec709(abs(color.rgb));
-  #endif
 
 	// This case means the game currently doesn't have Luma custom shaders built in (fallback in case of problems), or has manually unloaded them, so the value of some macro defines do not matter
 	const bool modActive = LumaData.CustomData1 == 0;

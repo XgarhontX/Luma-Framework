@@ -391,21 +391,7 @@ float3 ClampByMaxChannel(float3 x, float peak) {
   return x;
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-// Emulate luminance loss/clipping from LDR per-channel tonemap on high single channel colors.
-//
-// Takes in raw/no-blowout linear color, do per-channel tonemap, then do inverse luminance tonemap.
-// That gives a luminance ratio to reduce HDR luminance upgraded color (i.e. from UpgradeToneMap()).
-// This means single channel highlights must try harder to be bright.
-//
-// color_upgraded: Luminance upgraded Color to apply emulation.
-// color_untonemapped: Color WITHOUT per-channel blowout.
-// peak: The peak of the LDR tonemap curve. (Prob best 1.0 - 1.5)
-// makeup: Simple multiplier after inverse luminance to compensate reduction. (prob best around 1.3)
-// strength: Global strength of the effect. (prob best 0.25 - 0.35)
-// cs: Color space for luminance.
-// return: color_upgraded adjusted by the emulated luminance reduction.
-float3 PerChannelTonemapLuminanceReductionEmulatation(float3 color_upgraded, float3 color_untonemapped, float peak = 1.0f, float makeup = 1.35f, float strength = 0.25f, uint cs = CS_BT709) {
+float3 PerChannelTonemapLuminanceReductionEmulation(float3 color_upgraded, float3 color_untonemapped, float peak = 1.0f, float makeup = 1.35f, float strength = 0.25f, uint cs = CS_BT709) {
   //compress perchannel
   color_untonemapped = NeuTwo::PerChannel(color_untonemapped, peak);
 
@@ -443,16 +429,17 @@ float3 BloomThreshold(float3 x, float3 threshold) {
     csumBack = max(0, SetChrominance(csumBack, 1.088)); // makeup
   #elif CUSTOM_BLOOM_THRESHOLD == 2
     // dumb curve
-    float anchor = 0.18;
-    csumBack *= anchor;
-    float3 upper = pow(csumBack, 2.4); // gamma decode
-    float3 lower = pow(csumBack, 3.66); // gamma decode + mimics subtraction without being too powerful
-    csumBack = lerp(lower, upper, saturate(csumBack));
-    csumBack /= anchor;
+    // float anchor = 0.18;
+    // csumBack *= anchor;
+    // float3 upper = pow(csumBack, 2.4);
+    // float3 lower = pow(csumBack, 3.66);
+    // csumBack = lerp(lower, upper, saturate(csumBack));
+    // csumBack /= anchor;
+    csumBack = pow(csumBack, 2.4);
 
     // hue shift
     float p = 40000 / 203.f;
-    csumBack = csumBack / ((csumBack / p) + 1); // reinhard for blowout
+    csumBack = csumBack / ((csumBack / p) + 1); // reinhard for hue shift
     csumBack = max(0, SetChrominance(csumBack, 1.055)); // makeup
   #endif
 
@@ -597,7 +584,7 @@ static struct ExposureBracket {
 // }
 
 Texture2D<float> g_textures_lut_biased : register(t11); // orig uses up to 7 + optional 10 (depth)
-float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool isExtend = true) {
+float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool isExtend = true) { // TODO: del isExtend
   /*
     r0.y = dot(r0.xyz, float3(0.300000012,0.589999974,0.109999999));
     r0.xz = r0.xz + -r0.yy;
@@ -625,7 +612,7 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
   float3 colorTBak = r0.xyz;
 
   r0.y = dot(r0.xyz, float3(0.300000012, 0.589999974, 0.109999999)); //Y'CbCr (partial, close to BT601 coeffs)
-  r0.xz = r0.xz + -r0.y; //UV
+  r0.xz = r0.xz + -r0.y; // UV
   r1.x = v3.y * r0.y; // exposure on Y
   float backUpY = r1.x;
 
@@ -639,7 +626,7 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
     r1.x = g_textures_lut_biased.SampleLevel(g_samplers_2__s, float2(lutInput, 0), 0).x;
     r1.y *= 0.995f;
 
-    // debug: overshoot
+    // debug: overshoot (but at this point, it should blow out white anyway)
 #if TEST
     if (lutInput > 1.0f) return float3(5, 0, 0);
 #endif
@@ -649,8 +636,6 @@ float3 Tonemap_Complex(float3 colorT, float4 v3, bool isLookBack = true, bool is
     Maybe Neutral LUT https://www.desmos.com/calculator/u3bhz0bn62
     r1.x = Saturation (Rolls off to 0 way before 1)
     r1.y = SDR Tonemapped Luma (Rolls off to 1 as it approaches 1)
-    r1.x *= DVS2;
-    r1.y *= DVS3;
   */
   r1.xy = g_textures_2_.SampleLevel(g_samplers_2__s, float2(r1.x, 0), 0).yx; // dumb decomp swizzle!
 
@@ -828,8 +813,8 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
       //backup
       float3 color_scaled_bak = color_scaled;
 
-      // TODO: it blows since luminance is gamma curved & orig perchannel is saturate().
-      // it's hard to do tonemapping without ruining hue instanly and too much PerChannelTonemapLuminanceReduction will make white too OP.
+      // TODO: it blows since luminance is gamma encoded & orig perchannel is saturate().
+      // hard to do hue shift without ruining instantly and too much PerChannelTonemapLuminanceReduction will make white too OP.
 
       //Per Channel Blowout (gradual)
       {
@@ -887,9 +872,9 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
         #endif
       }
 
-      //perchannel luminance reduction
+      // PerChannelTonemapLuminanceReductionEmulation
       #if CUSTOM_PERCHANNELLUMAEMULATE > 0
-        color_scaled = PerChannelTonemapLuminanceReductionEmulatation(
+        color_scaled = PerChannelTonemapLuminanceReductionEmulation(
           color_scaled, color_scaled_bak, 
           1, 
           1.35, 
