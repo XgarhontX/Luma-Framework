@@ -8394,7 +8394,7 @@ namespace
             {
                desc.type = resource_desc.texture.samples <= 1 ? (resource_desc.texture.depth_or_layers <= 1 ? reshade::api::resource_view_type::texture_2d : ((resource_desc.flags & reshade::api::resource_flags::cube_compatible) != 0 ? (resource_desc.texture.depth_or_layers == 6 ? reshade::api::resource_view_type::texture_cube : reshade::api::resource_view_type::texture_cube_array) : reshade::api::resource_view_type::texture_2d_array)) : (resource_desc.texture.depth_or_layers <= 1 ? reshade::api::resource_view_type::texture_2d_multisample : reshade::api::resource_view_type::texture_2d_multisample_array);
             }
-            desc.texture.levels = 1; // "Deus Ex: Human Revolution - Director's Cut" sets this to 0 (at least when we upgrade the swapchain texture), it might be fine, but the DX11 docs only talk about setting it to -1 to use all levels (which are always 1 for swapchain textures anyway)
+            desc.texture.level_count = 1; // "Deus Ex: Human Revolution - Director's Cut" sets this to 0 (at least when we upgrade the swapchain texture), it might be fine, but the DX11 docs only talk about setting it to -1 to use all levels (which are always 1 for swapchain textures anyway)
             // Redirect typeless formats (not even sure they are supported, but it won't hurt to check)
             switch (resource_desc.texture.format)
             {
@@ -8484,9 +8484,9 @@ namespace
                   desc.type = resource_desc.texture.samples <= 1 ? (resource_desc.texture.depth_or_layers <= 1 ? reshade::api::resource_view_type::texture_2d : ((resource_desc.flags & reshade::api::resource_flags::cube_compatible) != 0 ? (resource_desc.texture.depth_or_layers == 6 ? reshade::api::resource_view_type::texture_cube : reshade::api::resource_view_type::texture_cube_array) : reshade::api::resource_view_type::texture_2d_array)) : (resource_desc.texture.depth_or_layers <= 1 ? reshade::api::resource_view_type::texture_2d_multisample : reshade::api::resource_view_type::texture_2d_multisample_array); // We need to set it in case it was "reshade::api::resource_view_type::unknown", otherwise the format would also need to be unknown
                }
                desc.texture.first_level = 0;
-               desc.texture.levels = -1; // All levels (e.g. Dishonored 2 sets this to invalid values if the resource format was upgraded)
+               desc.texture.level_count = -1; // All levels (e.g. Dishonored 2 sets this to invalid values if the resource format was upgraded)
                desc.texture.first_layer = 0;
-               desc.texture.layers = resource_desc.texture.depth_or_layers;
+               desc.texture.layer_count = resource_desc.texture.depth_or_layers;
             }
 
             desc.format = GetBestResourceViewUpgradeFormat(desc, usage_type, resource_desc, resource_desc);
