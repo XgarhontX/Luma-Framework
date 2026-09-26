@@ -26,6 +26,7 @@ namespace CB
 		row_major float4x4 CurrentProjectionInverseMatrix;
 		row_major float4x4 CurrentViewProjectionInverseMatrix;
         row_major float4x4 PreviousViewProjectionMatrix;
+		row_major float4x4 ReprojectionMatrix;
 	};
 }
 

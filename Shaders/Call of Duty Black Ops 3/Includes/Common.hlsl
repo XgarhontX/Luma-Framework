@@ -1,4 +1,5 @@
-// Always include this instead of the global "Common.hlsl" if you made any changes to the game shaders/cbuffers
+#ifndef __COMMON_HLSLI__
+#define __COMMON_HLSLI__
 
 #include "GameCBuffers.hlsl"
 #include "../../Includes/Common.hlsl"
@@ -37,7 +38,7 @@
   #define CUSTOM_CHROMABER 1
   #define CUSTOM_MB_QUALITY 0
   #define CUSTOM_BLACKFLOOR_LUT 0
-  #define CUSTOM_PERCHANNELLUMAEMULATE 1
+  #define CUSTOM_PERCHANNELLUMAEMULATE 0
   #define CUSTOM_SDRTONEMAP 0
   #define CUSTOM_SR 0
   #define CUSTOM_SDR 0
@@ -52,3 +53,5 @@
   #undef CUSTOM_LUTBUILDER_COLORSPACE
   #define CUSTOM_LUTBUILDER_COLORSPACE 0
 #endif
+
+#endif // __COMMON_HLSLI__

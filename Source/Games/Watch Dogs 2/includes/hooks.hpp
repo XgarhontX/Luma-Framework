@@ -46,14 +46,14 @@ struct CIndirectTexture {
 };
 
 struct CCameraMatrices {
-   Math::Matrix44F m_viewMatrix; // 0x0  (size 0x40)
-   Math::Matrix44F m_viewMatrixInverse; // 0x40  (size 0x40)
-   Math::Matrix44F m_viewMatrixPure; // 0x80  (size 0x40)
-   Math::Matrix44F m_projectionMatrix; // 0xC0  (size 0x40)
-   Math::Matrix44F m_projectionMatrixPure; // 0x100  (size 0x40)
-   Math::Matrix44F m_projectionMatrixInverse; // 0x140  (size 0x40)
-   Math::Matrix44F m_viewProjectionMatrix; // 0x180  (size 0x40)
-   Math::Matrix44F m_viewProjectionMatrixInverse; // 0x1C0  (size 0x40)
+   DirectX::XMMATRIX m_viewMatrix; // 0x0  (size 0x40)
+   DirectX::XMMATRIX m_viewMatrixInverse; // 0x40  (size 0x40)
+   DirectX::XMMATRIX m_viewMatrixPure; // 0x80  (size 0x40)
+   DirectX::XMMATRIX m_projectionMatrix; // 0xC0  (size 0x40)
+   DirectX::XMMATRIX m_projectionMatrixPure; // 0x100  (size 0x40)
+   DirectX::XMMATRIX m_projectionMatrixInverse; // 0x140  (size 0x40)
+   DirectX::XMMATRIX m_viewProjectionMatrix; // 0x180  (size 0x40)
+   DirectX::XMMATRIX m_viewProjectionMatrixInverse; // 0x1C0  (size 0x40)
 };
 
 struct CCamera
@@ -111,6 +111,7 @@ struct CSceneViewportPrivateData
    unsigned int m_renderOnceFrameCount;
    unsigned int m_renderOnceMaxNumFrames;
    unsigned int m_renderCounter;
+   /*
    uint8_t unknown_field1[0x2C];
    CTexture* unknown_texture;
    uint8_t unknown_field2[0x20];
@@ -118,6 +119,7 @@ struct CSceneViewportPrivateData
    uint8_t unknown_field3[0x4];
    unsigned int m_TextureCount;
    CTexture* more_textures[10];
+   */
 };
 
 struct CShaderParameterMatrix44
@@ -142,7 +144,7 @@ struct CViewportShaderParameterProvider
 
 struct CDeferredFxRendererContextTextures
 {
-   CIndirectTexture* m_accumBuffer; // 0x0  (size 0x8)
+   CIndirectTexture* m_currFrameTexture; // 0x0  (size 0x8)
    CIndirectTexture* m_linearDepthTexture; // 0x8  (size 0x8)
    CIndirectTexture* m_smallDepthColorTexture; // 0x10  (size 0x8)
    CIndirectTexture* m_depthStencilSurface; // 0x18  (size 0x8)
@@ -155,9 +157,9 @@ struct CDeferredFxRendererContextTextures
 struct CDeferredFxAntialiasRendererS
 {
    uint8_t field_0[0x18]; // 0x0  (size 0x18)
-   CTexture* m_currDeferredFXAntialiasFrameTexture; // 0x18  (size 0x8)
-   bool m_useAsyncCopy; // 0x20  (size 0x1)
+   bool m_useAsyncCopy; // 0x18  (size 0x1)
    uint8_t _pad_21[0x7]; // padding
+   CIndirectTexture* m_currDeferredFXAntialiasFrameTexture; // 0x20  (size 0x8)
    uintptr_t* m_rendererHelpers; // 0x28  (size 0x8)
    uintptr_t* m_volatileTextureManager; // 0x30  (size 0x8)
    uintptr_t* m_clearTextureFrameJob; // 0x38  (size 0x8)
@@ -180,6 +182,44 @@ struct CDeferredFxAntialiasRendererS
    unsigned int m_previousResetRequests; // 0xA4  (size 0x4)
 };
 
+struct PerFrame
+{
+   float2 CurrJitters;
+   float2 PrevJitters;
+   DirectX::XMMATRIX CameraSpaceToPreviousProjectedSpace;
+   DirectX::XMMATRIX PreviousViewRotProjectionMatrix;
+   float4 PreviousCameraPosition;  // W is dummy
+   DirectX::XMMATRIX ViewRotProjectionMatrix;
+   float2 RenderResolution;
+   int2 RenderResolutionInt;
+   CIndirectTexture* LinearDepthTexture;
+   float ExposureScale;
+   float MeasuredExposureScale;
+   bool IsCameraCut;
+   
+   void Reset()
+   {
+      CurrJitters = {0, 0};
+      PrevJitters = {0, 0};
+
+      CameraSpaceToPreviousProjectedSpace = DirectX::XMMatrixIdentity();
+      PreviousViewRotProjectionMatrix = DirectX::XMMatrixIdentity();
+      ViewRotProjectionMatrix = DirectX::XMMatrixIdentity();
+
+      PreviousCameraPosition = {0, 0, 0, 0};
+
+      RenderResolution = {0, 0};
+      RenderResolutionInt = {0, 0};
+      
+      LinearDepthTexture = nullptr;
+      
+      ExposureScale = 1.0;
+      MeasuredExposureScale = 1.0;
+
+      IsCameraCut = false;
+   }
+};
+
 enum AAOptions {
    OPTION_NO_AA,
    OPTION_FXAA,
@@ -187,8 +227,16 @@ enum AAOptions {
    OPTION_SMAA_T2X
 };
 
+struct DeferredContextBindState
+{
+   bool pre_record_state;
+   bool post_record_state;
+};
+
 inline SafetyHookInline g_deferred_fx_antialias_renderer_hook;
 inline SafetyHookInline g_net_hacking_renderer_hook;
+inline SafetyHookInline g_finnish_commandlist_hook;
+inline SafetyHookInline g_clear_state_hook;
 
 extern uintptr_t* AAOptionBase;
 extern uintptr_t CDeferredFxAntialiasRenderer;
@@ -196,11 +244,14 @@ extern uintptr_t* m_deferredFXRendererContext;
 extern CSceneViewportPrivateData* m_viewportPrivateData;
 extern CViewportShaderParameterProvider* m_viewportParamProvider;
 extern CDeferredFxAntialiasRendererS* m_deferredFxAntialiasRenderer;
-extern CDeferredFxRendererContextTextures m_deferredFXRendererContextTextures;
+//extern CDeferredFxRendererContextTextures m_deferredFXRendererContextTextures;
 extern CTexture* m_currDeferredFXAntialiasFrameTexture;
 extern uintptr_t JitterTableOffset;
+//extern std::unordered_map<ID3D11DeviceContext*, DeferredContextBindState> luma_buffer_bind_state;
+bool ZeroTimeDelta;
+PerFrame g_perFrame;
 
-extern std::atomic<bool> bIsNetHackingRendering;
+extern bool bIsNetHackingRendering;
 
 AAOptions GetAAOption();
 //float GetGameDeltaTime();
@@ -209,5 +260,17 @@ AAOptions GetAAOption();
 using fnGetExistingSharedTexture = __int64(__fastcall*)(__int64 a1, unsigned int a2);
 extern fnGetExistingSharedTexture GetExistingSharedTexture;
 
+using fnFinishCommandList = HRESULT(__fastcall*)(
+    ID3D11DeviceContext*,
+    BOOL,
+    ID3D11CommandList**
+);
+fnFinishCommandList FinishCommandList = nullptr;
+
+using fnClearState = void(__fastcall*)(ID3D11DeviceContext*);
+fnClearState ClearState = nullptr;
+
 __int64 __fastcall Hooked_CDeferredFxAntialiasRendererPrepare(__int64 a1, uintptr_t* a2);
-__int64 __fastcall Hooked_CNetHackingRendererPrepare(__int64 a1, __int64 a2, __int64 a3, __int64 a4, __int64 a5, __int64 a6, __int64 a7, __int64 a8);
+__int64 __fastcall Hooked_CNetHackingRendererPrepare(void* renderer, void* context, void* arg3, void* arg4, void* arg5, void* arg6, void* arg7, void* textureManager);
+//HRESULT __fastcall Hooked_FinishCommandList(ID3D11DeviceContext* ctx, BOOL restoreState, ID3D11CommandList** commandList);
+//void __fastcall Hooked_ClearState(ID3D11DeviceContext* context);

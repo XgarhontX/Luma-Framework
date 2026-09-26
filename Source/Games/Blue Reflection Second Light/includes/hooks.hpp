@@ -47,6 +47,8 @@ struct CDepthBufferContainer
 extern float2 projection_jitters;
 extern float2 output_resolution;
 extern bool is_search_mode_on;
+extern bool is_in_battle_mode;
+extern bool is_hatching_on;
 CCamera* CameraData = nullptr;
 CDepthBufferContainer* DepthBuffer = nullptr;
 uintptr_t RenderResolution = 0;
@@ -56,12 +58,19 @@ inline SafetyHookInline g_compute_projection_matrix_hook;
 inline SafetyHookInline g_battle_camera_hook;
 inline SafetyHookInline g_active_camera_hook;
 inline SafetyHookInline g_search_mode_hook;
+inline SafetyHookInline g_battle_mode_hook;
+inline SafetyHookInline g_postfx_hatching_hook;
 
 using fnCombineViewProjectionMatrices = char(__fastcall*)(__int64 a1, char a2, char a3);
 fnCombineViewProjectionMatrices CombineViewProjectionMatrices = nullptr;
+
+using fnGetSettingValue = __int64(__fastcall*)(unsigned int a1);
+fnGetSettingValue GetSettingValue = nullptr;
 
 __int64 __fastcall Hooked_ComputeProjectionMatrix(__int64 a1, float a2, float a3, float a4, float a5, char a6, float a7);
 char __fastcall Hooked_CameraUpdateFieldMap3DHUD(__int64 a1);
 __int64 __fastcall Hooked_CameraUpdateFunctionSceneAnd3DHUD(void *a1, __int64 a2, __int32 *a3);
 __int64 __fastcall Hooked_UpdateActiveCameraAddress(__int64 a1, __int64 a2);
+char __fastcall Hooked_BattleMainLoopIterate(__int64 a1);
+__int64 __fastcall PostEffectHatchingRendererPrepare(__int64 a1, float a2);
 void **__fastcall PostEffectSearchModeRendererPrepare(__int64 a1, float a2);

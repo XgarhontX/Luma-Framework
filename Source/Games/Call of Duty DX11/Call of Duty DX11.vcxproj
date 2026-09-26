@@ -38,7 +38,7 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{2f4c0afb-a415-44ce-aa2c-a94dd0fc8003}</ProjectGuid>
+    <ProjectGuid>{a6a0ec5f-afd4-4699-b489-a621fb82c431}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <Platform>x64</Platform>
@@ -180,7 +180,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'" Label="Vcpkg" />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -189,7 +189,7 @@
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;_WINDOWS;DEVELOPMENT=1;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;DEVELOPMENT=1;</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -212,8 +212,8 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib;</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs;</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
@@ -231,7 +231,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -240,7 +240,7 @@
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;WIN32;_WINDOWS;DEVELOPMENT=1;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;DEVELOPMENT=1;</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -248,7 +248,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS</PreprocessorDefinitions>
@@ -265,7 +265,8 @@
     <Link>
       <AdditionalDependencies>
       </AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>
+      </AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x86</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
@@ -283,14 +284,14 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;_WINDOWS;NDEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;NDEBUG</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -313,8 +314,8 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib;</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs;</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <ImportLibrary>
@@ -330,14 +331,14 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;_WINDOWS;NDEBUG;TEST=1;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;NDEBUG;TEST=1;</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -360,8 +361,8 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib;</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs;</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
@@ -377,14 +378,14 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;_WINDOWS;NDEBUG;DEVELOPMENT=1;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;NDEBUG;DEVELOPMENT=1;</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -407,8 +408,8 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib;</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs;</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
@@ -424,14 +425,14 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;WIN32;_WINDOWS;NDEBUG</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;NDEBUG</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -439,7 +440,7 @@
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG</PreprocessorDefinitions>
@@ -456,7 +457,8 @@
     <Link>
       <AdditionalDependencies>
       </AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>
+      </AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x86</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <ImportLibrary>
@@ -472,14 +474,14 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;WIN32;_WINDOWS;NDEBUG;TEST=1;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;NDEBUG;TEST=1;</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -487,7 +489,7 @@
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG</PreprocessorDefinitions>
@@ -504,7 +506,8 @@
     <Link>
       <AdditionalDependencies>
       </AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>
+      </AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x86</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
@@ -520,14 +523,14 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil;..\..\External\FidelityFX;..\..\External\NGX;..\..\External\NVAPI;..\..\External\WDK;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";_WINDOWS;WIN32;_WINDOWS;NDEBUG;DEVELOPMENT=1;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;NDEBUG;DEVELOPMENT=1;</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -535,7 +538,7 @@
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG</PreprocessorDefinitions>
@@ -552,7 +555,8 @@
     <Link>
       <AdditionalDependencies>
       </AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>
+      </AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x86</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
@@ -569,9 +573,6 @@
   <ItemGroup>
     <ClCompile Include="..\..\Core\unity_build.cpp" />
     <ClCompile Include="main.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="draw1.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -35,13 +35,16 @@ void main(
   float4 world_pos = mul(clip_pos, LumaData.GameData.CurrentViewInverseMatrix);
   r0 = world_pos;
   
+  float4 prev_clip_pos = mul(clip_pos, LumaData.GameData.ReprojectionMatrix);
+  prev_clip_pos /= max( prev_clip_pos.w, 0.00001f );
+  
   r1.xyz = LumaData.GameData.PreviousViewProjectionMatrix._m10_m11_m13 * r0.yyy;
   r1.xyz = r0.xxx * LumaData.GameData.PreviousViewProjectionMatrix._m00_m01_m03 + r1.xyz;
   r1.xyz = r0.zzz * LumaData.GameData.PreviousViewProjectionMatrix._m20_m21_m23 + r1.xyz;
   r1.xyz = r0.www * LumaData.GameData.PreviousViewProjectionMatrix._m30_m31_m33 + r1.xyz;
   r1.xy = r1.xy / r1.zz;
   r1.zw = v1.xy * float2(2,-2) + float2(-1,1);
-  r1.xy = r1.zw + -r1.xy;
+  r1.xy = r1.zw + -prev_clip_pos.xy;
   
   float2 uvVelocity;
   uvVelocity.x =  r1.x * 0.5;
@@ -51,6 +54,10 @@ void main(
   if (velocity.y == -1.f)
   {
 	velocity.xy = uvVelocity.xy;
+  }
+  else
+  {
+    velocity.xy += uvVelocity.xy;
   }
   
   float2 jitter_delta = LumaData.GameData.PrevJitters - LumaData.GameData.CurrJitters;

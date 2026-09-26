@@ -101,6 +101,9 @@ struct OutputWriteEntry
 void PatchVertexShader(std::vector<std::byte>& shader_code)
 {
    DXBCHeader* dxbc_header = (DXBCHeader*)&shader_code[0];
+   
+   int32_t mW2P_slot = -1;
+   int32_t mL2P_slot = -1;
 
    for (uint32_t i = 0; i < dxbc_header->chunk_count; ++i)
    {
@@ -124,6 +127,9 @@ void PatchVertexShader(std::vector<std::byte>& shader_code)
                break;
             }
          }
+         
+         mW2P_slot = -1;
+         mL2P_slot = -1;
          
          if (globals_cb_index == -1)
             return; // $Globals not found
@@ -150,6 +156,16 @@ void PatchVertexShader(std::vector<std::byte>& shader_code)
                {
                   vd[l] = (*variable_desc);
                   std::string name = (const char*)&shader_code[rdef_header_offset + variable_desc->name_offset];
+                  
+                  if (strcmp(name.c_str(), "mW2P") == 0)
+                  {
+                     mW2P_slot = variable_desc->data_offset / 16;
+                  }
+                  else if (strcmp(name.c_str(), "mL2P") == 0)
+                  {
+                     mL2P_slot = variable_desc->data_offset / 16;
+                  }
+                  
                   vn.push_back(name + "Prev");
                }
                variable_desc->name_offset += inserted_bytes;
@@ -516,6 +532,12 @@ void PatchVertexShader(std::vector<std::byte>& shader_code)
                if (cb_read < last_sv_position_write_offset)
                {
                   uint32_t index = (cb_read - first_instruction_offset) / 4;
+                  uint32_t slot = shader_patch[index + 1];
+                  bool is_mW2P = (mW2P_slot != -1) && (mW2P_slot <= slot && slot < mW2P_slot+4);
+                  bool is_mL2P = (mL2P_slot != -1) && (mL2P_slot <= slot && slot < mL2P_slot+4);
+                  if (is_mW2P)
+                     continue;
+                  
                   shader_patch[index] = 5;
                }
             }

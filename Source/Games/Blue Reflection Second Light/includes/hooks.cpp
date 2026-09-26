@@ -141,3 +141,28 @@ void **__fastcall PostEffectSearchModeRendererPrepare(__int64 a1, float a2)
     
     return original_result;
 }
+
+char __fastcall Hooked_BattleMainLoopIterate(__int64 a1)
+{
+    auto original_result = g_battle_mode_hook
+    .unsafe_call<char>(a1);
+    
+    //reshade::log::message(reshade::log::level::info, "Battle Mode: On");
+    
+    is_in_battle_mode = true;
+
+    return original_result;
+}
+
+
+__int64 __fastcall PostEffectHatchingRendererPrepare(__int64 a1, float a2)
+{
+    auto original_result = g_postfx_hatching_hook
+    .unsafe_call<__int64>(a1, a2);
+        
+    //reshade::log::message(reshade::log::level::info, "Hatching: On");
+
+    is_hatching_on = true;
+        
+    return original_result;
+}
