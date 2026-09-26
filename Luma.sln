@@ -99,7 +99,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Metro Redux", "Source\Games
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Kingdom Come Deliverance", "Source\Games\Kingdom Come Deliverance\Kingdom Come Deliverance.vcxproj", "{3FAC4E39-0051-42AC-89D5-CA74C3D5961B}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Metaphor: ReFantazio", "Source\Games\Metaphor ReFantazio\Metaphor ReFantazio.vcxproj", "{6CC6AE7C-9E02-4497-B397-897332ED4805}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Metaphor ReFantazio", "Source\Games\Metaphor ReFantazio\Metaphor ReFantazio.vcxproj", "{6CC6AE7C-9E02-4497-B397-897332ED4805}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Mortal Kombat 11", "Source\Games\Mortal Kombat 11\Mortal Kombat 11.vcxproj", "{8066E72F-C800-45D1-ADE9-F40D23430505}"
 EndProject
@@ -983,6 +983,7 @@ Global
 		{8F4A1D26-93BC-4E07-A5D1-64C2E7B9F310} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{7C3E9A18-4D62-4B85-9E30-1A8F5D2C6B44} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{4585017B-F79C-4FB5-8821-3E8A7D4C8177} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{A6A0EC5F-AFD4-4699-B489-A621FB82C431} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8B799422-BA66-3174-B21F-B9FA07C4B2E3}
