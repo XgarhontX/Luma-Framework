@@ -33,41 +33,22 @@ void bloom_main_vs(uint vid: SV_VertexID, out float4 pos: SV_Position, out float
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// #define LUMA_BLOOM_THRESHOLD 1.0
-// #define LUMA_BLOOM_SOFT_KNEE 1.0
-// float3 quadratic_threshold(float3 color)
-// {
-//   const float epsilon = 1e-6;
-//   
-//   // Pixel brightness.
-//   float br = max(max(color.r, color.g), color.b);
-//   br = max(epsilon, br);
-//   
-//   // Under the threshold part, a quadratic curve.
-//   // Above the threshold part will be a linear curve.
-//   const float k = max(epsilon, LUMA_BLOOM_SOFT_KNEE);
-//   const float3 curve = float3(LUMA_BLOOM_THRESHOLD - k, k * 2.0, 0.25 / k);
-//   float rq = clamp(br - curve.x, 0.0, curve.y);
-//   rq = curve.z * rq * rq;
-//   
-//   // Combine and apply the brightness response curve.
-//   return color * max(rq, br - LUMA_BLOOM_THRESHOLD) * rcp(br);
-// }
-
 float get_gaussian_weight(float x, float s)
 {
   return exp(-x * x * rcp(2.0 * s * s));
 }
 
-float almost_max_lerp(float a, float b, float r)
+float almost_max_lerp(float a, float b, float r, bool isDisardLessB = false)
 {
+  if (isDisardLessB && a > b) return a;
   return lerp(a, b, a > b ? 1 - r : r);
 }
 
-float3 almost_max_lerp(float3 a, float3 b, float r)
+float3 almost_max_lerp(float3 a, float3 b, float r, bool isDisardLessB = false)
 {
   float aH = /* max3(a) */ GetLuminance(a);
   float bH = /* max3(b) */ GetLuminance(b);
+  if (isDisardLessB && aH > bH) return a;
   return lerp(a, b, aH > bH ? 1-r : r);
   // return PerceptualLerp(float4(a, 1), float4(b, 1), aH > bH ? 1-r : r).xyz;
   
@@ -85,13 +66,13 @@ float3 bloom_downsample_almost_max(float4 pos, float2 texcoord, float sigmaBoost
   // accumlators
   float3 csum = 0.0;
   float wsum = 0.0;
-  float3 cmax = 0.0;
+  // float3 cmax = 0.0;
   float ymax = 0.0;
 
   // loop
-  float sigma1 = SUGMA + sigmaBoost;
+  float sigma1 = /* SUGMA */0.1 + sigmaBoost;
   const float radius = ceil(sigma1 * 3.0);
-  for (float i = 1.0 - radius; i <= radius; i++)
+  [unroll] for (float i = 1.0 - radius; i <= radius; i++)
   {
     const float weight = get_gaussian_weight(i - f, sigma1);
     float3 b = tex.SampleLevel(smp, tc + i * inv_src_size * axis, 0.0).rgb;
@@ -99,10 +80,10 @@ float3 bloom_downsample_almost_max(float4 pos, float2 texcoord, float sigmaBoost
     csum += b * weight;
     wsum += weight;
 
-    cmax = almost_max_lerp(cmax, b, 0.777);
+    // cmax = almost_max_lerp(cmax, b, 0.777);
 
     float ynew = GetLuminance(b);
-    ymax = almost_max_lerp(ymax, ynew, 0.655);
+    ymax = almost_max_lerp(ymax, ynew, 0.850, true);
   }
 
   // normalize
@@ -110,24 +91,26 @@ float3 bloom_downsample_almost_max(float4 pos, float2 texcoord, float sigmaBoost
   
   #define CMAX_MODE 4
   #if CMAX_MODE == 0
-    // average (SUCKS AS MAX CHANNEL BIAS HUES)
-    csum += cmax;
-    csum /= 2.0;
+    // // average (SUCKS AS MAX CHANNEL BIAS HUES)
+    // csum += cmax;
+    // csum /= 2.0;
   #elif CMAX_MODE == 1
-    // max per channel lerp (SUCKS AS MAX CHANNEL BIAS HUES)
-    csum = almost_max_lerp(csum, cmax, 0.777);
+    // // max per channel lerp (SUCKS AS MAX CHANNEL BIAS HUES)
+    // csum = almost_max_lerp(csum, cmax, 0.777);
   #elif CMAX_MODE == 2
-    // max per channel full (SUCKS AS MAX CHANNEL BIAS HUES)
-    csum = cmax; // this better fold... 
+    // // max per channel full (SUCKS AS MAX CHANNEL BIAS HUES)
+    // csum = cmax;
   #elif CMAX_MODE == 3
-    // luminance match using cmax luminance (SUCKS AS MAX CHANNEL BIAS HUES)
-    float csumY = GetLuminance(csum);
-    float cmaxY = GetLuminance(cmax);
-    csum *= safeDivision(cmaxY, csumY, 1);
+    // // luminance match using cmax luminance (SUCKS AS MAX CHANNEL BIAS HUES)
+    // float csumY = GetLuminance(csum);
+    // float cmaxY = GetLuminance(cmax);
+    // csum *= safeDivision(cmaxY, csumY, 1);
   #elif CMAX_MODE == 4
-    // luminance match with y accumulator (there is disconnect between guassian per channel & y accumulator, still better than above)
+    // luminance match with y accumulator
+    // TODO: there is disconnect between guassian per channel & y accumulator, able to cause hue artifacts by boosting low luminance colors, 
+    //       but it's much more faithful to original weights & unnoticable after blur.
     float csumY = GetLuminance(csum);
-    csum *= safeDivision(ymax, csumY, 1); // this better fold...
+    csum *= safeDivision(ymax, csumY, 1);
   #elif CMAX_MODE == 5
     // UCS blending between both
     // TODO: too costly?
@@ -189,10 +172,20 @@ float4 bloom_downsample_and_prefilter(float4 pos, float2 texcoord, bool isPrefil
 
   if (isPrefilter)
   {
-    // tint (to correct too much yellow compared to vanilla)
     const float luma = GetLuminance(csum);
-    csum *= float3(0.955, 0.958, 1.00);
-    csum *= luma * rcp(max(1e-6, GetLuminance(csum)));
+    if (luma > 0) {
+      // tint (to correct too much yellow compared to vanilla)
+      csum *= float3(0.955, 0.958, 1.00);
+      csum *= luma * rcp(max(1e-6, GetLuminance(csum)));
+
+      // fudge (to correct weight closer to vanilla)
+      float y = luma;
+      if (y > 0) {
+        float y1 = y;
+        y1 = RenoDX_Contrast(y1, 0.102 + 1, 0.667);
+        csum *= y1 / y;
+      }
+    }
 
     // threshold https://www.desmos.com/calculator/tai2ea2f2t
     float3 csumBack = csum;
@@ -203,14 +196,8 @@ float4 bloom_downsample_and_prefilter(float4 pos, float2 texcoord, bool isPrefil
     if (g_color.x != g_color.y && g_color.y != g_color.z) csum = float3(1, 0, 1);
     if (g_color.x != 1.1 && g_color.y != 1.1 && g_color.z != 1.1) csum = float3(1, 1, 0);
     // so far, components are ALWAYS equal!
-    // usually 1.1
+    // so far, usually 1.1
 #endif
-
-    // fudge boost to match vanilla
-    csum *= csum; // gamma decode
-    csum *= 2;
-    csum = sqrt(csum); // gamma encode
-    return float4(csum, 1.0);
   }
 
   return float4(csum, 1.0);
@@ -230,7 +217,7 @@ float4 bloom_prefilter_ps(float4 pos: SV_Position, float2 texcoord: TEXCOORD) : 
   return bloom_downsample_and_prefilter(pos, texcoord, true);
 }
 
-//  rest of downsampling
+// rest of downsampling
 float4 bloom_downsample_ps(float4 pos: SV_Position, float2 texcoord: TEXCOORD) : SV_Target
 {
   float3 csum = bloom_downsample_guassian(pos, texcoord);
@@ -326,28 +313,28 @@ void bloom_blur0_vs(
   out float4 o0: SV_POSITION0,
   out float4 o1: TEXCOORD0,
   out float4 o2: TEXCOORD1,
-  out float2 o3: TEXCOORD2)
-  {
-    float4 r0;
-    uint4 bitmask, uiDest;
-    float4 fDest;
-    
-    r0.x = (uint)v0.x >> 1;
-    r0.x = (uint)r0.x;
-    r0.x = r0.x * 2 + -1;
-    r0.z = (int)v0.x & 1;
-    r0.z = (uint)r0.z;
-    r0.y = r0.z * 2 + -1;
-    o0.xy = r0.xy;
-    r0.xyzw = r0.xyxy * g_texcoord_modifier.xyxy + g_texcoord_modifier.zwzw;
-    o0.zw = float2(0, 1);
-    
-    o1.xyzw = g_texel_size.xyxy * float4(-0.5, -0.5, 0.5, -0.5) + r0.zwzw;
-    o2.xyzw = g_texel_size.xyxy * float4(-0.5, 0.5, 0.5, 0.5) + r0.xyzw;
-    o3.xy = r0.xy; // center
-    
-    return;
-  }
+  out float2 o3: TEXCOORD2
+) {
+  float4 r0;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+  
+  r0.x = (uint)v0.x >> 1;
+  r0.x = (uint)r0.x;
+  r0.x = r0.x * 2 + -1;
+  r0.z = (int)v0.x & 1;
+  r0.z = (uint)r0.z;
+  r0.y = r0.z * 2 + -1;
+  o0.xy = r0.xy;
+  r0.xyzw = r0.xyxy * g_texcoord_modifier.xyxy + g_texcoord_modifier.zwzw;
+  o0.zw = float2(0, 1);
+  
+  o1.xyzw = g_texel_size.xyxy * float4(-0.5, -0.5, 0.5, -0.5) + r0.zwzw;
+  o2.xyzw = g_texel_size.xyxy * float4(-0.5, 0.5, 0.5, 0.5) + r0.xyzw;
+  o3.xy = r0.xy; // center
+  
+  return;
+}
 
 void bloom_blur0_ps(
   float4 v0: SV_POSITION0,
@@ -360,20 +347,21 @@ void bloom_blur0_ps(
   uint4 bitmask, uiDest;
   float4 fDest;
 
-  r0.xyzw = g_textures_0_.Sample(g_sampler_s, v1.xy).xyzw;
-  r1.xyzw = g_textures_0_.Sample(g_sampler_s, v1.zw).xyzw;
-  r0.xyzw = r1.xyzw + r0.xyzw;
-  r1.xyzw = g_textures_0_.Sample(g_sampler_s, v2.xy).xyzw;
-  r0.xyzw = r1.xyzw + r0.xyzw;
-  r1.xyzw = g_textures_0_.Sample(g_sampler_s, v2.zw).xyzw;
-  r0.xyzw = r1.xyzw + r0.xyzw;
-  o0.xyzw = g_color.xyzw * 0.25 * r0.xyzw;
+  // // blurred avg
+  // r0.xyzw = g_textures_0_.Sample(g_sampler_s, v1.xy).xyzw;
+  // r1.xyzw = g_textures_0_.Sample(g_sampler_s, v1.zw).xyzw;
+  // r0.xyzw = r1.xyzw + r0.xyzw;
+  // r1.xyzw = g_textures_0_.Sample(g_sampler_s, v2.xy).xyzw;
+  // r0.xyzw = r1.xyzw + r0.xyzw;
+  // r1.xyzw = g_textures_0_.Sample(g_sampler_s, v2.zw).xyzw;
+  // r0.xyzw = r1.xyzw + r0.xyzw;
+  // o0.xyzw = g_color.xyzw * 0.25 * r0.xyzw;
 
   // float4 bloom = BloomUpsample2(g_textures_0_, g_sampler_s, v3.xy, g_texel_size.zw, g_texel_size.xy);
   // o0 = g_color * bloom;
 
-  // float4 bloom = g_textures_0_.Sample(g_sampler_s, v3.xy).xyzw;
-  // o0 = g_color * bloom;
+  float4 bloom = g_textures_0_.Sample(g_sampler_s, v3.xy).xyzw;
+  o0 = g_color * bloom;
 }
     
 void bloom_combine_ps(
@@ -418,16 +406,16 @@ void bloom_combine_ps(
   float2 pixSize2 = rcp(texSize2);
   float2 pixSize3 = rcp(texSize3);
 
-  float4 b0 = /* g_textures_0_.SampleLevel(g_sampler_s, v3.xy, 0).xyzw */ BloomUpsample2(g_textures_0_, g_sampler_s, v3.xy, texSize0, pixSize0).xyzw;
+  float4 b0 = g_textures_0_.SampleLevel(g_sampler_s, v3.xy, 0).xyzw /* BloomUpsample2(g_textures_0_, g_sampler_s, v3.xy, texSize0, pixSize0).xyzw */;
   float3 b1 = BloomUpsample2(g_textures_1_, g_sampler_s, v3.xy, texSize1, pixSize1).xyz;
   float3 b2 = BloomUpsample2(g_textures_2_, g_sampler_s, v3.xy, texSize2, pixSize2).xyz;
   float3 b3 = BloomUpsample2(g_textures_3_, g_sampler_s, v3.xy, texSize3, pixSize3).xyz;
   
   o0.w = b0.w;
-  o0.xyz = b0.xyz  * (g_color.x * GS.BloomStrengths.x /* * (1.20 DVS1) */);
-  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y /* * (1.20 DVS2) */);
-  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z /* * (1.10 DVS3) */);
-  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w /* * (1.00 DVS4) */);
+  o0.xyz = b0.xyz  * (g_color.x * GS.BloomStrengths.x * 1.466 /* * DVS1 */);
+  o0.xyz += b1.xyz * (g_color.y * GS.BloomStrengths.y * 0.976 /* * DVS2 */);
+  o0.xyz += b2.xyz * (g_color.z * GS.BloomStrengths.z * 0.970 /* * DVS3 */);
+  o0.xyz += b3.xyz * (g_color.w * GS.BloomStrengths.w * 0.836 /* * DVS4 */);
   
   //   o0 = b0; //debug
   

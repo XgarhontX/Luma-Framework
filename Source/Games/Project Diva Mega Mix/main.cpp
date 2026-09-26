@@ -2,7 +2,7 @@
 
 #define ALLOW_SHADERS_DUMPING 0
 #define DISABLE_AUTO_DEBUGGER 1
-#define ENABLE_BLOOM 1
+#define ENABLE_BLOOM 1 // TODO: since we load our own and have Bloom pass copy-pasted here, dont rely on ENABLE_BLOOM?
 // #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 0
 // #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
 #include "..\..\Core\core.hpp"
@@ -219,7 +219,6 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_GAMMA_CORRECTION_MODE      = char_ptr_crc32("CUSTOM_GAMMA_CORRECTION_MODE");
    constexpr uint32_t CUSTOM_GAMMACORRECT22             = char_ptr_crc32("CUSTOM_GAMMACORRECT22");
    // constexpr uint32_t CUSTOM_UITRANSPARENCY             = char_ptr_crc32("CUSTOM_UITRANSPARENCY");
-   constexpr uint32_t CUSTOM_TESTSDR                    = char_ptr_crc32("CUSTOM_TESTSDR");
    constexpr uint32_t CUSTOM_TESTBGSPRITES              = char_ptr_crc32("CUSTOM_TESTBGSPRITES");
    constexpr uint32_t CUSTOM_UPGRADE_DEBUG              = char_ptr_crc32("CUSTOM_UPGRADE_DEBUG");
    constexpr uint32_t CUSTOM_PROGRESSBAR                = char_ptr_crc32("CUSTOM_PROGRESSBAR");
@@ -269,7 +268,6 @@ namespace ShaderDefineInfo
          {"CUSTOM_TONEMAP_IDENTIFY", '0', true, !DEVELOPMENT, "Draw binary representation of tonemap uber variant number.", 1},
          {"CUSTOM_HDTVREC709_1", '0', true, false, "Decode color and swapchain to HDTV rec.709, like PS4's display output.", 1},
          {"CUSTOM_GAMMACORRECT22", '1', true, false, "Enable Gamma Correction 2.2 for OS and displays missing it.", 1},
-         {"CUSTOM_TESTSDR", '0', true, false, "Disable HDR shaders.", 1},
          {"CUSTOM_TESTBGSPRITES", '0', true, false, "Test BG Sprites layering.", 2},
          {"CUSTOM_PROGRESSBAR", '0', true, false, "Play head progress bar.", 2},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
@@ -358,7 +356,7 @@ namespace ShaderDefineInfo
       }
    }
 
-   static bool UIToggleCheckmark(uint32_t d, const char* label, const char* tooltip)
+   static bool UIToggleCheckmark(uint32_t d, const char* label, const char* tooltip, bool is_show_reset = true)
    {
       bool def = GetB(d);
       
@@ -370,29 +368,29 @@ namespace ShaderDefineInfo
       
       if (c) ToggleBool(d);
       
-      UIResetButton(d);
+      if (is_show_reset) UIResetButton(d);
       return def;
    }
       
-   int UIDropDown(uint32_t d, const char* label, const char* const items[], const char* tooltip)
+   int UIDropDown(uint32_t d, const char* label, const char* const items[], const char* tooltip, bool is_show_reset = true)
    {
       int def = Get(d);
       bool c = ImGui::Combo(label, &def, items, IM_ARRAYSIZE(items));
       if (c) Set(d, def);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip(tooltip);
-      UIResetButton(d);
+      if (is_show_reset) UIResetButton(d);
       return def;
    }
 
    // Overload: pass items inline as braced args, e.g. {"A", "B", "C"}
-   int UIDropDown(uint32_t d, const char* label, std::initializer_list<const char*> items_list, const char* tooltip)
+   int UIDropDown(uint32_t d, const char* label, std::initializer_list<const char*> items_list, const char* tooltip, bool is_show_reset = true)
    {
       std::vector<const char*> items(items_list);
       int def = Get(d);
       bool c = ImGui::Combo(label, &def, items.data(), static_cast<int>(items.size()));
       if (c) Set(d, def);
       if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip(tooltip);
-      UIResetButton(d);
+      if (is_show_reset) UIResetButton(d);
       return def;
    }
 }
@@ -2153,12 +2151,16 @@ namespace Bloom
       bool enabled = false;
 
    constexpr const char* reshadesave_sigma = "BloomSigma";
-   constexpr float sigma_def = 0.46f;
+   constexpr float sigma_def = 0.10f;
       float sigma = sigma_def;
 
    constexpr const char* reshadesave_sigma_increase = "BloomSigmaIncrease";
    constexpr float sigma_increase_def = 0.36f;
       float sigma_increase = sigma_increase_def;
+
+   constexpr const char* reshadesave_use_highest_mip = "BloomUseHighestMip";
+   constexpr bool use_highest_mip_def = false;
+      bool use_highest_mip = use_highest_mip_def;
 
    PUBLISHING_CONSTEXPR bool is_vanilla_bloom_blur_rtv_hq = true;
    
@@ -2169,7 +2171,7 @@ namespace Bloom
    
    enum State : uint8_t
    {
-      Downsample0, // 0x68722F15 (can be multiple times)
+      Downsample0, // 0x68722F15 (higher res = more downsampling passes)
       Downsample1, // 0x41C419EE
       // Downsample2, // 0x68722F15
       // Downsample3, // 0x68722F15
@@ -2187,13 +2189,6 @@ namespace Bloom
       // AutoExposure1, // 0xDF1AC023
       Tonemap,
       Done,
-
-      // Downsample0, // 0x68722F15 (can be multiple times)
-      // Downsample1, // 0x41C419EE
-      // BloomBlurring, // 0x7B4E4533
-      // BloomCombine, // 0xCD83E95E
-      // Tonemap,
-      // Done,
    };
    State state = Downsample0; // denotes which shader is being drawn next.
    
@@ -2268,7 +2263,7 @@ namespace Bloom
                // constexpr float sigmas[nmips] = { 1.46f, 1.f, 1.f };
                auto& managed_resources = device_data.managed_resources;
             
-               // Backup IA.
+               // Backup IA. //TODO: needed?
                D3D11_PRIMITIVE_TOPOLOGY primitive_topology_original;
                native_device_context->IAGetPrimitiveTopology(&primitive_topology_original);
             
@@ -2292,7 +2287,7 @@ namespace Bloom
                std::vector<D3D11_VIEWPORT> viewports_original(num_viewports);
                native_device_context->RSGetViewports(&num_viewports, viewports_original.data());
             
-               // Backup Rasterizer.
+               // Backup Rasterizer. //TODO: needed?
                ComPtr<ID3D11RasterizerState> rasterizer_original;
                native_device_context->RSGetState(rasterizer_original.put());
             
@@ -2338,8 +2333,6 @@ namespace Bloom
                   y_mip0_width  = tex_desc.Width / 2;
                   y_mip0_height = tex_desc.Height / 2;
                   
-                  reshade::log::message(reshade::log::level::info, std::format("Bloom: scene size {}x{}, x_mip0 size {}x{}, y_mip0 size {}x{}", scene_width, scene_height, x_mip0_width, x_mip0_height, y_mip0_width, y_mip0_height).c_str());
-
                   // while loop to find when x <= 32 and resize nmips
                   Resources::nmips = 0;
                   {
@@ -2352,8 +2345,6 @@ namespace Bloom
                      Resources::nmips = std::clamp(Resources::nmips, 4, static_cast<int>(Resources::rtv_mips_x.size()));
                   }
                   Resources::ResetArrays();
-
-                  reshade::log::message(reshade::log::level::info, std::format("Bloom: mips {}", Resources::nmips).c_str());
                   
                   // Create Y MIPs and views.
                   tex_desc.Width = y_mip0_width;
@@ -2395,7 +2386,6 @@ namespace Bloom
                      Resources::rtv_mips_y_viewports[i].Height = y_mip0_height >> i;
                      Resources::rtv_mips_y_viewports[i].MinDepth = 0.f;
                      Resources::rtv_mips_y_viewports[i].MaxDepth = 1.f;
-                     // reshade::log::message(reshade::log::level::info, std::format("Bloom: created Y mip {} with size {}x{}", i, Resources::rtv_mips_y_viewports[i].Width, Resources::rtv_mips_y_viewports[i].Height).c_str());
                   }
                   
                   // Create X MIP0 and views.
@@ -2578,7 +2568,7 @@ namespace Bloom
                   cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
                   update_constant_buffer();
                
-                  native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i - 1], nullptr);
+                  native_device_context->OMSetRenderTargets(1, budget == 1 ? &Resources::rtv_mips_y1[i - 1] : &Resources::rtv_mips_y[i - 1], nullptr); // #WeirdSwap
                   native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i]);
                   native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
                   native_device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
@@ -2753,12 +2743,12 @@ namespace Bloom
             if (ps != 0x466D68A8) break;
 
             // SRV0 set to 4rd last mip
-            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[Resources::nmips - 4]);
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y1[Resources::nmips - 4]); // #WeirdSwap
 
             if (is_vanilla_bloom_blur_rtv_hq)
             {
                // RTV0 set to 4rd last mip
-               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[Resources::nmips - 4], nullptr);
+               native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[Resources::nmips - 4], nullptr);
             
                // viewport
                D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[Resources::nmips - 4];
@@ -2780,19 +2770,20 @@ namespace Bloom
             if (is_vanilla_bloom_blur_rtv_hq)
             {
                // SRV 0-3 are last 4 mip levels of bloom, descending order (0 is largest, 3 is smallest)
-               const std::array<ID3D11ShaderResourceView*, 4> bloom_srvs = { Resources::srv_mips_y1[Resources::nmips - 4], Resources::srv_mips_y[Resources::nmips - 3], Resources::srv_mips_y[Resources::nmips - 2], Resources::srv_mips_y[Resources::nmips - 1] };
+               const std::array<ID3D11ShaderResourceView*, 4> bloom_srvs = { Resources::srv_mips_y[Resources::nmips - 4], Resources::srv_mips_y[Resources::nmips - 3], Resources::srv_mips_y[Resources::nmips - 2], Resources::srv_mips_y[Resources::nmips - 1] };
                native_device_context->PSSetShaderResources(0, bloom_srvs.size(), bloom_srvs.data());
             }
 
             // set RTV0 as our buffer
-            native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[0], nullptr);
+            int mip = use_highest_mip ? 0 : 1;
+            native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[mip], nullptr);
 
             // set our combine shader
             native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Bloom_Combine_PS)).get(), nullptr, 0);
             
             // viewport to size of mip0
-            D3D11_VIEWPORT viewport_mip0 = Resources::rtv_mips_y_viewports[0];
-            native_device_context->RSSetViewports(1, &viewport_mip0);
+            D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[mip];
+            native_device_context->RSSetViewports(1, &viewport);
             
             state = Tonemap;
             break;
@@ -2810,13 +2801,15 @@ namespace Bloom
       if (state != Tonemap) return;
 
       // set SRV1 as out new bloom output
-      native_device_context->PSSetShaderResources(1, 1, &Resources::srv_mips_y1[0]);
+      int mip = use_highest_mip ? 0 : 1;
+      native_device_context->PSSetShaderResources(1, 1, &Resources::srv_mips_y1[mip]);
       
       state = Done;
    }
 
    void OnInit()
    {
+      // TODO: since we load our own and have Bloom pass copy-pasted here, dont rely on ENABLE_BLOOM?
       native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Downsample1_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_downsample1_ps"));
       native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Combine_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_combine_ps"));
       native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_blur0_ps"));
@@ -2838,6 +2831,7 @@ namespace Bloom
       reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
       reshade::get_config_value(runtime, NAME, reshadesave_sigma, sigma);
       reshade::get_config_value(runtime, NAME, reshadesave_sigma_increase, sigma_increase);
+      reshade::get_config_value(runtime, NAME, reshadesave_use_highest_mip, use_highest_mip);
    }
 }
 
@@ -4563,40 +4557,8 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       ImGui::PushID("###Bloom");
-      if (DrawCollapsingHeaderEnabledColored("Bloom", Bloom::enabled))
+      if (DrawCollapsingHeaderEnabledColored("Bloom", Bloom::enabled || ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_BLOOM_THRESHOLD)))
       {
-         DrawColoredSubHeader("Alternative High Quality Blurring");
-
-         if (ImGui::Checkbox("Enable", &Bloom::enabled))
-         {
-            reshade::set_config_value(runtime, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
-            if (!Bloom::enabled) Bloom::HardReset();
-         }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blurring to downsample with a unbroken chain of mipmaps."
-                                                                                          "\nThough impossible to be 100%% direct vanilla upgrades due to new weights, it's tuned to be extremely respectful."
-                                                                                          "\n"
-                                                                                          "\n(There's slight inefficiency decoupling from Auto-Exposure downsampling.)");
-
-         if (GlobalsMegaMix::UIIsAdvanced)
-         {
-            if (!Bloom::enabled) ImGui::BeginDisabled();
-            {
-               if (ImGui::SliderFloat("Gaussian Sigma", &Bloom::sigma, 0.1f, 2.f))
-                  reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Sigma for gaussian blur, where higher = more blur radius."
-                                                                                                "\nIncreasing will suppress tiny highlights that cause bloom flickering,"
-                                                                                                "\nbut also cost a bit of performance as texture sampling count increases.");
-               DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
-
-               if (ImGui::SliderFloat("Gaussian Sigma Increase", &Bloom::sigma_increase, 0.f, 1.f))
-                  reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma_increase, Bloom::sigma_increase);
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Additional sigma (blur radius) increase per deeper mipmap level.");
-               DrawResetButton(Bloom::sigma_increase, Bloom::sigma_increase_def, Bloom::reshadesave_sigma_increase, runtime);
-            }
-            if (!Bloom::enabled) ImGui::EndDisabled();
-         }
-         
-         ImGui::NewLine();
          ImGui::PushID("###BloomThreshold");
          DrawColoredSubHeader("Threshold");
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_BLOOM_THRESHOLD, "Mode",
@@ -4606,9 +4568,49 @@ public:
             "\nThe original is a crude per-channel subtraction, horribly shifting hues and boosting saturation."
             "\nA prime example is \"When First Love Ends\", where red blobs of bloom ruins close ups of skin."
             "\n"
-            "\nWe can do better by using luminance to make it more neutral."
-            "\n(Deliberate tinting still applies afterwards.)");
+            "\nWe can do better by using luminance to blend towards neutral."
+            "\n(Deliberate tinting still applies afterwards.)", false);
          ImGui::PopID();
+
+         ImGui::NewLine();
+         DrawColoredSubHeader("Alternative High Quality Blurring");
+
+         if (ImGui::Checkbox("Enable", &Bloom::enabled))
+         {
+            reshade::set_config_value(runtime, NAME, Bloom::reshadesave_enabled, Bloom::enabled);
+            if (!Bloom::enabled) Bloom::HardReset();
+         }
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blurring to downsample with an unbroken chain of mipmaps."
+                                                                                          "\nThough impossible to be a 100%% direct vanilla upgrade due to new weights, it's tuned to be respectful."
+                                                                                          "\n"
+                                                                                          "\n(There's slight inefficiency decoupling from Auto-Exposure downsampling.)");
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            if (!Bloom::enabled) ImGui::BeginDisabled();
+            {
+               if (ImGui::SliderFloat("Gaussian Sigma", &Bloom::sigma, 0.1f, 1.f))
+                  reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Initial sigma for gaussian blur, where higher means wider radius."
+                                                                                                "\n"
+                                                                                                "\nIncreasing will suppress tiny highlights that cause bloom flickering,"
+                                                                                                "\nbut also cost a bit of performance as texture sampling count increases.");
+               DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
+
+               if (ImGui::SliderFloat("Gaussian Sigma Increase", &Bloom::sigma_increase, 0.f, 1.f))
+                  reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma_increase, Bloom::sigma_increase);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Additional sigma (blur radius) increase per deeper mipmap level."
+                                                                                                "\nToo low and blockiness will reappear.");
+               DrawResetButton(Bloom::sigma_increase, Bloom::sigma_increase_def, Bloom::reshadesave_sigma_increase, runtime);
+
+               if (ImGui::Checkbox("Combine Using Highest Mip", &Bloom::use_highest_mip))
+                  reshade::set_config_value(runtime, NAME, Bloom::reshadesave_use_highest_mip, Bloom::use_highest_mip);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Prefer highest available mipmap level for final bloom combined output."
+                                                                                                "\n(There should be no difference besides worse performance if on.)");
+               DrawResetButton(Bloom::use_highest_mip, Bloom::use_highest_mip_def, Bloom::reshadesave_use_highest_mip, runtime);
+            }
+            if (!Bloom::enabled) ImGui::EndDisabled();
+         }
 
          ImGui::NewLine();
          DrawColoredSubHeader("Multipliers");
@@ -4711,7 +4713,7 @@ public:
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Options for Depth of Field."
                                                                                           "\n"
-                                                                                          "\n TODO");
+                                                                                          "\nTODO");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HQ DoF is WIP.)");
@@ -5098,16 +5100,11 @@ public:
                "For testing Background Sprite layering.");
          }
 
-         // {"CUSTOM_TESTSDR", '0', true, false, "Disable HDR shaders.", 1},
-         {
-            ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_TESTSDR, "Test SDR (Kinda & Requires 203 Paper White)", "Disable modded HDR tonemap shaders to compare against vanilla SDR output.\nEverything else is enabled to fix stuff broken by HDR resource upgrades.");
-         }
-
          //CUSTOM_UPGRADE_DEBUG
          {
             ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_UPGRADE_DEBUG, "UpgradeToneMap() Inputs",
                { "Off", "Raw HDR", "Neutral SDR", "Graded SDR (Unclamped)" },
-               "Toggle between various inputs used in RenoDX's UpgradeToneMap() algorithm to map HDR luminance onto SDR chrominance, extending color.");
+               "Toggle between various inputs used in RenoDX's UpgradeToneMap() algorithm to map HDR luminance onto SDR chrominance used to neutralizes rolloff curve.");
          }
 
          //CUSTOM_TONEMAP_IDENTIFY
