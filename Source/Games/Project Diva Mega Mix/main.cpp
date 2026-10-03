@@ -364,7 +364,7 @@ namespace ShaderDefineInfo
       // Default built-in
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1'); GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetValue('1'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValueFixed(true);
       GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0'); GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetValue('0'); GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetValueFixed(true);
-      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0'); GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetValue('0'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValueFixed(true);
+      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0'); GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetValue('0'); GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetValueFixed(true);
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValue('0'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValueFixed(true);
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2'); GetShaderDefineData(UI_DRAW_TYPE_HASH).SetValue('2'); GetShaderDefineData(UI_DRAW_TYPE_HASH).SetValueFixed(true);
    }
@@ -4270,6 +4270,13 @@ public:
          if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, "Test Display Peak", "3 rectangles within a bigger one.\n\nTo find display maximum, set to:\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nOtherwise, just don't let Middle fully disappear/clip!");
          else ShaderDefineInfo::Set(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, 0); //force off in SDR
       }
+
+      // Default Built-in
+      ShaderDefineInfo::Set(POST_PROCESS_SPACE_TYPE_HASH, 1);
+      ShaderDefineInfo::Set(EARLY_DISPLAY_ENCODING_HASH, 0);
+      ShaderDefineInfo::Set(VANILLA_ENCODING_TYPE_HASH, 0);
+      ShaderDefineInfo::Set(GAMMA_CORRECTION_TYPE_HASH, 0);
+      ShaderDefineInfo::Set(UI_DRAW_TYPE_HASH, 2);
 
       // Info
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
