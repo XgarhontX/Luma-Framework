@@ -41,7 +41,7 @@ float4 ResampleBox(float2 uv) {
 }
 
 // https://en.wikipedia.org/wiki/Mitchell%E2%80%93Netravali_filters
-float MitchellNetravali(float x, float B, float C) // TODO: perf better with tenary?
+float MitchellNetravali(float x, float B, float C) // TODO: precompute
 {
   float ax = abs(x);
 
@@ -93,7 +93,7 @@ float4 ResampleMitchellNetravali(float2 uv, int steps = 2) {
       float wy = MitchellNetravali((y - fraction.y) / scale, B, C);
       float w = wx * wy;
 
-      float2 samplePixel = base + float2(x, y); // clamp(base + float2(x, y), 0.0, size - 1.0); TODO: matters to clamp?
+      float2 samplePixel = clamp(base + float2(x, y), 0.0, size - 1.0);
       float2 sampleUv = (samplePixel + 0.5) / size; // de-center
 
       sum += tex.Sample(sampP, sampleUv) * w;

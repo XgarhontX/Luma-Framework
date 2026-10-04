@@ -89,6 +89,7 @@ namespace TonemapInfo
    int GetIndexOnlyIfDrawn(int v) { return GetDrawnTonemap(v) ? v & IndexBitMask : -1; }
 
    bool GetIsDrawnTonemapOrFinal(int v) { return v & (FlagDrawnTonemap | FlagDrawnFinal); }
+   bool GetIsDrawnTonemapButNotFinal(int v) { return v & FlagDrawnTonemap && !(v & FlagDrawnFinal); }
    
    const char* const TonemapDebugInfo[] = {
       "Complex", //0
@@ -962,9 +963,6 @@ namespace SeparateUIBrightness
       if (ImGui::Checkbox("Enabled", &enabled))
       {
          reshade::set_config_value(runtime, NAME, reshadesave_enabled, enabled);
-#ifdef DAV_CORE
-         ui_brightness_slider_enabled = !enabled;
-#endif
       }
       
       bool is_disabled = !enabled;
@@ -1003,9 +1001,6 @@ namespace SeparateUIBrightness
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
       reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
-#ifdef DAV_CORE
-      ui_brightness_slider_enabled = !enabled;
-#endif
 
       if (use_os_reference_white_level) enabled = false; // conflicts if not.
       
@@ -1049,10 +1044,10 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
 
       // check resolution TODO: instead of this, use memory hack?
       uint rtv_pix = desc.Width * desc.Height;
-      uint native_pix = device_data.display_resolution.x * device_data.display_resolution.y;
-      uint thres = native_pix * 1.67f;
+      uint native_pix = device_data.output_resolution.x * device_data.output_resolution.y;
+      uint thres = native_pix * 1.1f;
       enabled = rtv_pix > thres;
-      reshade::log::message(reshade::log::level::info, std::format("SSAA::OnTonemapDraw(): SSAA {} (RTV0: {}x{}, Native: {}x{})", enabled ? "enabled" : "disabled", desc.Width, desc.Height, device_data.display_resolution.x, device_data.display_resolution.y).c_str());
+      reshade::log::message(reshade::log::level::info, std::format("SSAA::OnTonemapDraw(): SSAA {} (RTV0: {}x{}, Native: {}x{})", enabled ? "enabled" : "disabled", desc.Width, desc.Height, device_data.output_resolution.x, device_data.output_resolution.y).c_str());
    }
       
    // normal Final isn't drawn when SSAA. we must find other ways to check
@@ -1078,6 +1073,17 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
 
       // set linear sampler s1
       native_device_context->PSSetSamplers(1, 1, &device_data.sampler_state_linear);
+   }
+
+   void OnInitSwapchain(bool is_resolution_changed)
+   {
+      // reset
+      render_resolution = { 0, 0 }; 
+   }
+
+   void OnPresent()
+   {
+
    }
 }
 
@@ -3854,6 +3860,11 @@ public:
       // debug_draw_options edit
       debug_draw_options = debug_draw_options & ~(uint)DebugDrawTextureOptionsMask::Tonemap;
 #endif
+
+#if DAV_CORE == 1 // always show Brightness sliders
+      // Display Composition is only useful for Frame Capture
+      force_disable_display_composition = !DEVELOPMENT || !OutputHandling::IsSCRGB();
+#endif
    }
    
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -3876,6 +3887,12 @@ public:
       static uint2 last_size = {};
       uint2 size = uint2(device_data.output_resolution.x, device_data.output_resolution.y);
       bool is_resolution_changed = size != last_size;
+
+      // log
+      if (is_resolution_changed) reshade::log::message(reshade::log::level::info, std::format("OnInitSwapchain(): resolution changed to {}x{}", size.x, size.y).c_str());
+
+      // SSAA
+      SSAA::OnInitSwapchain(is_resolution_changed);
 
       // XeGTAO
       XeGTAO::OnInitSwapchain(is_resolution_changed);
@@ -4188,14 +4205,6 @@ public:
 
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data)
    {
-      // reset TonemapInfo
-      GlobalsMegaMix::TonemapInfoBackup = cb_luma_global_settings.GameSettings.TonemapInfo;
-      cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::GetDefaultReset();
-
-      // reset game/device_data
-      DrawingState::ResetOnPresent();
-      device_data.has_drawn_main_post_processing = false;
-
       // CachedCB
       CachedCB::Update(); 
 
@@ -4210,6 +4219,9 @@ public:
 
       // SeparateUIBrightness
       SeparateUIBrightness::OnPresent();
+
+      // SSAA
+      SSAA::OnPresent();
       
       // XeGTAO 
       XeGTAO::OnPresent();
@@ -4228,6 +4240,14 @@ public:
 
       // DepthOfField
       DepthOfField::OnPresent();
+
+      // reset TonemapInfo
+      GlobalsMegaMix::TonemapInfoBackup = cb_luma_global_settings.GameSettings.TonemapInfo;
+      cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::GetDefaultReset();
+
+      // reset game/device_data
+      DrawingState::ResetOnPresent();
+      device_data.has_drawn_main_post_processing = false;
    }
 
    void LoadConfigs() override
@@ -4343,6 +4363,11 @@ public:
          if (cb_luma_global_settings.DisplayMode != DisplayModeType::SDR) ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, "Test Display Peak", "3 rectangles within a bigger one.\n\nTo find display maximum, set to:\n- Left: Not Visible (2x Peak)\n- Middle: Barely Visible (1x Peak)\n- Right: Easily Visible (0.5x Peak)\n\nOtherwise, just don't let Middle fully disappear/clip!");
          else ShaderDefineInfo::Set(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, 0); //force off in SDR
       }
+
+      // ui_brightness_slider_enabled
+#ifdef DAV_CORE
+      ui_brightness_slider_enabled = is_sdr || !SeparateUIBrightness::enabled;
+#endif
 
       // Default Built-in
       ShaderDefineInfo::Set(POST_PROCESS_SPACE_TYPE_HASH, 1);
@@ -4883,14 +4908,16 @@ public:
          ImGui::NewLine();
          DrawColoredSubHeader("Super Sampling Anti-Aliasing (SSAA)");
 
-         if (!SSAA::enabled)
-            if (ImGui::Button("Download SSAA Enabled by korenkonder")) Website::OpenWebsite("https://github.com/korenkonder/MMPlusMods/releases#release-SSAAEnable-1.03");
+         if (!SSAA::enabled && ImGui::Button("Download SSAA Enabled by korenkonder")) Website::OpenWebsite("https://github.com/korenkonder/MMPlusMods/releases#release-SSAAEnable-1.03");
          
          if (!SSAA::enabled) ImGui::BeginDisabled();
          {
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSAA_FILTER, "Filter", { "Point (Top Left Inner Pixel)", "Box (4 Inner Pixel Average)", "Mitchell-Netravali (4x4)" }, "The filter used to downsample the SSAA results to the final output.");
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSAA_FILTER, "Filter", { "Point (Vanilla / Top Left Inner Pixel)", "Box (All 4 Inner Pixel Average)", "Mitchell-Netravali (4x4)" }, "The filter used to downsample the SSAA results to the final output.");
          }
          if (!SSAA::enabled) ImGui::EndDisabled();
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Render Resolution: %dx%d", SSAA::render_resolution.x, SSAA::render_resolution.y);
+         ImGui::PopStyleColor();
       }
       ImGui::PopID();
 
@@ -5404,7 +5431,7 @@ public:
       ImGui::BulletText(__DATE__);
       ImGui::BulletText(__TIME__);
       
-      ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      ImGui::NewLine();
 
       ImGui::Text("Credits:");
       ImGui::BulletText("Luma: Pumbo (Filoppi)");
@@ -5416,7 +5443,7 @@ public:
       ImGui::BulletText("Testing & Suggestions: neocodex");
       ImGui::BulletText("Bug Hunter: Jorge");
 
-      ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      ImGui::NewLine();
       
       ImGui::Text("Third Party:");
       ImGui::BulletText("ReShade");
@@ -5435,7 +5462,7 @@ public:
       ImGui::BulletText("RenderDoc");
       ImGui::BulletText("shadPS4");
       
-      ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+      ImGui::NewLine();
 
       ImGui::Text("Referenced Shader Source Code:");
       ImGui::BulletText("XeGTAO"); ImGui::SameLine(); if (ImGui::Button("Open GitHub Link")) Website::OpenWebsite("https://github.com/GameTechDev/XeGTAO");
@@ -5458,6 +5485,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       Globals::SetGlobals(PROJECT_NAME, "Hatsune Miku: Project DIVA Mega Mix+ - Luma Mod");
       Globals::VERSION = 1;
 
+      // fuillscreen state
       prevent_fullscreen_state = true;
       force_borderless = false;
       
