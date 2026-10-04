@@ -294,7 +294,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_TONEMAP_IDENTIFY           = char_ptr_crc32("CUSTOM_TONEMAP_IDENTIFY");
    constexpr uint32_t CUSTOM_SDR_1                      = char_ptr_crc32("CUSTOM_SDR_1");
    constexpr uint32_t CUSTOM_PERCHANNELLUMAEMULATE      = char_ptr_crc32("CUSTOM_PERCHANNELLUMAEMULATE");
-   constexpr uint32_t CUSTOM_BLOOM_THRESHOLD_1            = char_ptr_crc32("CUSTOM_BLOOM_THRESHOLD_1");
+   constexpr uint32_t CUSTOM_BLOOM_THRESHOLD_1          = char_ptr_crc32("CUSTOM_BLOOM_THRESHOLD_1");
    constexpr uint32_t XEGTAO_SLICECOUNT                 = char_ptr_crc32("XEGTAO_SLICECOUNT");
    constexpr uint32_t XEGTAO_STEPSPERSLICE              = char_ptr_crc32("XEGTAO_STEPSPERSLICE");
    constexpr uint32_t XEGTAO_HALFRES                    = char_ptr_crc32("XEGTAO_HALFRES");
@@ -309,6 +309,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t XEGTAO_THREADS_DENOISE            = char_ptr_crc32("XEGTAO_THREADS_DENOISE");
    constexpr uint32_t CUSTOM_PS4BLUR_1                  = char_ptr_crc32("CUSTOM_PS4BLUR_1");
    constexpr uint32_t CUSTOM_HDRTONEMAPONSDR            = char_ptr_crc32("CUSTOM_HDRTONEMAPONSDR");
+   constexpr uint32_t CUSTOM_SSAA_FILTER                = char_ptr_crc32("CUSTOM_SSAA_FILTER");
 
    void OnInit()
    {
@@ -336,6 +337,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_PROGRESSBAR", '0', true, false, "Play head progress bar.", 2},
          {"CUSTOM_PS4BLUR_1", '0', true, false, "PS4 frame blur / ghosting.", 2},
          {"CUSTOM_BLOOM_THRESHOLD_1", '0', true, false, "Bloom threshold mode.", 4},
+         {"CUSTOM_SSAA_FILTER", '0', true, false, "SSAA downsample filter", 2},
          {"CUSTOM_HDRTONEMAPONSDR", '0', true, false, "Use new HDR tonemapping in SDR path.", 1},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
          {"XEGTAO_SLICECOUNT", '1', true, false, "XeGTAO samples.", 6},
@@ -1009,6 +1011,73 @@ namespace SeparateUIBrightness
       
       reshade::get_config_value(runtime, NAME, reshadesave_menu, brightness_menu);
       reshade::get_config_value(runtime, NAME, reshadesave_game, brightness_game);
+   }
+}
+
+namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/src/SSAAEnable/dllmain.cpp
+{
+   uint2 render_resolution = { 0, 0 };
+   bool enabled = false;
+   
+   constexpr const char* Luma_MegaMix_Final = "Luma_MegaMix_Final"; // file & shader name
+   
+   void OnInit()
+   {
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_Final), ShaderDefinition{ Luma_MegaMix_Final, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "main", {{"CUSTOM_SSAA", "1"}} });
+   }
+   
+   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      [[likely]] if (render_resolution.x > 0) return;
+
+      // RTV0 for resolution
+      ComPtr<ID3D11RenderTargetView> rtv0;
+      native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+      ASSERT_MSG(rtv0 != nullptr, "SSAA::OnTonemapDraw(): Failed to get RTV0.");
+
+      ComPtr<ID3D11Resource> res;
+      rtv0->GetResource(res.put());
+
+      ComPtr<ID3D11Texture2D> tex;
+      auto hr = res->QueryInterface(IID_PPV_ARGS(tex.put()));
+      ASSERT_MSG(SUCCEEDED(hr), "SSAA::OnTonemapDraw(): Failed query.");
+
+      D3D11_TEXTURE2D_DESC desc;
+      tex->GetDesc(&desc);
+
+      render_resolution = { desc.Width, desc.Height };
+
+      // check resolution TODO: instead of this, use memory hack?
+      uint rtv_pix = desc.Width * desc.Height;
+      uint native_pix = device_data.display_resolution.x * device_data.display_resolution.y;
+      uint thres = native_pix * 1.67f;
+      enabled = rtv_pix > thres;
+      reshade::log::message(reshade::log::level::info, std::format("SSAA::OnTonemapDraw(): SSAA {} (RTV0: {}x{}, Native: {}x{})", enabled ? "enabled" : "disabled", desc.Width, desc.Height, device_data.display_resolution.x, device_data.display_resolution.y).c_str());
+   }
+      
+   // normal Final isn't drawn when SSAA. we must find other ways to check
+   bool IsFinalDrawing(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (!enabled) return false;
+
+      // must be after tonemap (else, it's redundant anyways)
+      if (!TonemapInfo::GetDrawnTonemap(cb_luma_global_settings.GameSettings.TonemapInfo)) return false;
+
+      // must be "sprite_simplest_0x26AF16B8"
+      if (ps != 0x26AF16B8) return false;
+
+      return true;
+   }
+
+   void OnDrawFinal(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      if (!enabled) return;
+
+      // set PS to ours
+      native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_Final)).get(), nullptr, 0);
+
+      // set linear sampler s1
+      native_device_context->PSSetSamplers(1, 1, &device_data.sampler_state_linear);
    }
 }
 
@@ -3144,7 +3213,7 @@ namespace AntiAliasing
       DLAA,
    };
    Enabled enabled = Vanilla;
-      constexpr const char* reshadesave_enabled = "AntiAliasingEnabled";
+   constexpr const char* reshadesave_enabled = "AntiAliasingEnabled";
 
    enum State : uint8_t
    {
@@ -3155,7 +3224,6 @@ namespace AntiAliasing
       Done,
    };
    State state; // denotes next shader to be drawn
-      
 
    constexpr const char* Luma_DLAA = "Luma_DLAA";
    constexpr const char* Luma_DLAA_VS = "Luma_DLAA_VS";
@@ -3509,7 +3577,7 @@ namespace PS4Blur
       if (!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_PS4BLUR_1)) return;
       if (DEVELOPMENT && !IsModEnabled()) return;
 
-      // get RTV0 size
+      // get RTV0 size (because SRV0 can be 2x SSAA!)
       ComPtr<ID3D11RenderTargetView> rtv0;
       native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
       ASSERT_MSG(rtv0 != nullptr, "PS4Blur: RTV0 is null in OnDrawFinal");
@@ -3701,6 +3769,9 @@ public:
 
       // OutputHandling
       OutputHandling::OnInit();
+
+      // SSAA
+      SSAA::OnInit();
       
       // ShaderDefines
       ShaderDefineInfo::OnInit();
@@ -3928,7 +3999,8 @@ public:
             cb_luma_global_settings.GameSettings.TonemapInfo = ti;
             device_data.cb_luma_global_settings_dirty = true; //reupload for later shaders
 
-            // event
+            // event (TODO: slight inefficiency as they might all check RTV0, but it's just to setup, rare)
+            SSAA::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             Bloom::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             SpotLightShadows::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             DepthOfField::OnTonemapAndFinalDraw();
@@ -3949,7 +4021,7 @@ public:
       // FINAL /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       
       if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
-         ps == ShaderHashesLists::Final)
+         (ps == ShaderHashesLists::Final || SSAA::IsFinalDrawing(native_device, native_device_context, cmd_list_data, device_data, ps)))
       {
          //drawn
          cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::SetDrawnFinalTrue(cb_luma_global_settings.GameSettings.TonemapInfo);
@@ -3964,7 +4036,8 @@ public:
          // }
 
          // event
-         PS4Blur::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data);
+         SSAA::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data); // can replace PS
+         PS4Blur::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data); // can replace SRV, RTV, Viewport
          DepthOfField::OnTonemapAndFinalDraw();
 
          return DrawOrDispatchOverrideType::None;
@@ -4806,6 +4879,18 @@ public:
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Btw, FXAA never seems to draw.");
          ImGui::PopStyleColor();
+
+         ImGui::NewLine();
+         DrawColoredSubHeader("Super Sampling Anti-Aliasing (SSAA)");
+
+         if (!SSAA::enabled)
+            if (ImGui::Button("Download SSAA Enabled by korenkonder")) Website::OpenWebsite("https://github.com/korenkonder/MMPlusMods/releases#release-SSAAEnable-1.03");
+         
+         if (!SSAA::enabled) ImGui::BeginDisabled();
+         {
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSAA_FILTER, "Filter", { "Point (Top Left Inner Pixel)", "Box (4 Inner Pixel Average)", "Mitchell-Netravali (4x4)" }, "The filter used to downsample the SSAA results to the final output.");
+         }
+         if (!SSAA::enabled) ImGui::EndDisabled();
       }
       ImGui::PopID();
 
