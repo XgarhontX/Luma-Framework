@@ -2985,7 +2985,7 @@ namespace Bloom
 namespace SpotLightShadows
 {
    bool enabled = false;
-      constexpr const char* reshadesave_enabled = "SpotLightShadowsEnabled";
+   constexpr const char* reshadesave_enabled = "SpotLightShadowsEnabled";
    
    enum State : uint8_t
    {
@@ -3722,6 +3722,560 @@ namespace LUTBiasCached
    }
 }
 
+namespace ShadowMap
+{
+   /*
+      Main buffer: 2048x2048 R32F
+         Used by both character and world
+         Downsamples to 512x512 R32F
+
+      Usage:
+         - SRV6 World A (g_shadow_textures_0_) 512x512 RGBA8
+            - Used by forward render lighting after SSS
+         - SRV7 World B (g_shadow_textures_1_) 512x512 RGBA8
+            - Used by forward render lighting after SSS
+         - SRV19 Depth High (g_shadow_depth_textures_0_) 2048x2048 R32F
+            - Used by pre-SSS 0x93881580 SRV19
+         - SRV20 Depth Low (g_shadow_depth_textures_1_) 512x512 R32F
+            - Used by forward render lighting after SSS
+   */
+      
+   bool enabled = false;
+   constexpr const char* reshadesave_enabled = "ShadowMapEnabled";
+
+   // ps that draws to shadow map tex before expand/downsample/blur
+   /*const*/ std::unordered_set<uint32_t> shadow_cast_shaders = { // TODO: if not a lot, use array
+      0xF2368D1C, // has alpha 
+      0x8BD626DD, // completely opaque
+      // TOOD: any more?
+   };
+
+   // shadow map & render progress state
+   enum State : uint8_t
+   {
+      ShadowCast,
+      
+      TexBDownsample0, // 0x58A712B5
+      TexB4TapBlur0, // 0x4E2A88FE
+      TexBCopy0, // 0x58A712B5
+      
+      DepthExpand0, // 0x54B1FF52 (this means shadows have all cast)
+      DepthExpand1, // 0x54B1FF52
+      DepthDownsample0, // 0x5F8E8C7E
+      DepthExpand2, // 0x723E27C4
+      
+      TexADownsample0, // 0x58A712B5
+      Tex4TapBlur0, // 0x4E2A88FE
+      TexACopy0, // 0x58A712B5
+      
+      // then SSS
+      // then 2nd/duplicated world reflection rendering
+      // then main scene rendering
+
+      Done,
+   };
+   State state = ShadowCast; // denotes next shader to be drawn
+   bool state_texb_used_this_frame = false; // denotes if multiple objects (TexB) were used this frame, skipping unecessary stuff if not
+   uint8_t state_shadow_cast_count = 0; // counts how many shadow cast shaders have been drawn this frame
+
+   void ResetState()
+   {
+      state = ShadowCast;
+      state_texb_used_this_frame = false;
+      state_shadow_cast_count = 0;
+   }
+
+   namespace Resources
+   {
+      // resource/handle search state
+      enum State : uint8_t
+      {
+         FindDepthDrawHandle,
+         FindDepthUseHandle,
+         FindDepthDownHandle,
+         FindTexAndTexAHandle,
+         FindTexBHandle, // we are ready here since TexB (multiple objects) may not be used (placeholder: 4x4 white)
+         Done,
+      };
+      State state = FindDepthDrawHandle;
+      bool IsReady() { return state >= FindTexBHandle; }
+      
+      uint64_t orig_depthdraw_handle = 0; // 2048x2048 R32F
+      uint64_t orig_depthuse_handle = 0; // 2048x2048 R32F, bound SRV19
+      uint64_t orig_depthusedown_handle = 0; // 512x512 R32F, bound SRV20
+
+      uint64_t orig_tex_handle = 0; // 2048x2048 RGBA8
+      uint64_t orig_texdowna_handle = 0; // 512x512 RGBA8
+      uint64_t orig_texdownb_handle = 0; // 512x512 RGBA8
+      
+      void Reset_Handles()
+      {
+         state = FindDepthDrawHandle;
+         
+         orig_depthdraw_handle = 0;
+         orig_depthuse_handle = 0;
+         orig_depthusedown_handle = 0;
+         
+         orig_tex_handle = 0;
+         orig_texdowna_handle = 0;
+         orig_texdownb_handle = 0;
+      }
+
+      uint2 size_new = { 0, 0 };
+
+      ComPtr<ID3D11ShaderResourceView> depthdraw_srv = nullptr;
+      ComPtr<ID3D11DepthStencilView> depthdraw_dsv = nullptr;
+      
+      ComPtr<ID3D11ShaderResourceView> depthaux_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> depthaux_rtv = nullptr;
+      
+      ComPtr<ID3D11ShaderResourceView> depthuse_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> depthuse_rtv = nullptr;
+      
+      ComPtr<ID3D11ShaderResourceView> texdraw_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> texdraw_rtv = nullptr;
+      
+      ComPtr<ID3D11ShaderResourceView> texaux_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> texaux_rtv = nullptr;
+      
+      ComPtr<ID3D11ShaderResourceView> texusea_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> texusea_rtv = nullptr;
+
+      ComPtr<ID3D11ShaderResourceView> texuseb_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> texuseb_rtv = nullptr;
+      
+      void Reset_Resources()
+      {
+         size_new = { 0, 0 };
+         
+         depthdraw_srv.reset(); depthdraw_dsv.reset();
+         depthaux_srv.reset(); depthaux_rtv.reset();
+         depthuse_srv.reset(); depthuse_rtv.reset();
+         
+         texdraw_srv.reset(); texdraw_rtv.reset();
+         texaux_srv.reset(); texaux_rtv.reset();
+         texusea_srv.reset(); texusea_rtv.reset();
+         texuseb_srv.reset(); texuseb_rtv.reset();
+      }
+      
+      void Reset()
+      {
+         Reset_Resources();
+         Reset_Handles();
+      }
+
+      void Create(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context)
+      {
+         // size
+         size_new = { 4096, 4096 };
+         
+         // depth draw
+         D3D11_TEXTURE2D_DESC depth_desc;
+         depth_desc.Width = size_new.x; // TODO: user settings
+         depth_desc.Height = size_new.y;
+         depth_desc.MipLevels = 1;
+         depth_desc.ArraySize = 1;
+         depth_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+         depth_desc.SampleDesc.Count = 1;
+         depth_desc.SampleDesc.Quality = 0;
+         depth_desc.Usage = D3D11_USAGE_DEFAULT;
+         depth_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL;
+         depth_desc.CPUAccessFlags = 0;
+         depth_desc.MiscFlags = 0;
+
+         D3D11_DEPTH_STENCIL_VIEW_DESC depth_dsv_desc;
+         depth_dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+         depth_dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+         depth_dsv_desc.Flags = 0;
+         depth_dsv_desc.Texture2D.MipSlice = 0;
+
+         D3D11_SHADER_RESOURCE_VIEW_DESC depth_srv_desc;
+         depth_srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
+         depth_srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+         depth_srv_desc.Texture2D.MostDetailedMip = 0;
+         depth_srv_desc.Texture2D.MipLevels = 1;
+
+         D3D11_RENDER_TARGET_VIEW_DESC depth_rtv_desc;
+         depth_rtv_desc.Format = DXGI_FORMAT_R32_FLOAT;
+         depth_rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+         depth_rtv_desc.Texture2D.MipSlice = 0;
+
+         ComPtr<ID3D11Texture2D> tex_ptr;
+         auto hr0 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr0), "ShadowMap: Create() hr0");
+         auto hr1 = native_device->CreateShaderResourceView(tex_ptr.get(), &depth_srv_desc, depthdraw_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr1), "ShadowMap: Create() hr1");
+         auto hr2 = native_device->CreateDepthStencilView(tex_ptr.get(), &depth_dsv_desc, depthdraw_dsv.put());
+         ASSERT_MSG(SUCCEEDED(hr2), "ShadowMap: Create() hr2");
+
+         // depth aux & use
+         depth_desc.Format = DXGI_FORMAT_R32_FLOAT;
+         depth_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+
+         auto hr3 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr3), "ShadowMap: Create() hr3");
+         auto hr4 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, depthaux_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr4), "ShadowMap: Create() hr4");
+         auto hr5 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, depthaux_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr5), "ShadowMap: Create() hr5");
+
+         auto hr6 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr6), "ShadowMap: Create() hr6");
+         auto hr7 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, depthuse_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr7), "ShadowMap: Create() hr7");
+         auto hr8 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, depthuse_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr8), "ShadowMap: Create() hr8");
+         
+         // tex draw & aux
+         D3D11_TEXTURE2D_DESC tex_desc = depth_desc;
+         tex_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+         auto hr9 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr9), "ShadowMap: Create() hr9");
+         auto hr10 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texdraw_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr10), "ShadowMap: Create() hr10");
+         auto hr11 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texdraw_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr11), "ShadowMap: Create() hr11");
+
+         auto hr12 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr12), "ShadowMap: Create() hr12");
+         auto hr13 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texaux_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr13), "ShadowMap: Create() hr13");
+         auto hr14 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texaux_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr14), "ShadowMap: Create() hr14");
+
+         // tex use a & b
+         tex_desc.MipLevels = 4;
+
+         auto hr15 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr15), "ShadowMap: Create() hr15");
+         auto hr16 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texusea_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr16), "ShadowMap: Create() hr16");
+         auto hr17 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texusea_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr17), "ShadowMap: Create() hr17");
+
+         auto hr18 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr18), "ShadowMap: Create() hr18");
+         auto hr19 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texuseb_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr19), "ShadowMap: Create() hr19");
+         auto hr20 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texuseb_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr20), "ShadowMap: Create() hr20");
+
+         // log
+         reshade::log::message(reshade::log::level::info, std::format("ShadowMap: Created Resources for depth {}x{}, tex {}x{}", depth_desc.Width, depth_desc.Height, tex_desc.Width, tex_desc.Height).c_str());
+      }
+   }
+
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      if (!enabled) return DrawOrDispatchOverrideType::None;
+      if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
+      
+      // force skips
+      if (state_shadow_cast_count > 0)
+      {
+         if (state <= DepthExpand0 && state_shadow_cast_count && ps == 0x54B1FF52) state = DepthExpand0; // to DepthExpand0
+         else if (state == ShadowCast && state_shadow_cast_count && ps == 0x58A712B5) state = TexBDownsample0; // to TexBDownsample0
+      }
+
+      switch(state)
+      {
+         case ShadowCast:
+         {
+            bool is_shadow_cast_shader = shadow_cast_shaders.contains(ps);
+
+            // count++
+            if (is_shadow_cast_shader) state_shadow_cast_count++;
+
+            // most likely drawing but not registered as shadow cast shader
+            [[unlikely]] if (DEVELOPMENT && !is_shadow_cast_shader && state_shadow_cast_count > 0)
+            {
+               // log & assert
+               reshade::log::message(reshade::log::level::warning, std::format("ShadowMap: ShadowCast shader 0x{:X} drawn after {} other ShadowCast shaders this frame, but not registered in shadow_cast_shaders!", ps, state_shadow_cast_count).c_str());
+               ASSERT_MSG(false, "ShadowMap: ShadowCast shader drawn after other ShadowCast shaders this frame, but not registered in shadow_cast_shaders!");
+
+               // add
+               shadow_cast_shaders.insert(ps);
+            }
+
+            // TODO: if ready, replace
+
+            // TODO: clear to white on first
+            
+            break;
+         }
+         // (multiple ShadowCast shader draws expected in between)
+         case TexBDownsample0:
+         {
+            // gatekeep: ps
+            if (ps != 0x58A712B5) break;
+
+            // not ready
+            [[unlikely]] if (Resources::state == Resources::FindTexBHandle)
+            {
+               Resources::state = Resources::Done; // next
+
+               // get RTV0 handle
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldBDownsample0 FindTexBHandle");
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+               Resources::orig_texdownb_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+            }
+
+            // next
+            state = TexB4TapBlur0;
+            break;
+         }
+         case TexB4TapBlur0:
+         {
+            // gatekeep: ps
+            if (ps != 0x4E2A88FE)
+            {
+               ASSERT_MSG(false, "ShadowMap: TexB4TapBlur0 ps not 0x4E2A88FE!?!?!");
+               break;
+            }
+
+            // next
+            state = TexBCopy0;
+            break;
+         }
+         case TexBCopy0:
+         {
+            // gatekeep: ps
+            if (ps != 0x58A712B5)
+            {
+               ASSERT_MSG(false, "ShadowMap: TexBCopy0 ps not 0x58A712B5!?!?!");
+               break;
+            }
+            
+            // state
+            state_texb_used_this_frame = true;
+
+            // next (continues casting shadows)
+            state = ShadowCast;
+            break;
+         }
+         // (multiple ShadowCast shader draws expected in between)
+         case DepthExpand0: // ("main entry" is here, in a sense)
+         {
+            // gatekeep: ps
+            if (ps != 0x54B1FF52) break; 
+
+            // not ready
+            [[unlikely]] if (Resources::state == Resources::FindDepthDrawHandle) 
+            {
+               // gatekeep: query for MarkerName `anonymous-namespace'::Impl::apply_esm_filter
+               // TODO: do it? or too extra?
+               
+               Resources::state = Resources::FindDepthUseHandle; // next
+
+               // get SRV0 handle
+               ComPtr<ID3D11ShaderResourceView> srv0;
+               native_device_context->PSGetShaderResources(0, 1, srv0.put());
+               ASSERT_MSG(srv0 != nullptr, "ShadowMap: SRV0 null DepthExpand0 FindDepthHandle");
+               ComPtr<ID3D11Resource> res;
+               srv0->GetResource(res.put());
+               Resources::orig_depthdraw_handle = reinterpret_cast<uint64_t>(res.get());
+
+               // query SRV0 tex desc
+               ComPtr<ID3D11Texture2D> tex;
+               auto hr = res->QueryInterface(tex.put());
+               ASSERT_MSG(SUCCEEDED(hr), "ShadowMap: QueryInterface srv0_texture DepthExpand0 FindDepthHandle");
+               D3D11_TEXTURE2D_DESC tex_desc;
+               tex->GetDesc(&tex_desc);
+
+               // confirm 2048x2048 R32F (99% confidence, but just be sure)
+               if (tex_desc.Width != 2048 || tex_desc.Height != 2048 || tex_desc.Format != DXGI_FORMAT_R32_TYPELESS)
+               {
+                  MessageBoxA(nullptr, "Unexpected behavior: Shadow Map is not 2048x2048!\n\nAre you on highest settings?\nIs there another mod that is already boosting quality?", "Shadow Map", MB_OK | MB_ICONERROR);
+                  Resources::Reset();
+                  enabled = false;
+                  break;
+               }
+            }
+
+            // create resources
+            [[unlikely]] if (!Resources::depthdraw_srv.get()) Resources::Create(native_device, native_device_context);
+
+            // next
+            state = DepthExpand1;
+            break;
+         }
+         case DepthExpand1:
+         {
+            // gatekeep: ps
+            if (ps != 0x54B1FF52)
+            {
+               ASSERT_MSG(false, "ShadowMap: DepthExpand1 ps not 0x54B1FF52!?!?!");
+               break;
+            }
+
+            // not ready
+            [[unlikely]] if (Resources::state == Resources::FindDepthUseHandle)
+            {
+               Resources::state = Resources::FindDepthDownHandle; // next
+
+               // get RTV0 handle
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand1 FindDepthUseHandle");
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+               Resources::orig_depthuse_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+            }
+
+            // next
+            state = DepthDownsample0;
+            break;
+         }
+         case DepthDownsample0:
+         {
+            // gatekeep: ps
+            if (ps != 0x5F8E8C7E)
+            {
+               ASSERT_MSG(false, "ShadowMap: DepthDownsample0 ps not 0x5F8E8C7E!?!?!");
+               break;
+            }
+
+            // next
+            state = DepthExpand2;
+            break;
+         }
+         case DepthExpand2:
+         {
+            // gatekeep: ps
+            if (ps != 0x723E27C4)
+            {
+               ASSERT_MSG(false, "ShadowMap: DepthExpand2 ps not 0x723E27C4!?!?!");
+               break;
+            }
+
+            // not ready
+            [[unlikely]] if (Resources::state == Resources::FindDepthDownHandle)
+            {
+               Resources::state = Resources::FindTexAndTexAHandle; // next
+
+               // get RTV0 handle
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand2 FindDepthDownHandle");
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+               Resources::orig_depthusedown_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+            }
+
+            // next
+            state = TexADownsample0;
+            break;
+         }
+         case TexADownsample0:
+         {
+            // gatekeep: ps
+            if (ps != 0x58A712B5)
+            {
+               ASSERT_MSG(false, "ShadowMap: TexADownsample0 ps not 0x58A712B5!?!?!");
+               break;
+            }
+
+            // not ready
+            [[unlikely]] if (Resources::state == Resources::FindTexAndTexAHandle)
+            {
+               Resources::state = Resources::FindTexBHandle; // next
+
+               // get RTV0 handle
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldADownsample0 FindTexAHandle");
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+               Resources::orig_texdowna_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+
+               // query RTV0 tex desc
+               ComPtr<ID3D11Texture2D> tex;
+               auto hr = rtv0_resource->QueryInterface(tex.put());
+               ASSERT_MSG(SUCCEEDED(hr), "ShadowMap: QueryInterface rtv0_texture WorldADownsample0 FindTexAHandle");
+               D3D11_TEXTURE2D_DESC tex_desc;
+               tex->GetDesc(&tex_desc);
+
+               // confirm 512x512 RGBA8
+               if (tex_desc.Width != 512 || tex_desc.Height != 512 || tex_desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM)
+               {
+                  MessageBoxA(nullptr, "Unexpected behavior: Shadow Map downsampled is not 512x512!\n\nAre you on highest settings?\nIs there another mod that is already boosting quality?", "Shadow Map", MB_OK | MB_ICONERROR);
+                  Resources::Reset();
+                  enabled = false;
+                  break;
+               }
+
+               // get SRV0 handle
+               ComPtr<ID3D11ShaderResourceView> srv0;
+               native_device_context->PSGetShaderResources(0, 1, srv0.put());
+               ASSERT_MSG(srv0 != nullptr, "ShadowMap: SRV0 null WorldADownsample0 FindTexAHandle");
+               ComPtr<ID3D11Resource> srv0_resource;
+               srv0->GetResource(srv0_resource.put());
+               Resources::orig_tex_handle = reinterpret_cast<uint64_t>(srv0_resource.get());
+            }
+
+            // next
+            state = Tex4TapBlur0;
+            break;
+         }
+         case Tex4TapBlur0:
+         {
+            // gatekeep: ps
+            if (ps != 0x4E2A88FE)
+            {
+               ASSERT_MSG(false, "ShadowMap: Tex4TapBlur0 ps not 0x4E2A88FE!?!?!");
+               break;
+            }
+
+            // next
+            state = TexACopy0;
+            break;
+         }
+         case TexACopy0:
+         {
+            // gatekeep: ps
+            if (ps != 0x58A712B5)
+            {
+               ASSERT_MSG(false, "ShadowMap: TexACopy0 ps not 0x58A712B5!?!?!");
+               break;
+            }
+
+            // TODO: generate mips for TexA & TexB
+            if (Resources::IsReady())
+            {
+               
+            }
+
+            // next
+            state = Done;
+            break;
+         }
+         default: break;
+      }
+
+      return DrawOrDispatchOverrideType::None;
+   }
+
+   void OnPresent(ID3D11Device* native_device)
+   {
+      if (!enabled) return;
+      ResetState();
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
+   }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
+   }
+}
+
 #if DEVELOPMENT
 namespace LUTBuilderScan
 {
@@ -3922,6 +4476,9 @@ public:
 
       // // UISeparation
       // UISeparation::ResetOnSwapchain();
+
+      // ShadowMap
+      ShadowMap::HardReset();
       
       // SwapchainChangeCount
       GlobalsMegaMix::SwapchainChangeCount++;
@@ -3953,6 +4510,11 @@ public:
 
       XeGTAO::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
 
+      // ShadowMap ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      {
+         auto r = ShadowMap::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+         if (r != DrawOrDispatchOverrideType::None) return r;
+      }
       // SSS ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       {
          auto r = SSS::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
@@ -4241,6 +4803,9 @@ public:
       // DepthOfField
       DepthOfField::OnPresent();
 
+      // ShadowMap
+      ShadowMap::OnPresent(native_device);
+      
       // reset TonemapInfo
       GlobalsMegaMix::TonemapInfoBackup = cb_luma_global_settings.GameSettings.TonemapInfo;
       cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::GetDefaultReset();
@@ -4761,6 +5326,67 @@ public:
          DrawColoredSubHeader("DEVELOPMENT");
          if (ImGui::Button("Preview Toggle")) PreviewShaderOutput(device_data, 0x54415551);
 #endif
+      }
+      ImGui::PopID();
+      
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      ImGui::PushID("###ShadowMap");
+      if (DrawCollapsingHeaderEnabledColored("Shadow Map", ShadowMap::enabled))
+      {
+         DrawColoredSubHeader("Exponential Shadow Map Customization");
+
+         if (ImGui::Checkbox("Higher Resolution", &ShadowMap::enabled))
+            reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_enabled, ShadowMap::enabled);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Reduces artifacts on skin and world, but with a performance cost.");
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            ImGui::NewLine();
+            DrawColoredSubHeader("Original Resources");
+
+            constexpr auto c_green = ImVec4(0.4f, 1.f, 0.4f, 1.f);
+            constexpr auto c_red = ImVec4(1.f, 0.4f, 0.4f, 1.f);
+            constexpr auto c_yellow = ImVec4(1.f, 1.f, 0.4f, 1.f);
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthdraw_handle ? c_green : c_red);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Depth Draw: %s", ShadowMap::Resources::orig_depthdraw_handle ? "Found" : "Not Found");
+            ImGui::PopStyleColor();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthuse_handle > 0 ? c_green : c_red);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Depth Use: %s", ShadowMap::Resources::orig_depthuse_handle ? "Found" : "Not Found");
+            ImGui::PopStyleColor();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthusedown_handle > 0 ? c_green : c_red);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Depth Downsample: %s", ShadowMap::Resources::orig_depthusedown_handle ? "Found" : "Not Found");
+            ImGui::PopStyleColor();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_tex_handle > 0 ? c_green : c_red);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Shadow Map Texture: %s", ShadowMap::Resources::orig_tex_handle ? "Found" : "Not Found");
+            ImGui::PopStyleColor();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_texdowna_handle > 0 ? c_green : c_red);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Shadow Map Downsample A: %s", ShadowMap::Resources::orig_texdowna_handle ? "Found" : "Not Found");
+            ImGui::PopStyleColor();
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_texdownb_handle > 0 ? c_green : c_yellow);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Shadow Map Downsample B (Multiple Characters/Objects): %s", ShadowMap::Resources::orig_texdownb_handle ? "Found" : "Not Found");
+            ImGui::PopStyleColor();
+
+            if (ImGui::Button("Forget")) ShadowMap::Resources::Reset_Handles();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Forget to then begin search again.\nShould not be needed unless you change the game's resolution or something.");
+
+            ImGui::NewLine();
+            DrawColoredSubHeader("Auxiliary Resources");
+
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::depthdraw_dsv ? c_green : c_red);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Size: %dx%d", ShadowMap::Resources::size_new.x, ShadowMap::Resources::size_new.y);
+            ImGui::PopStyleColor();
+            
+            if (ImGui::Button("Reset")) ShadowMap::Resources::Reset_Resources();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Release new texture resources to recreate them.\nShould not be needed unless you change the game's resolution or something.");
+         }
       }
       ImGui::PopID();
 
