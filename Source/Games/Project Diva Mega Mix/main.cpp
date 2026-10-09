@@ -3725,9 +3725,9 @@ namespace LUTBiasCached
 namespace ShadowMap
 {
    /*
-      Main buffer: 2048x2048 R32F
+      Main buffer: 2048x2048 RGBA8 & R32F
          Used by both character and world
-         Downsamples to 512x512 R32F
+         Downsamples to 512x512 RGBA8 & R32F
 
       Usage:
          - SRV6 World A (g_shadow_textures_0_) 512x512 RGBA8
@@ -3735,7 +3735,7 @@ namespace ShadowMap
          - SRV7 World B (g_shadow_textures_1_) 512x512 RGBA8
             - Used by forward render lighting after SSS
          - SRV19 Depth High (g_shadow_depth_textures_0_) 2048x2048 R32F
-            - Used by pre-SSS 0x93881580 SRV19
+            - Used by SSS setup 0x93881580 SRV19
          - SRV20 Depth Low (g_shadow_depth_textures_1_) 512x512 R32F
             - Used by forward render lighting after SSS
    */
@@ -3759,8 +3759,8 @@ namespace ShadowMap
       TexB4TapBlur0, // 0x4E2A88FE
       TexBCopy0, // 0x58A712B5
       
-      DepthExpand0, // 0x54B1FF52 (this means shadows have all cast)
-      DepthExpand1, // 0x54B1FF52
+      DepthExpand0, // 0x54B1FF52 (this means shadows have all cast) (more accurately as gaussian horizontal blur)
+      DepthExpand1, // 0x54B1FF52 (more accurately as gaussian vertical blur)
       DepthDownsample0, // 0x5F8E8C7E
       DepthExpand2, // 0x723E27C4
       
@@ -3768,21 +3768,30 @@ namespace ShadowMap
       Tex4TapBlur0, // 0x4E2A88FE
       TexACopy0, // 0x58A712B5
       
-      // then SSS
+      SSSSetup, // 0x93881580,
+      
       // then 2nd/duplicated world reflection rendering
-      // then main scene rendering
+      // then BG Sprites rendering (maybe before 2nd world reflection rendering?)
+
+      MainRender,
 
       Done,
    };
    State state = ShadowCast; // denotes next shader to be drawn
    bool state_texb_used_this_frame = false; // denotes if multiple objects (TexB) were used this frame, skipping unecessary stuff if not
    uint8_t state_shadow_cast_count = 0; // counts how many shadow cast shaders have been drawn this frame
+   bool state_needs_mip_generate = false; // token consumed next draw call after granting, to generate mips for texA/texB
+   bool state_replacetoken_shadowcast = true; // only needs RTV/DSV replacement once for a subsection
+   bool state_replacetoken_sss = true; // only needs SRV replacement once for the whole pass
 
    void ResetState()
    {
       state = ShadowCast;
       state_texb_used_this_frame = false;
       state_shadow_cast_count = 0;
+      state_needs_mip_generate = false;
+      state_replacetoken_shadowcast = true;
+      state_replacetoken_sss = true;
    }
 
    namespace Resources
@@ -3831,6 +3840,9 @@ namespace ShadowMap
       
       ComPtr<ID3D11ShaderResourceView> depthuse_srv = nullptr;
       ComPtr<ID3D11RenderTargetView> depthuse_rtv = nullptr;
+
+      ComPtr<ID3D11ShaderResourceView> depthdownuse_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> depthdownuse_rtv = nullptr;
       
       ComPtr<ID3D11ShaderResourceView> texdraw_srv = nullptr;
       ComPtr<ID3D11RenderTargetView> texdraw_rtv = nullptr;
@@ -3851,6 +3863,7 @@ namespace ShadowMap
          depthdraw_srv.reset(); depthdraw_dsv.reset();
          depthaux_srv.reset(); depthaux_rtv.reset();
          depthuse_srv.reset(); depthuse_rtv.reset();
+         depthdownuse_srv.reset(); depthdownuse_rtv.reset();
          
          texdraw_srv.reset(); texdraw_rtv.reset();
          texaux_srv.reset(); texaux_rtv.reset();
@@ -3925,6 +3938,13 @@ namespace ShadowMap
          ASSERT_MSG(SUCCEEDED(hr7), "ShadowMap: Create() hr7");
          auto hr8 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, depthuse_rtv.put());
          ASSERT_MSG(SUCCEEDED(hr8), "ShadowMap: Create() hr8");
+
+         auto hr009 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
+         ASSERT_MSG(SUCCEEDED(hr009), "ShadowMap: Create() hr009");
+         auto hr010 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, depthdownuse_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr010), "ShadowMap: Create() hr010");
+         auto hr011 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, depthdownuse_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr011), "ShadowMap: Create() hr011");
          
          // tex draw & aux
          D3D11_TEXTURE2D_DESC tex_desc = depth_desc;
@@ -3946,6 +3966,7 @@ namespace ShadowMap
 
          // tex use a & b
          tex_desc.MipLevels = 4;
+         tex_desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
 
          auto hr15 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
          ASSERT_MSG(SUCCEEDED(hr15), "ShadowMap: Create() hr15");
@@ -3971,14 +3992,22 @@ namespace ShadowMap
       if (!enabled) return DrawOrDispatchOverrideType::None;
       if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
       
-      // force skips
+      // force skips state
       if (state_shadow_cast_count > 0)
       {
          if (state <= DepthExpand0 && state_shadow_cast_count && ps == 0x54B1FF52) state = DepthExpand0; // to DepthExpand0
          else if (state == ShadowCast && state_shadow_cast_count && ps == 0x58A712B5) state = TexBDownsample0; // to TexBDownsample0
       }
 
-      switch(state)
+      // generate mips token
+      if (state_needs_mip_generate)
+      {
+         state_needs_mip_generate = false; // consume
+         native_device_context->GenerateMips(Resources::texusea_srv.get());
+         if (state_texb_used_this_frame) native_device_context->GenerateMips(Resources::texuseb_srv.get());
+      }
+
+      switch (state)
       {
          case ShadowCast:
          {
@@ -3988,7 +4017,7 @@ namespace ShadowMap
             if (is_shadow_cast_shader) state_shadow_cast_count++;
 
             // most likely drawing but not registered as shadow cast shader
-            [[unlikely]] if (DEVELOPMENT && !is_shadow_cast_shader && state_shadow_cast_count > 0)
+            [[unlikely]] if (DEVELOPMENT && !is_shadow_cast_shader && state_shadow_cast_count > 0) // TODO: this wont detect ps prior to first known
             {
                // log & assert
                reshade::log::message(reshade::log::level::warning, std::format("ShadowMap: ShadowCast shader 0x{:X} drawn after {} other ShadowCast shaders this frame, but not registered in shadow_cast_shaders!", ps, state_shadow_cast_count).c_str());
@@ -3997,18 +4026,61 @@ namespace ShadowMap
                // add
                shadow_cast_shaders.insert(ps);
             }
+            
+            // ready
+            if (Resources::IsReady() && is_shadow_cast_shader && state_replacetoken_shadowcast)
+            {
+               // verify RTV0 & DSV are expected handles // TODO: very confident, so skip for PUBLISHING?
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               ComPtr<ID3D11DepthStencilView> dsv;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), dsv.put());
+               ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null ShadowCast");
+               ASSERT_MSG(dsv != nullptr, "ShadowMap: DSV null ShadowCast");
+               ComPtr<ID3D11Resource> rtv0_res;
+               rtv0->GetResource(rtv0_res.put());
+               ComPtr<ID3D11Resource> dsv_res;
+               dsv->GetResource(dsv_res.put());
+               uint64_t rtv0_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+               uint64_t dsv_handle = reinterpret_cast<uint64_t>(dsv_res.get());
+               if (rtv0_handle != Resources::orig_tex_handle || dsv_handle != Resources::orig_depthdraw_handle)
+               {
+                  reshade::log::message(reshade::log::level::warning, std::format("ShadowMap: ShadowCast RTV0 handle 0x{:X} or DSV handle 0x{:X} does not match expected orig_tex_handle 0x{:X} or orig_depthdraw_handle 0x{:X}", rtv0_handle, dsv_handle, Resources::orig_tex_handle, Resources::orig_depthdraw_handle).c_str());
+                  ASSERT_MSG(false, "ShadowMap: ShadowCast RTV0 or DSV handle does not match expected orig_tex_handle or orig_depthdraw_handle");
+                  break;
+               }
 
-            // TODO: if ready, replace
+               // clear to white if 1st
+               if (state_shadow_cast_count == 1)
+               {
+                  constexpr float clear_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+                  native_device_context->ClearRenderTargetView(Resources::texdraw_rtv.get(), clear_color);
+                  native_device_context->ClearDepthStencilView(Resources::depthdraw_dsv.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+               }
+               
+               // RTV0 & DSV as ours
+               state_replacetoken_shadowcast = false; // consume
+               native_device_context->OMSetRenderTargets(1, &Resources::texdraw_rtv, Resources::depthdraw_dsv.get());
 
-            // TODO: clear to white on first
+               // viewport to size
+               D3D11_VIEWPORT viewport;
+               viewport.TopLeftX = 1; // TODO: 1px, why?
+               viewport.TopLeftY = 1;
+               viewport.Width = static_cast<float>(Resources::size_new.x - 2); // TODO: original is 2046x2046, 2px margin, why?
+               viewport.Height = static_cast<float>(Resources::size_new.y - 2);
+               viewport.MinDepth = 0;
+               viewport.MaxDepth = 1;
+               native_device_context->RSSetViewports(1, &viewport);
+            }
             
             break;
          }
-         // (multiple ShadowCast shader draws expected in between)
+         // (multiple ShadowCast shader draws expected in between) ///////////////////////////
          case TexBDownsample0:
          {
             // gatekeep: ps
             if (ps != 0x58A712B5) break;
+            ASSERT_MSG(!state_texb_used_this_frame, "ShadowMap: TexBDownsample0 state_texb_used_this_frame true already!");
+            ASSERT_MSG(state_shadow_cast_count > 0, "ShadowMap: TexBDownsample0 state_shadow_cast_count 0!");
 
             // not ready
             [[unlikely]] if (Resources::state == Resources::FindTexBHandle)
@@ -4024,6 +4096,24 @@ namespace ShadowMap
                Resources::orig_texdownb_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
             }
 
+            // ready
+            else if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::texdraw_srv); // SRV0: tex draw
+               native_device_context->OMSetRenderTargets(1, &Resources::texuseb_rtv, nullptr); // RTV0: tex use b
+
+               // viewport to size
+               D3D11_VIEWPORT viewport;
+               viewport.TopLeftX = 0;
+               viewport.TopLeftY = 0;
+               viewport.Width = static_cast<float>(Resources::size_new.x);
+               viewport.Height = static_cast<float>(Resources::size_new.y);
+               viewport.MinDepth = 0;
+               viewport.MaxDepth = 1;
+               native_device_context->RSSetViewports(1, &viewport);
+            }
+
             // next
             state = TexB4TapBlur0;
             break;
@@ -4035,6 +4125,16 @@ namespace ShadowMap
             {
                ASSERT_MSG(false, "ShadowMap: TexB4TapBlur0 ps not 0x4E2A88FE!?!?!");
                break;
+            }
+
+            // ready
+            if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::texuseb_srv); // SRV0: tex use b
+               native_device_context->OMSetRenderTargets(1, &Resources::texaux_rtv, nullptr); // RTV0: tex aux
+
+               // TODO: better exponential shadow blurring
             }
 
             // next
@@ -4049,19 +4149,31 @@ namespace ShadowMap
                ASSERT_MSG(false, "ShadowMap: TexBCopy0 ps not 0x58A712B5!?!?!");
                break;
             }
+
+            // ready
+            if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::texaux_srv); // SRV0: tex aux
+               native_device_context->OMSetRenderTargets(1, &Resources::texuseb_rtv, nullptr); // RTV0: tex use b
+            }
             
             // state
             state_texb_used_this_frame = true;
 
             // next (continues casting shadows)
             state = ShadowCast;
+            state_replacetoken_shadowcast = true;
             break;
          }
-         // (multiple ShadowCast shader draws expected in between)
-         case DepthExpand0: // ("main entry" is here, in a sense)
+         // (multiple ShadowCast shader draws expected in between) ///////////////////////////
+         case DepthExpand0: // ("main entry" is here, in a sense) (more accurately as gaussian horizontal blur)
          {
             // gatekeep: ps
-            if (ps != 0x54B1FF52) break; 
+            if (ps != 0x54B1FF52) break;
+
+            // create resources
+            [[unlikely]] if (!Resources::depthdraw_srv.get()) Resources::Create(native_device, native_device_context);
 
             // not ready
             [[unlikely]] if (Resources::state == Resources::FindDepthDrawHandle) 
@@ -4096,14 +4208,29 @@ namespace ShadowMap
                }
             }
 
-            // create resources
-            [[unlikely]] if (!Resources::depthdraw_srv.get()) Resources::Create(native_device, native_device_context);
+            // ready
+            else if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::depthdraw_srv); // SRV0: depth draw
+               native_device_context->OMSetRenderTargets(1, &Resources::depthaux_rtv, nullptr); // RTV0: depth aux
+
+               // viewport to size
+               D3D11_VIEWPORT viewport;
+               viewport.TopLeftX = 0;
+               viewport.TopLeftY = 0;
+               viewport.Width = static_cast<float>(Resources::size_new.x);
+               viewport.Height = static_cast<float>(Resources::size_new.y);
+               viewport.MinDepth = 0;
+               viewport.MaxDepth = 1;
+               native_device_context->RSSetViewports(1, &viewport);
+            }
 
             // next
             state = DepthExpand1;
             break;
          }
-         case DepthExpand1:
+         case DepthExpand1: // (more accurately as gaussian vertical blur)
          {
             // gatekeep: ps
             if (ps != 0x54B1FF52)
@@ -4121,9 +4248,29 @@ namespace ShadowMap
                ComPtr<ID3D11RenderTargetView> rtv0;
                native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand1 FindDepthUseHandle");
-               ComPtr<ID3D11Resource> rtv0_resource;
-               rtv0->GetResource(rtv0_resource.put());
-               Resources::orig_depthuse_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+               ComPtr<ID3D11Resource> rtv0_res;
+               rtv0->GetResource(rtv0_res.put());
+               Resources::orig_depthuse_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+            }
+
+            // ready
+            else if (Resources::IsReady())
+            {
+               // verify handle
+               if (DEVELOPMENT)
+               {
+                  ComPtr<ID3D11RenderTargetView> rtv0;
+                  native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+                  ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand1 IsReady");
+                  ComPtr<ID3D11Resource> rtv0_res;
+                  rtv0->GetResource(rtv0_res.put());
+                  uint64_t rtv0_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+                  ASSERT_MSG(rtv0_handle == Resources::orig_depthuse_handle, "ShadowMap: DepthExpand1 RTV0 handle does not match expected orig_depthuse_handle");
+               }
+               
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::depthaux_srv); // SRV0: depth aux
+               native_device_context->OMSetRenderTargets(1, &Resources::depthuse_rtv, nullptr); // RTV0: depth use (no more RTV use starting here! used as SRV19 later)
             }
 
             // next
@@ -4137,6 +4284,24 @@ namespace ShadowMap
             {
                ASSERT_MSG(false, "ShadowMap: DepthDownsample0 ps not 0x5F8E8C7E!?!?!");
                break;
+            }
+
+            // ready
+            if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::depthuse_srv); // SRV0: depth use
+               native_device_context->OMSetRenderTargets(1, &Resources::depthaux_rtv, nullptr); // RTV0: depth aux
+
+               // viewport to size (originally downscaled to 512x512)
+               D3D11_VIEWPORT viewport;
+               viewport.TopLeftX = 0;
+               viewport.TopLeftY = 0;
+               viewport.Width = static_cast<float>(Resources::size_new.x);
+               viewport.Height = static_cast<float>(Resources::size_new.y);
+               viewport.MinDepth = 0;
+               viewport.MaxDepth = 1;
+               native_device_context->RSSetViewports(1, &viewport);
             }
 
             // next
@@ -4161,9 +4326,17 @@ namespace ShadowMap
                ComPtr<ID3D11RenderTargetView> rtv0;
                native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand2 FindDepthDownHandle");
-               ComPtr<ID3D11Resource> rtv0_resource;
-               rtv0->GetResource(rtv0_resource.put());
-               Resources::orig_depthusedown_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+               ComPtr<ID3D11Resource> rtv0_res;
+               rtv0->GetResource(rtv0_res.put());
+               Resources::orig_depthusedown_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+            }
+
+            // ready
+            else if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::depthaux_srv); // SRV0: depth aux
+               native_device_context->OMSetRenderTargets(1, &Resources::depthdownuse_rtv, nullptr); // RTV0: depth down use (no more RTV use starting here! used as SRV20 later)
             }
 
             // next
@@ -4217,6 +4390,14 @@ namespace ShadowMap
                Resources::orig_tex_handle = reinterpret_cast<uint64_t>(srv0_resource.get());
             }
 
+            // ready
+            else if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::texdraw_srv); // SRV0: tex draw
+               native_device_context->OMSetRenderTargets(1, &Resources::texusea_rtv, nullptr); // RTV0: tex use a
+            }
+
             // next
             state = Tex4TapBlur0;
             break;
@@ -4228,6 +4409,16 @@ namespace ShadowMap
             {
                ASSERT_MSG(false, "ShadowMap: Tex4TapBlur0 ps not 0x4E2A88FE!?!?!");
                break;
+            }
+
+            // ready
+            if (Resources::IsReady())
+            {
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::texusea_srv); // SRV0: tex use a
+               native_device_context->OMSetRenderTargets(1, &Resources::texaux_rtv, nullptr); // RTV0: tex aux
+
+               // TODO: better exponential shadow blurring
             }
 
             // next
@@ -4242,17 +4433,98 @@ namespace ShadowMap
                ASSERT_MSG(false, "ShadowMap: TexACopy0 ps not 0x58A712B5!?!?!");
                break;
             }
-
-            // TODO: generate mips for TexA & TexB
+            
+            // ready
             if (Resources::IsReady())
             {
-               
+               // replace
+               native_device_context->PSSetShaderResources(0, 1, &Resources::texaux_srv); // SRV0: tex aux
+               native_device_context->OMSetRenderTargets(1, &Resources::texusea_rtv, nullptr); // RTV0: tex use a
+
+               // generate mips
+               state_needs_mip_generate = true;
             }
 
             // next
-            state = Done;
+            state = SSSSetup;
             break;
          }
+         case SSSSetup: 
+         {
+            // skip: to MainRender
+            if (ps == 0x54415551) // SSS resolve shader // TODO: NPR doesnt have SSS 
+            {
+               state = MainRender;
+               break;
+            }
+            
+            // gatekeep: ps
+            if (ps != 0x93881580) break;
+
+            // ready
+            if (Resources::IsReady() && state_replacetoken_sss)
+            {
+               // verify SRV19-20 are expected handles (SRV6-7 are bound here too)
+               if (DEVELOPMENT) // 100% confidence
+               {
+                  ComPtr<ID3D11ShaderResourceView> srv19;
+                  native_device_context->PSGetShaderResources(19, 1, srv19.put());
+                  ComPtr<ID3D11Resource> srv19_res;
+                  srv19->GetResource(srv19_res.put());
+                  uint64_t srv19_handle = reinterpret_cast<uint64_t>(srv19_res.get());
+                  if (srv19_handle != Resources::orig_depthuse_handle)
+                  {
+                     ASSERT_ONCE_MSG(srv19_handle == Resources::orig_depthuse_handle, "ShadowMap: SSSSetup SRV19 handle does not match expected orig_depthuse_handle");
+                     break;
+                  }
+               }
+               
+               // replace SRV 19-20
+               state_replacetoken_sss = false; // consume
+               const std::array<ID3D11ShaderResourceView*, 2> srvs1 = { Resources::depthuse_srv.get(), Resources::depthdownuse_srv.get() };
+               native_device_context->PSSetShaderResources(19, srvs1.size(), srvs1.data());
+            }
+            
+            break;
+         }
+         case MainRender:
+         {
+            // replace
+            if (Resources::IsReady())
+            {
+               // gatekeep: not used
+               ComPtr<ID3D11ShaderResourceView> srv19;
+               native_device_context->PSGetShaderResources(19, 1, srv19.put());
+               if (!srv19) break; // failed: null
+               ComPtr<ID3D11Resource> srv19_res;
+               srv19->GetResource(srv19_res.put());
+               uint64_t srv19_handle = reinterpret_cast<uint64_t>(srv19_res.get());
+               if (srv19_handle != Resources::orig_depthuse_handle) break; // failed: not expected handle
+
+               // replace SRV 19-20
+               const std::array<ID3D11ShaderResourceView*, 2> srvs1 = { Resources::depthuse_srv.get(), Resources::depthdownuse_srv.get() };
+               native_device_context->PSSetShaderResources(19, srvs1.size(), srvs1.data());
+
+               // replace SRV 6-7
+               if (!state_texb_used_this_frame)
+               {
+                  // only 6
+                  native_device_context->PSSetShaderResources(6, 1, &Resources::texusea_srv);
+               }
+               else
+               {
+                  // 6-7
+                  const std::array<ID3D11ShaderResourceView*, 2> srvs2 = { Resources::texusea_srv.get(), Resources::texuseb_srv.get() };
+                  native_device_context->PSSetShaderResources(6, srvs2.size(), srvs2.data());
+               }
+
+               // next
+               state = Done;
+            }
+            
+            break;
+         }
+         case Done:
          default: break;
       }
 
