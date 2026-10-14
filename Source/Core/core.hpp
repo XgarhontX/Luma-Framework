@@ -9336,7 +9336,6 @@ namespace
          }
       }
       else
-#endif
       {
          // ForceToggleShaders(runtime, enabled);
          bool is_on = custom_shaders_enabled;
@@ -9345,6 +9344,7 @@ namespace
          ignore_indirect_upgraded_textures = !is_on;
          ignore_upgraded_samplers = !is_on;
       }
+#endif
       return false; // You can return true to deny the change
    }
 
