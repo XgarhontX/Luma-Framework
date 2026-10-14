@@ -89,6 +89,8 @@ namespace TonemapInfo
 
    bool GetIsDrawnTonemapOrFinal(int v) { return v & (FlagDrawnTonemap | FlagDrawnFinal); }
    bool GetIsDrawnTonemapButNotFinal(int v) { return v & FlagDrawnTonemap && !(v & FlagDrawnFinal); }
+
+   bool GetIsPBRFromIndex(int i) { return i <= 4; }
    
    const char* const TonemapDebugInfo[] = {
       "Complex", //0
@@ -2238,7 +2240,7 @@ namespace SSS
                replace_remaining--; // use
             }
 
-            // TODO: Project X guarantees "swapchain final" shader to draw for HQ mirrored world reflections before switching sides
+            // TODO: X Song Pack guarantees "swapchain final" shader to draw for HQ mirrored world reflections before switching sides
             
             return DrawOrDispatchOverrideType::None;
          }
@@ -3817,6 +3819,7 @@ namespace ShadowMap
 
    void ResetState()
    {
+      ASSERT_ONCE_MSG(state != MainRender, "ShadowMap: ResetState called while in MainRender state."); // this means we thought we need to replace more SRV usage, but it never happened!
       state = Silhouette;
       state_texb_used_this_frame = false;
       state_shadow_cast_count = 0;
@@ -3962,10 +3965,10 @@ namespace ShadowMap
       }
 
       bool is_dirty_check_token = true; // grant by ImGui open, so we dont have to recheck all each
-      bool TryCreateIfDirty(ID3D11Device* native_device)
+      void CreateIfDirty(ID3D11Device* native_device)
       {
          // token?
-         [[likely]] if (!is_dirty_check_token) return false;
+         [[likely]] if (!is_dirty_check_token) return;
          is_dirty_check_token = false; // consume
 
          // dirty?
@@ -3998,7 +4001,7 @@ namespace ShadowMap
             prev_enabled_color_mips = new_enabled_tex_mips;
             prev_color_mips_skip = color_mips_skip;
          }
-         if (!is_dirty) return false;
+         if (!is_dirty) return;
          
          // reset
          if (is_dirty) Reset_Resources();
@@ -4199,8 +4202,6 @@ namespace ShadowMap
             // log
             reshade::log::message(reshade::log::level::info, std::format("ShadowMap: Created Resources for tex {}x{}", color_size_new, color_size_new).c_str());
          }
-
-         return true;
       }
    }
 
@@ -4377,14 +4378,29 @@ namespace ShadowMap
       if (!IsEnabled()) return result;
       if (DEVELOPMENT && !IsModEnabled()) return result;
       
-      // force skips state
+      // force state
       if (state_shadow_cast_count > 0)
       {
-         if (state <= DepthExpand0 && state_shadow_cast_count && (ps == 0x54B1FF52 || ps == 0xCEDAC7C0)) state = DepthExpand0; // to DepthExpand0
-         else if (state == Silhouette && state_shadow_cast_count && ps == 0x58A712B5) state = TexBDownsample0; // to TexBDownsample0
+         // skip: DepthExpand0
+         if (state <= DepthExpand0 && state_shadow_cast_count && (ps == 0x54B1FF52 || ps == 0xCEDAC7C0))
+            state = DepthExpand0;
+         
+         // skip: TexBDownsample0
+         else if (state == Silhouette && state_shadow_cast_count && ps == 0x58A712B5)
+            state = TexBDownsample0;
+         
+         // backtrack: X Song Pack 100% res duplicate world reflections
+         else if (state == MainRender && ps == 0x93881580) 
+         {
+            state = SSSSetup;
+            state_replacetoken_sss = true; // grant token again
+         }
+         
+         // backtrack: X Song Pack 100% res duplicate world reflections + TV screen
+         else if (state == Done && (ps == ShaderHashesLists::ToSwapchain || ps == 0x4E2A88FE) && !TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
+            state = MainRender;
       }
 
-      BeginningOfSwitch:
       switch (state)
       {
          case Silhouette:
@@ -4536,7 +4552,7 @@ namespace ShadowMap
             state_is_pbr = ps == 0x54B1FF52;
 
             // create resources
-            Resources::TryCreateIfDirty(native_device);
+            Resources::CreateIfDirty(native_device);
 
             // not ready
             [[unlikely]] if (Resources::state == Resources::FindDepthDrawHandle) 
@@ -4754,7 +4770,7 @@ namespace ShadowMap
                   DrawWorldDownsamplePass(native_device, native_device_context, cmd_list_data, device_data, false);
                   result = DrawOrDispatchOverrideType::Replaced; // replaced
 
-                  // bind aux for debug view
+                  // bind aux for debug view (effective in capture next draw call)
                   if (DEVELOPMENT)
                   {
                      const std::array<ID3D11ShaderResourceView*, 9> srvs = {
@@ -4825,7 +4841,7 @@ namespace ShadowMap
             if (ps != 0x93881580) break;
 
             // ready
-            if (Resources::IsOriginalSearchReady() && Resources::IsDepthNewReady() && state_replacetoken_sss) // TODO: state_replacetoken_sss needed? should we just go next state after?
+            if (Resources::IsOriginalSearchReady() && Resources::IsDepthNewReady() && state_replacetoken_sss)
             {
                // verify SRV19-20 are expected handles (SRV6-7 are bound here too)
                if (DEVELOPMENT) // 100% confidence
@@ -4851,14 +4867,6 @@ namespace ShadowMap
          }
          case MainRender:
          {
-            // SPECIAL disgusting jump: Project X 100% res duplicate world reflections
-            if (ps == 0x93881580)
-            {
-               // redo switch on prev state
-               state = SSSSetup;
-               goto BeginningOfSwitch;
-            }
-            
             // replace
             if (Resources::IsOriginalSearchReady())
             {
@@ -4899,17 +4907,6 @@ namespace ShadowMap
             break;
          }
          case Done:
-         {
-            // SPECIAL disgusting jump: Project X 100% res duplicate world reflections + TV screen
-            if ((ps == ShaderHashesLists::ToSwapchain || ps == 0x4E2A88FE) && !TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo)) // copy or 4 tap blur before tonemap/final
-            {
-               // redo switch on prev state
-               state = MainRender;
-               goto BeginningOfSwitch;
-            }
-            
-            break;
-         }
          default: break;
       }
 
@@ -4939,19 +4936,377 @@ namespace ShadowMap
    }
 }
 
-namespace DuplicateWorldReflection
+namespace DuplicateWorldReflections
 {
-   const std::unordered_set<uint32_t> duplicate_world_reflection_ps = {
+   const std::unordered_set<uint32_t> draw_shaders = {
       0x208EEA46,
       0x8C19842C,
       0x74805C84,
    };
 
-   // 512x256 rgba16f
-
+   // 512x256 rgba16f (but alpha is a waste!)
    // (doesnt have 0x58A712B5 before!)
    // 0x4E2A88FE: 4 taps
    // 0x58A712B5: copy with multiplier
+   // (used as SRV15)
+
+   constexpr const char* reshadesave_enabled = "DuplicateWorldReflectionsEnabled";
+   bool enabled = false;
+
+   constexpr const char* reshadesave_blur_mips_count = "DuplicateWorldReflectionsBlurMipsCount";
+   constexpr int blur_mips_count_def = 2;
+   int blur_mips_count = blur_mips_count_def;
+
+   constexpr const char* reshadesave_desired_resolution_x = "DuplicateWorldReflectionsDesiredResolutionX";
+   constexpr const char* reshadesave_desired_resolution_y = "DuplicateWorldReflectionsDesiredResolutionY";
+   constexpr uint2 desired_resolution_def = {512, 256}; // int2 for reshade serialize
+   uint2 desired_resolution = desired_resolution_def;
+   
+   enum State : uint8_t
+   {
+      SSS, // waits for SSS if PBR
+      Draw, // replace draw_shaders with our resource and viewport
+      Blur, // 4 tap blur, bypassed for our own downsample, accounting g_color_scale & g_color_offset
+      Copy, // copies back to original resource, bypassed for our own upsample, accounting for g_color_scale
+      Use, // scan for SRV15 usage to replace with our resource
+      Done,
+   };
+   State state = SSS; // denotes what comes next
+   uint8_t state_draw_count = 0; // counts draw_shaders draws
+   bool state_noreset_is_pbr_last_frame = true; // updated on present
+   void ResetState()
+   {
+      ASSERT_MSG(state != Use, "DuplicateWorldReflections: ResetState() called while in Use state!"); // meaning: setup without any usage???
+      state = SSS;
+      state_draw_count = 0;
+   }
+
+   namespace Shaders
+   {
+      constexpr const char* Luma_MegaMix_DuplicateWorldReflections = "Luma_MegaMix_DuplicateWorldReflections"; // file
+      constexpr const char* Luma_MegaMix_DuplicateWorldReflections_MainVS = "Luma_MegaMix_DuplicateWorldReflections_MainVS"; // shader
+      constexpr const char* Luma_MegaMix_DuplicateWorldReflections_Down = "Luma_MegaMix_DuplicateWorldReflections_Down"; // shader
+      constexpr const char* Luma_MegaMix_DuplicateWorldReflections_DownFilter = "Luma_MegaMix_DuplicateWorldReflections_DownFilter"; // shader (Blur's g_color_scale & g_color_offset)
+      constexpr const char* Luma_MegaMix_DuplicateWorldReflections_UpFilter = "Luma_MegaMix_DuplicateWorldReflections_UpFilter"; // shader (Copy's g_color_scale)
+      constexpr const char* Luma_MegaMix_DuplicateWorldReflections_Up = "Luma_MegaMix_DuplicateWorldReflections_Up"; // shader
+      
+      void OnInit()
+      {
+         // native_shaders_definitions
+      }
+   }
+
+   namespace Resources
+   {
+      uint64_t orig_handle_color = 0; // both drawing and blurred
+      uint64_t orig_handle_depth = 0; 
+      bool IsReadyHandles() { return orig_handle_color != 0; }
+
+      void Reset_Handles()
+      {
+         orig_handle_color = 0;
+         orig_handle_depth = 0;
+      }
+
+      uint2 effective_resolution = {0,0};
+      bool IsReadyResource() { return effective_resolution.x > 0; }
+      uint8_t effective_mips_count = 0;
+
+      ComPtr<ID3D11DepthStencilView> dsv;
+      
+      std::vector<ID3D11ShaderResourceView*> srvs_x(8);
+      std::vector<ID3D11RenderTargetView*>   rtvs_x(8);
+      
+      std::vector<ID3D11ShaderResourceView*> srvs_y(8);
+      std::vector<ID3D11RenderTargetView*>   rtvs_y(8);
+
+      void Reset_Resources()
+      {
+         effective_resolution = {0,0};
+         dsv = nullptr;
+         ResetCOMArray(srvs_x); ResetCOMArray(rtvs_x);
+         ResetCOMArray(srvs_y); ResetCOMArray(rtvs_y);
+      }
+
+      void Reset()
+      {
+         Reset_Handles();
+         Reset_Resources();
+      }
+
+      bool is_dirty_token = true;
+      void CreateIfDirty(ID3D11Device* native_device)
+      {
+         // gatekeep: token
+         [[likely]] if (!is_dirty_token) return;
+         is_dirty_token = false;
+
+         // effective
+         static uint2 effective_resolution_prev = {0,0};
+         uint2 effective_resolution_new = desired_resolution; // resolution
+         effective_resolution_new.x = max(16u, effective_resolution_new.x);
+         effective_resolution_new.y = max(16u, effective_resolution_new.y);
+
+         static uint8_t effective_mips_count_prev = 0; // mips count
+         uint8_t effective_mips_count_new = blur_mips_count;
+         effective_mips_count_new = min(effective_mips_count_new, srvs_x.size());
+         effective_mips_count_new = max(1, effective_mips_count_new);
+
+         // dirty?
+         bool is_dirty =
+            effective_resolution_new != effective_resolution_prev
+         || effective_mips_count_new != effective_mips_count_prev;
+
+         // save to prev
+         effective_resolution_prev = effective_resolution_new;
+         effective_mips_count_prev = effective_mips_count_new;
+
+         // gatekeep: dirty
+         if (!is_dirty) return;
+
+         // clear
+         Reset_Resources();
+         effective_resolution = effective_resolution_new;
+         effective_mips_count = effective_mips_count_new;
+
+         // create setup
+         ComPtr<ID3D11Texture2D> tex;
+         
+         D3D11_TEXTURE2D_DESC tex_desc = {};
+         tex_desc.Width = effective_resolution_new.x;
+         tex_desc.Height = effective_resolution_new.y;
+         tex_desc.ArraySize = 1;
+         tex_desc.SampleDesc.Count = 1;
+         tex_desc.Usage = D3D11_USAGE_DEFAULT;
+         tex_desc.MiscFlags = 0;
+
+         // depth
+         tex_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+         tex_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+         tex_desc.MipLevels = 1;
+
+         auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+         ASSERT_MSG(SUCCEEDED(hr0), "DuplicateWorldReflections: Create hr0");
+
+         D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+         dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+         dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+         dsv_desc.Flags = 0;
+         dsv_desc.Texture2D.MipSlice = 0;
+         auto hr1 = native_device->CreateDepthStencilView(tex.get(), &dsv_desc, dsv.put());
+         ASSERT_MSG(SUCCEEDED(hr1), "DuplicateWorldReflections: Create hr1");
+
+         // color y
+         // TODO: make mip chain for blur
+         tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+         tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+         tex_desc.MipLevels = 1;
+         auto hr2 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+         ASSERT_MSG(SUCCEEDED(hr2), "DuplicateWorldReflections: Create hr2");
+         auto hr3 = native_device->CreateShaderResourceView(tex.get(), nullptr, &srvs_y[0]);
+         ASSERT_MSG(SUCCEEDED(hr3), "DuplicateWorldReflections: Create hr3");
+         auto hr4 = native_device->CreateRenderTargetView(tex.get(), nullptr, &rtvs_y[0]);
+         ASSERT_MSG(SUCCEEDED(hr4), "DuplicateWorldReflections: Create hr4");
+
+         // color x
+         // TODO: make
+
+         reshade::log::message(reshade::log::level::info, std::format("DuplicateWorldReflections: Created resources {}x{}, {} mips", effective_resolution.x, effective_resolution.y, effective_mips_count).c_str());
+      }
+   }
+
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
+      if (!enabled) return result;
+      if (DEVELOPMENT && !IsModEnabled()) return result;
+
+      // skip to state
+      if (state == Draw && state_draw_count > 0)
+      {
+         // started blurring
+         if (ps == 0x4E2A88FE) state = Blur;
+         if (ps == 0x58A712B5) ASSERT_MSG(false, "DuplicateWorldReflections: Unexpected Copy shader 0x58A712B5 before Blur 0x4E2A88FE!"); // this means we got the wrong pass
+      }
+
+      switch (state)
+      {
+         case SSS:
+         {
+            // next: if SSS is done, or NPR (no SSS)
+            if (ps == 0x54415551 || !state_noreset_is_pbr_last_frame)
+            {
+               state = Draw;
+            }
+
+            break;
+         }
+         case Draw:
+         {
+            bool is_draw_shader = draw_shaders.contains(ps);
+            
+            // continuously scan for orig handle RTV usage to catch missing draw_shaders
+            if (DEVELOPMENT && Resources::IsReadyHandles() && !is_draw_shader)
+            {
+               ComPtr<ID3D11RenderTargetView> rtv;
+               native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+               if (!rtv) goto AfterDrawShadersCheck; // failed: null
+               
+               ComPtr<ID3D11Resource> res;
+               rtv->GetResource(res.put());
+               
+               uint64_t handle = reinterpret_cast<uint64_t>(res.get());
+               if (handle != Resources::orig_handle_color) goto AfterDrawShadersCheck; // failed: not expected handle
+      
+               ASSERT_ONCE_MSG(false, "DuplicateWorldReflections: Found new draw_shaders, check log!");
+               reshade::log::message(reshade::log::level::warning, std::format("DuplicateWorldReflections: Found new draw_shaders! 0x{:08X}", ps).c_str());
+            }
+            AfterDrawShadersCheck:
+
+            // drawing!
+            if (is_draw_shader)
+            {
+               // ++
+               state_draw_count++;
+
+               // not ready
+               [[unlikely]] if (!Resources::IsReadyHandles())
+               {
+                  // get RTV & DSV
+                  ComPtr<ID3D11RenderTargetView> rtv;
+                  ComPtr<ID3D11DepthStencilView> dsv;
+                  native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
+                  ASSERT_MSG(rtv != nullptr, "DuplicateWorldReflections: RTV null Draw");
+
+                  // save handles
+                  ComPtr<ID3D11Resource> rtv_res;
+                  rtv->GetResource(rtv_res.put());
+                  Resources::orig_handle_color = reinterpret_cast<uint64_t>(rtv_res.get());
+
+                  ComPtr<ID3D11Resource> dsv_res;
+                  dsv->GetResource(dsv_res.put());
+                  Resources::orig_handle_depth = dsv_res ? reinterpret_cast<uint64_t>(dsv_res.get()) : 0;
+
+                  // verify size & format
+                  ComPtr<ID3D11Texture2D> tex;
+                  auto hr = rtv_res->QueryInterface(tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr), "DuplicateWorldReflections: QueryInterface rtv_texture Draw");
+                  D3D11_TEXTURE2D_DESC tex_desc;
+                  tex->GetDesc(&tex_desc);
+                  if (tex_desc.Width != 512 || tex_desc.Height != 256 || tex_desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+                  {
+                     // TODO: what if there are false positives?
+                     MessageBoxA(nullptr, "Unexpected behavior: Duplicate World Reflections is not 512x256!\n\nAre you on highest graphics settings?\nIs there another mod that is already changing quality (excluding X Song Pack)?\n\nNew Duplicate World Reflections features will now disable.", "Duplicate World Reflections", MB_OK | MB_ICONERROR);
+                     Resources::Reset();
+                     enabled = false;
+                     break;
+                  }
+
+                  // verify viewport
+                  if (DEVELOPMENT)
+                  {
+                     D3D11_VIEWPORT viewport;
+                     UINT num_viewports = 1;
+                     native_device_context->RSGetViewports(&num_viewports, &viewport);
+                     ASSERT_MSG(viewport.Width == 512 && viewport.Height == 256, "DuplicateWorldReflections");
+                     ASSERT_MSG(viewport.TopLeftX == 0 && viewport.TopLeftY == 0, "DuplicateWorldReflections");
+                     ASSERT_MSG(viewport.MinDepth == 0 && viewport.MaxDepth == 1, "DuplicateWorldReflections");
+                     ASSERT_MSG(num_viewports == 1, "DuplicateWorldReflections");
+
+                     reshade::log::message(reshade::log::level::info, std::format("DuplicateWorldReflections: Viewport {}x{}, TopLeft {}x{}, Depth {}-{}", viewport.Width, viewport.Height, viewport.TopLeftX, viewport.TopLeftY, viewport.MinDepth, viewport.MaxDepth).c_str());
+                  }
+               }
+
+               // ready
+               else
+               {
+                  // create resources
+                  Resources::CreateIfDirty(native_device);
+
+                  // replace
+                  if (Resources::IsReadyResource())
+                  {
+                     native_device_context->OMSetRenderTargets(1, &Resources::rtvs_y[0], Resources::dsv.get());
+
+                     D3D11_VIEWPORT viewport;
+                     viewport.TopLeftX = 0;
+                     viewport.TopLeftY = 0;
+                     viewport.Width  = static_cast<float>(Resources::effective_resolution.x);
+                     viewport.Height = static_cast<float>(Resources::effective_resolution.y);
+                     viewport.MinDepth = 0;
+                     viewport.MaxDepth = 1;
+                     native_device_context->RSSetViewports(1, &viewport);
+                  }
+               }
+            }
+            
+            break;
+         }
+         case Blur:
+         {
+            // this is always next
+            ASSERT_MSG(ps == 0x4E2A88FE, "DuplicateWorldReflections: Unexpected, Blur shader 0x4E2A88FE not next!");
+
+            // TODO: blurring downsample
+            
+            result = DrawOrDispatchOverrideType::Skip; 
+            state = Copy;
+            break;
+         }
+         case Copy:
+         {
+            // this is always next
+            ASSERT_MSG(ps == 0x58A712B5, "DuplicateWorldReflections: Unexpected, Copy shader 0x58A712B5 not next!");
+
+            // TODO: blurring upsample
+            
+            result = DrawOrDispatchOverrideType::Skip;
+            state = Use;
+            break;
+         }
+         case Use:
+         {
+            // ready
+            if (Resources::IsReadyHandles() && Resources::IsReadyResource())
+            {
+               // scan SRV15 usage to replace with our resource
+               ComPtr<ID3D11ShaderResourceView> srv15;
+               native_device_context->PSGetShaderResources(15, 1, srv15.put());
+               if (!srv15) break;
+               
+               ComPtr<ID3D11Resource> srv15_res;
+               srv15->GetResource(srv15_res.put());
+               
+               uint64_t srv15_handle = reinterpret_cast<uint64_t>(srv15_res.get());
+               if (srv15_handle != Resources::orig_handle_color) break;
+               
+               native_device_context->PSSetShaderResources(15, 1, &Resources::srvs_y[0]);
+               state = Done;
+            }
+
+            break;
+         }
+         case Done:
+         default: break;
+      }
+
+      return result;
+   }
+   
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
+      reshade::get_config_value(runtime, NAME, reshadesave_blur_mips_count, blur_mips_count);
+      reshade::get_config_value(runtime, NAME, reshadesave_desired_resolution_x, desired_resolution.x);
+      reshade::get_config_value(runtime, NAME, reshadesave_desired_resolution_y, desired_resolution.y);
+   }
+
+   void OnPresent(ID3D11Device* native_device)
+   {
+      if (!enabled) return;
+      state_noreset_is_pbr_last_frame = TonemapInfo::GetIsPBRFromIndex(TonemapInfo::GetIndex(cb_luma_global_settings.GameSettings.TonemapInfo)); // this is called before clearing TonemapInfo
+      ResetState();
+   }
 }
 
 #if DEVELOPMENT
@@ -5600,6 +5955,8 @@ public:
       DepthOfField::OnLoad(runtime);
 
       ShadowMap::OnLoad(runtime);
+
+      DuplicateWorldReflections::OnLoad(runtime);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
