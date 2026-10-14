@@ -810,6 +810,7 @@ namespace DLSSJitter
 
    constexpr byte is_sync_needed_max = 4;
    static byte is_sync_needed = is_sync_needed_max;
+   static bool is_sync_always = false;
    static void SetSyncNeeded() { is_sync_needed = is_sync_needed_max; }
 
    //if true, you can set jitter OnPresent
@@ -1041,17 +1042,20 @@ namespace DLSSJitter
          ImGui::NewLine(); ///////////////////////
          
          if (ImGui::Button("Fix: Force Resync")) SetSyncNeeded();
-         if (ImGui::IsItemHovered()) ImGui::SetTooltip("(SHOULDN'T BE NEEDED! Please report if otherwise.)\nForce a rescan to see which of the 2 position is used next.\n\nExplanation: There are 2 jitter offset;\nThe one used or will be used.\nWe can only override the one that will be used.");
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("(SHOULDN'T BE NEEDED! Please report if otherwise.)\nForce a rescan to see which of the 2 positions will be used next for safe override.");
+
+         if (ImGui::Checkbox("Always Resync", &is_sync_always)) reshade::set_config_value(runtime, NAME, "DLSSJitterIsSyncAlways", is_sync_always);
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("(SHOULDN'T BE NEEDED! Please report if otherwise.)\nForce a rescan every frame.\n\nThere is a slight waste to copy the constant buffer with jitter from GPU to CPU.");
          
          if (is_sync_needed == 0)
          {
             if (ImGui::Button("Fix: Force Index Flip/Change"))
                frame++;
             if (ImGui::IsItemHovered())
-               ImGui::SetTooltip("(SHOULDN'T BE NEEDED! Please report if otherwise.)\nIf Test Sync causes an \"earthquake\", this should fix it.\n\nExplanation: There are 2 jitter offset;\nThe one used or will be used.\nWe can only override the one that will be used.");
+               ImGui::SetTooltip("(SHOULDN'T BE NEEDED! Please report if otherwise.)\nIf Test Sync causes an earthquake shake, this should fix it.");
          }
          ImGui::Checkbox("Test Sync", &test_sync);
-         if (ImGui::IsItemHovered()) ImGui::SetTooltip("(SHOULDN'T BE NEEDED! Please report if otherwise.)\nScales jitter 4x!\nIf desynced, it'll look like an earthquake.");
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("(This setting won't be saved.)\nScales jitter 4x!\nIf desynced, it'll look like an earthquake.");
 
          ImGui::BulletText("Sync Tokens: %d", is_sync_needed);
          ImGui::BulletText("Writing to index: %s", (frame % 2 == 0) ? "0" : "1");
@@ -1081,6 +1085,7 @@ namespace DLSSJitter
       }
       
       reshade::get_config_value(runtime, NAME, "DLSSJitterEnabled", enabled);
+      reshade::get_config_value(runtime, NAME, "DLSSJitterIsSyncAlways", is_sync_always);
    }
 }
 #endif
@@ -2869,22 +2874,13 @@ public:
          //disabled: no SR
          if (device_data.sr_type == SR::Type::None || device_data.sr_suppressed) return DrawOrDispatchOverrideType::None;
 
-         //disabled: uneeded by new jitter
-         if (DLSSJitter::is_sync_needed == 0) return DrawOrDispatchOverrideType::None;
+         //disabled: unneeded by new jitter
+         if (DLSSJitter::is_sync_needed == 0 && !DLSSJitter::is_sync_always) return DrawOrDispatchOverrideType::None;
          DLSSJitter::is_sync_needed--;
          
          //get and save PerSceneConsts's subpixelOffset.xy
          ID3D11Buffer* cb_buffer;
          native_device_context->CSGetConstantBuffers(1, 1, &cb_buffer); //Start @ index 1, get 1.
-
-         //failed: no cb
-         #if DEVELOPMENT
-            if (cb_buffer == nullptr)
-            {
-               ASSERT_MSG(false, "FAILED jitter get");
-               return DrawOrDispatchOverrideType::None;
-            }
-         #endif
 
          //get desc
          D3D11_BUFFER_DESC cb_desc = {};
@@ -2898,8 +2894,7 @@ public:
          cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
          cb_desc.MiscFlags = 0;
          cb_desc.StructureByteStride = 0;
-         HRESULT hr_staging = native_device->CreateBuffer(&cb_desc, nullptr, &staging_cb_buf);
-         if (SUCCEEDED(hr_staging))
+         if (SUCCEEDED(native_device->CreateBuffer(&cb_desc, nullptr, &staging_cb_buf)))
          {
             native_device_context->CopyResource(staging_cb_buf.get(), cb_buffer);
             staging_cb = staging_cb_buf.get();
@@ -3665,6 +3660,7 @@ public:
       ImGui::BulletText("Bug Hunter: soulshot96");
       ImGui::BulletText("Bug Hunter: KING");
       ImGui::BulletText("Bug Hunter: bisquickpancakes");
+      ImGui::BulletText("Bug Hunter: Cinna");
 
       ImGui::NewLine();
       ImGui::Text("Third Party:");
