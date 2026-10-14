@@ -2,7 +2,6 @@
 
 #define ALLOW_SHADERS_DUMPING 0
 #define DISABLE_AUTO_DEBUGGER 1
-#define ENABLE_BLOOM 1 // TODO: since we load our own and have Bloom pass copy-pasted here, dont rely on ENABLE_BLOOM?
 // #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 0
 // #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
 #include "..\..\Core\core.hpp"
@@ -108,7 +107,7 @@ namespace TonemapInfo
 
 namespace OutputHandling
 {
-   constexpr const char* Luma_ToSwapchain = "Luma_ToSwapchain"; // file name & shader variant
+   constexpr const char* Luma_MegaMix_ToSwapchain = "Luma_MegaMix_ToSwapchain"; // file name & shader variant
 
    bool IsSCRGB() { return swapchain_upgrade_type == SwapchainUpgradeType::scRGB; }
    bool IsHDR10() { return swapchain_upgrade_type == SwapchainUpgradeType::HDR10; }
@@ -140,7 +139,7 @@ namespace OutputHandling
       auto def_val = "0";
       if (IsHDR10()) def_val = "1";
       else if (IsSDR8bit()) def_val = "2";
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_ToSwapchain), ShaderDefinition{ Luma_ToSwapchain, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "main", {{ "CUSTOM_TOSWAPCHAIN", def_val}}});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ToSwapchain), ShaderDefinition{ Luma_MegaMix_ToSwapchain, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "main", {{ "CUSTOM_TOSWAPCHAIN", def_val}}});
 
       // Native Shaders: Display Composition replacement (will break DEVELOPMENT debug draw, but whatever)
       if (!IsSCRGB())
@@ -171,7 +170,7 @@ namespace OutputHandling
       // (otherwise, it's guaranteed after final)
 
       // set PS to Luma_Swapchain
-      native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_ToSwapchain)).get(), nullptr, 0);
+      native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_ToSwapchain)).get(), nullptr, 0);
 
       return DrawOrDispatchOverrideType::None;
    }
@@ -311,8 +310,10 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_PS4BLUR_1                  = char_ptr_crc32("CUSTOM_PS4BLUR_1");
    constexpr uint32_t CUSTOM_HDRTONEMAPONSDR            = char_ptr_crc32("CUSTOM_HDRTONEMAPONSDR");
    constexpr uint32_t CUSTOM_SSAA_FILTER                = char_ptr_crc32("CUSTOM_SSAA_FILTER");
+   constexpr uint32_t CUSTOM_ESM_DEPTH_NEW_SIZE         = char_ptr_crc32("CUSTOM_ESM_DEPTH_NEW_SIZE");
    constexpr uint32_t CUSTOM_ESM_DEPTH_FILTERREDUCE     = char_ptr_crc32("CUSTOM_ESM_DEPTH_FILTERREDUCE");
    constexpr uint32_t CUSTOM_ESM_DEPTH_SIGMAINCREASE    = char_ptr_crc32("CUSTOM_ESM_DEPTH_SIGMAINCREASE");
+   constexpr uint32_t CUSTOM_ESM_COLOR_SIGMA            = char_ptr_crc32("CUSTOM_ESM_COLOR_SIGMA");
 
    void OnInit()
    {
@@ -322,47 +323,48 @@ namespace ShaderDefineInfo
          {"SWAPCHAIN_CLAMP_COLORSPACE", '0', true, !DEVELOPMENT, "Clamp colorspace against invalid colors.\n(Really only for OCD, as it should only be inconsequential black.)\n0 - Unclamped.\n1 - BT2020.", 1},
          {"SWAPCHAIN_TEST_USER_PEAK", '0', true, false, "Show a simple white rectangle peak test.", 1},
          // {"_____CUSTOM_____", '0', true, false, "Just a divider.", 1},
-         {"CUSTOM_SDR_1", '0', true, false, "SDR path.", 1},
-         {"CUSTOM_TONEMAP_SCALING", '0', true, false, "HDR tonemap scaling.\n0 - Luminance (natural)\n1 - Max-Channel (saturation preserve)", 1},
-         {"CUSTOM_TONEMAP_CLAMP", '1', true, false, "(Only if CUSTOM_TONEMAP_SCALING is luminance scaled.)\nClamp overshoot from luma scaled HDR tonemap.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).", 2},
-         {"CUSTOM_CLAMP_PEAK", '1', true, false, "Clamp the absolute final color.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).\n3 - Per channel rolloff slightly above peak (blows out).", 3},
-         {"CUSTOM_TONEMAP_TRYIGNOREUI", '0', true, false, "If only UI is rendering, deactivates HDR tonemapper.", 1},
+         {"CUSTOM_SDR_1", '0', true, !DEVELOPMENT, "SDR path.", 1},
+         {"CUSTOM_TONEMAP_SCALING", '0', true, !DEVELOPMENT, "HDR tonemap scaling.\n0 - Luminance (natural)\n1 - Max-Channel (saturation preserve)", 1},
+         {"CUSTOM_TONEMAP_CLAMP", '1', true, !DEVELOPMENT, "(Only if CUSTOM_TONEMAP_SCALING is luminance scaled.)\nClamp overshoot from luma scaled HDR tonemap.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).", 2},
+         {"CUSTOM_CLAMP_PEAK", '1', true, !DEVELOPMENT, "Clamp the absolute final color.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).\n3 - Per channel rolloff slightly above peak (blows out).", 3},
          {"CUSTOM_GAMMA_CORRECTION_MODE", '0', true, true, "0 - Per-Channel.\n1 - Perceptual.", 1},
-         {"CUSTOM_FAKEBT2020", '0', true, false, "Encode BT2020 before gamma decode to push colors out to wcg.", 1},
-         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN", '1', true, false, "Enable YCbCr LUT biased gaussian blur to stop steep chrominance drop offs in the curve.", 1},
-         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS", '1', true, false, "Enable YCbCr LUT biased gaussian blur responds to HDR stops.", 1},
-         {"CUSTOM_PCC_QUALITY", '0', true, false, "Quality of Per-CHannel Blowout blending.", 1},
-         {"CUSTOM_COLORGRADE", '0', true, false, "Enable HDR luminance color grading.", 2},
-         {"CUSTOM_COLORGRADE_SATORDER", '0', true, false, "Enable HDR global saturation slider.\n0 - Off\n1 - BT709 Before UI\n2 - BT2020 After UI", 2},
-         {"CUSTOM_HUDBRIGHTNESS", '0', true, false, "Sample shader texture resources to detect specific UI to change their brightness.\nElse, they are too bright.", 2},
-         {"CUSTOM_HDTVREC709_1", '0', true, false, "Decode color and swapchain to HDTV rec.709, like PS4's display output.", 1},
-         {"CUSTOM_GAMMACORRECT22", '1', true, false, "Enable Gamma Correction 2.2 for OS and displays missing it.", 1},
-         {"CUSTOM_PROGRESSBAR", '0', true, false, "Play head progress bar.", 2},
-         {"CUSTOM_PS4BLUR_1", '0', true, false, "PS4 frame blur / ghosting.", 2},
-         {"CUSTOM_BLOOM_THRESHOLD_1", '0', true, false, "Bloom threshold mode.", 4},
-         {"CUSTOM_SSAA_FILTER", '0', true, false, "SSAA downsample filter", 2},
-         {"CUSTOM_HDRTONEMAPONSDR", '0', true, false, "Use new HDR tonemapping in SDR path.", 1},
-         {"CUSTOM_ESM_DEPTH_FILTERREDUCE", '1', true, false, "Reduce shadow map gaussian blur steps.", 9},
-         {"CUSTOM_ESM_DEPTH_SIGMAINCREASE", '0', true, false, "Reduce shadow map gaussian blur steps.", 9},
-         {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
-         {"XEGTAO_SLICECOUNT", '1', true, false, "XeGTAO samples.", 6},
-         {"XEGTAO_STEPSPERSLICE", '0', true, false, "XeGTAO samples.", 2},
-         {"XEGTAO_HALFRES", '1', true, false, "XeGTAO half resolution.", 1},
-         {"XEGTAO_NOISE", '4', true, false, "XeGTAO moving noise.", 9},
-         {"XEGTAO_NORMALSMOOTH_QUALITY", '1', true, false, "XeGTAO smooth normals quality.", 2},
-         {"XEGTAO_MANUALSIZE", '0', true, false, "XeGTAO compute viewport size in shader.", 1},
-         {"XEGTAO_CHECKBOARD", '0', true, false, "XeGTAO checkerboard rendering.", 2},
-         {"XEGTAO_UPSAMPLE", '1', true, false, "XeGTAO Joint Bilateral Upsample.", 1},
-         {"XEGTAO_THREADS_NORMALSGEN", '0', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_AO", '1', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_DENOISE", '0', true, false, "XeGTAO compute shader thread groups.", 1},
-         {"CUSTOM_TESTBGSPRITES", '0', true, false, "Test BG Sprites layering.", 2},
+         {"CUSTOM_FAKEBT2020", '0', true, !DEVELOPMENT, "Encode BT2020 before gamma decode to push colors out to wcg.", 1},
+         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN", '1', true, !DEVELOPMENT, "Enable YCbCr LUT biased gaussian blur to stop steep chrominance drop offs in the curve.", 1},
+         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS", '1', true, !DEVELOPMENT, "Enable YCbCr LUT biased gaussian blur responds to HDR stops.", 1},
+         {"CUSTOM_PCC_QUALITY", '0', true, !DEVELOPMENT, "Quality of Per-CHannel Blowout blending.", 1},
+         {"CUSTOM_COLORGRADE", '0', true, !DEVELOPMENT, "Enable HDR luminance color grading.", 2},
+         {"CUSTOM_COLORGRADE_SATORDER", '0', true, !DEVELOPMENT, "Enable HDR global saturation slider.\n0 - Off\n1 - BT709 Before UI\n2 - BT2020 After UI", 2},
+         {"CUSTOM_HUDBRIGHTNESS", '0', true, !DEVELOPMENT, "Sample shader texture resources to detect specific UI to change their brightness.\nElse, they are too bright.", 2},
+         {"CUSTOM_HDTVREC709_1", '0', true, !DEVELOPMENT, "Decode color and swapchain to HDTV rec.709, like PS4's display output.", 1},
+         {"CUSTOM_GAMMACORRECT22", '1', true, !DEVELOPMENT, "Enable Gamma Correction 2.2 for OS and displays missing it.", 1},
+         {"CUSTOM_PROGRESSBAR", '0', true, !DEVELOPMENT, "Play head progress bar.", 2},
+         {"CUSTOM_PS4BLUR_1", '0', true, !DEVELOPMENT, "PS4 frame blur / ghosting.", 2},
+         {"CUSTOM_BLOOM_THRESHOLD_1", '0', true, !DEVELOPMENT, "Bloom threshold mode.", 4},
+         {"CUSTOM_SSAA_FILTER", '0', true, !DEVELOPMENT, "SSAA downsample filter", 2},
+         {"CUSTOM_HDRTONEMAPONSDR", '0', true, !DEVELOPMENT, "Use new HDR tonemapping in SDR path.", 1},
+         {"CUSTOM_ESM_DEPTH_NEW_SIZE", '0', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_ESM_DEPTH_FILTERREDUCE", '1', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_ESM_DEPTH_SIGMAINCREASE", '0', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_ESM_COLOR_SIGMA", '4', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, !DEVELOPMENT, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
+         {"XEGTAO_SLICECOUNT", '1', true, !DEVELOPMENT, "XeGTAO samples.", 6},
+         {"XEGTAO_STEPSPERSLICE", '0', true, !DEVELOPMENT, "XeGTAO samples.", 2},
+         {"XEGTAO_HALFRES", '1', true, !DEVELOPMENT, "XeGTAO half resolution.", 1},
+         {"XEGTAO_NOISE", '4', true, !DEVELOPMENT, "XeGTAO moving noise.", 9},
+         {"XEGTAO_NORMALSMOOTH_QUALITY", '1', true, !DEVELOPMENT, "XeGTAO smooth normals quality.", 2},
+         {"XEGTAO_MANUALSIZE", '0', true, !DEVELOPMENT, "XeGTAO compute viewport size in shader.", 1},
+         {"XEGTAO_CHECKBOARD", '0', true, !DEVELOPMENT, "XeGTAO checkerboard rendering.", 2},
+         {"XEGTAO_UPSAMPLE", '1', true, !DEVELOPMENT, "XeGTAO Joint Bilateral Upsample.", 1},
+         {"XEGTAO_THREADS_NORMALSGEN", '0', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
+         {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
+         {"XEGTAO_THREADS_AO", '1', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
+         {"XEGTAO_THREADS_DENOISE", '0', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
+         {"CUSTOM_TESTBGSPRITES", '0', true, !DEVELOPMENT, "Test BG Sprites layering.", 2},
          {"CUSTOM_TONEMAP_IDENTIFY", '0', true, !DEVELOPMENT, "Draw binary representation of tonemap uber variant number.", 1},
-         {"CUSTOM_UPSCALE_MOV", '0', true, false, "PumboAutoHDR for FMV.\n0 - Off\n1 - On", 1},
-         {"CUSTOM_UPSCALE_BGSPRITES", '0', true, false, "Auto HDR (Inverse Tonemap) for background 2D sprites in complex \"Future Tone\" scenes (e.g. Torinoko City).", 1},
-         {"CUSTOM_UPSCALE_TOON", '0', true, false, "Auto HDR for flat toon scenes (e.g. Catch the Wave, Deep Sea City Underground, etc.).\n0 - Forced SDR\n1 - Treat as Complex\n2 - On\n3 - On (Ignore Customization Menu)", 3},
-         {"CUSTOM_UPGRADE_DEBUG", '0', true, false, "Show inputs into UpgradeToneMap().", 5},
+         {"CUSTOM_UPSCALE_MOV", '0', true, !DEVELOPMENT, "PumboAutoHDR for FMV.\n0 - Off\n1 - On", 1},
+         {"CUSTOM_UPSCALE_BGSPRITES", '0', true, !DEVELOPMENT, "Auto HDR (Inverse Tonemap) for background 2D sprites in complex \"Future Tone\" scenes (e.g. Torinoko City).", 1},
+         {"CUSTOM_UPSCALE_TOON", '0', true, !DEVELOPMENT, "Auto HDR for flat toon scenes (e.g. Catch the Wave, Deep Sea City Underground, etc.).\n0 - Forced SDR\n1 - Treat as Complex\n2 - On\n3 - On (Ignore Customization Menu)", 3},
+         {"CUSTOM_UPGRADE_DEBUG", '0', true, !DEVELOPMENT, "Show inputs into UpgradeToneMap().", 5},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       auto_recompile_defines = true; //force
@@ -2288,26 +2290,62 @@ namespace SSS
 namespace Bloom
 {
    constexpr const char* reshadesave_enabled = "BloomEnabled";
-      bool enabled = false;
+   bool enabled = false;
 
    constexpr const char* reshadesave_sigma = "BloomSigma";
    constexpr float sigma_def = 0.10f;
-      float sigma = sigma_def;
+   float sigma = sigma_def;
 
    constexpr const char* reshadesave_sigma_increase = "BloomSigmaIncrease";
    constexpr float sigma_increase_def = 0.36f;
-      float sigma_increase = sigma_increase_def;
+   float sigma_increase = sigma_increase_def;
 
    constexpr const char* reshadesave_use_highest_mip = "BloomUseHighestMip";
    constexpr bool use_highest_mip_def = false;
-      bool use_highest_mip = use_highest_mip_def;
+   bool use_highest_mip = use_highest_mip_def;
 
    PUBLISHING_CONSTEXPR bool is_vanilla_bloom_blur_rtv_hq = true;
-   
-   constexpr const char* Bloom_Downsample1_PS = "Bloom Downsample1 PS";
-   constexpr const char* Bloom_Combine_PS = "Bloom Combine PS";
-   constexpr const char* Bloom_Blur0_PS = "Bloom Blur0 PS";
-   constexpr const char* Bloom_Blur0_VS = "Bloom Blur0 VS";
+
+   namespace Shaders
+   {
+      // file name
+      constexpr const char* Luma_MegaMix_Bloom = "Luma_MegaMix_Bloom"; 
+
+      // shader names
+      constexpr const char* Bloom_VS = "Bloom VS";
+      constexpr const char* Bloom_DownsampleBeforePrefilter_PS = "Bloom Downsample Before Prefilter PS";
+      constexpr const char* Bloom_Prefilter_PS = "Bloom Prefilter PS";
+      constexpr const char* Bloom_Downsample_PS = "Bloom Downsample PS";
+      constexpr const char* Bloom_Upsample_PS = "Bloom Upsample PS";
+      constexpr const char* Bloom_Combine_PS = "Bloom Combine PS";
+      
+      constexpr const char* Bloom_Blur0_VS = "Bloom Blur0 VS";
+      constexpr const char* Bloom_Blur0_PS = "Bloom Blur0 PS";
+
+      void OnInit()
+      {
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_VS), ShaderDefinition{ Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "bloom_main_vs", {} });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Prefilter_PS), ShaderDefinition{ Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_prefilter_ps", {} });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Downsample_PS), ShaderDefinition{ Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_downsample_ps", {} });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Upsample_PS), ShaderDefinition{ Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_upsample_ps", {} });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_DownsampleBeforePrefilter_PS), ShaderDefinition(Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_downsamplebeforeprefilter_ps"));
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Combine_PS), ShaderDefinition(Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_combine_ps"));
+
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_VS), ShaderDefinition(Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "bloom_blur0_vs"));
+         native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_PS), ShaderDefinition(Luma_MegaMix_Bloom, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_blur0_ps"));
+      }
+
+      struct alignas(16) CBMegaMixBloom
+      {
+         float2 src_size;
+         float2 inv_src_size;
+         float2 axis;
+         float sigma;
+      };
+      ComPtr<ID3D11Buffer> bloom_cb;
+
+      ComPtr<ID3D11BlendState> bloom_blend_state;
+   }
    
    enum State : uint8_t
    {
@@ -2400,44 +2438,37 @@ namespace Bloom
             
             // Draw Bloom
             {
-               // constexpr float sigmas[nmips] = { 1.46f, 1.f, 1.f };
-               auto& managed_resources = device_data.managed_resources;
-            
-               // Backup IA. //TODO: needed?
+               // Backup TODO: del unneeded backups
                D3D11_PRIMITIVE_TOPOLOGY primitive_topology_original;
                native_device_context->IAGetPrimitiveTopology(&primitive_topology_original);
-            
-               // Backup VS.
+
                ComPtr<ID3D11VertexShader> vs_original;
                native_device_context->VSGetShader(vs_original.put(), nullptr, nullptr);
-            
-               // Backup PS.
+
                ComPtr<ID3D11PixelShader> ps_original;
                native_device_context->PSGetShader(ps_original.put(), nullptr, nullptr);
+
                ComPtr<ID3D11Buffer> cb_orginal;
                native_device_context->PSGetConstantBuffers(11, 1, cb_orginal.put());
+
                ComPtr<ID3D11SamplerState> ps_sampler_original;
                native_device_context->PSGetSamplers(0, 1, ps_sampler_original.put());
+
                ComPtr<ID3D11ShaderResourceView> ps_srv_original;
                native_device_context->PSGetShaderResources(0, 1, ps_srv_original.put());
-            
-               // Backup Viewports.
-               UINT num_viewports;
-               native_device_context->RSGetViewports(&num_viewports, nullptr);
-               std::vector<D3D11_VIEWPORT> viewports_original(num_viewports);
+
+               UINT num_viewports = 1;
+               std::array<D3D11_VIEWPORT, 1> viewports_original;
                native_device_context->RSGetViewports(&num_viewports, viewports_original.data());
-            
-               // Backup Rasterizer. //TODO: needed?
+
                ComPtr<ID3D11RasterizerState> rasterizer_original;
                native_device_context->RSGetState(rasterizer_original.put());
-            
-               // Backup Blend.
+
                ComPtr<ID3D11BlendState> blend_original;
                FLOAT blend_factor_original[4];
                UINT sample_mask_original;
                native_device_context->OMGetBlendState(blend_original.put(), blend_factor_original, &sample_mask_original);
-            
-               // Backup RTs.
+
                std::array<ID3D11RenderTargetView*, 1> rtvs_original = {};
                ComPtr<ID3D11DepthStencilView> dsv_original;
                native_device_context->OMGetRenderTargets(rtvs_original.size(), rtvs_original.data(), dsv_original.put());
@@ -2558,15 +2589,15 @@ namespace Bloom
                //
                // Create bloom CB.
                //
-            
-               [[unlikely]] if (!managed_resources.buffers["luma_bloom_cb"_h])
+
+               [[unlikely]] if (!Shaders::bloom_cb.get())
                {
                   D3D11_BUFFER_DESC buffer_desc = {};
-                  buffer_desc.ByteWidth = sizeof(CBLumaBloomData);
+                  buffer_desc.ByteWidth = sizeof(Shaders::CBMegaMixBloom);
                   buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
                   buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
                   buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-                  auto hr = native_device->CreateBuffer(&buffer_desc, nullptr, managed_resources.buffers["luma_bloom_cb"_h].put());
+                  auto hr = native_device->CreateBuffer(&buffer_desc, nullptr, Shaders::bloom_cb.put());
                   ASSERT_MSG(SUCCEEDED(hr), "Bloom hr bloom_cb");
                   reshade::log::message(reshade::log::level::info, "Bloom: created constant buffer");
                }
@@ -2576,59 +2607,55 @@ namespace Bloom
                auto update_constant_buffer = [&]()
                {
                   D3D11_MAPPED_SUBRESOURCE mapped_subresource;
-                  auto hr = native_device_context->Map(managed_resources.buffers["luma_bloom_cb"_h].get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_subresource);
+                  auto hr = native_device_context->Map(Shaders::bloom_cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_subresource);
                   ASSERT_MSG(SUCCEEDED(hr), "Bloom hr bloom_cb map");
                   std::memcpy(mapped_subresource.pData, &cb_data, sizeof(CBLumaBloomData));
-                  native_device_context->Unmap(managed_resources.buffers["luma_bloom_cb"_h].get(), 0);
+                  native_device_context->Unmap(Shaders::bloom_cb.get(), 0);
                };
             
                //
                // Prefilter + downsample pass
                //
             
+               // X
                D3D11_VIEWPORT viewport_x = {};
                viewport_x.Width = x_mip0_width;
                viewport_x.Height = x_mip0_height;
-            
-               // Update CB.
+               
                cb_data.src_size = float2(scene_width, scene_height);
                cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
                cb_data.axis = float2(1.0f, 0.0f);
                cb_data.sigma = sigma;
                update_constant_buffer();
-            
-               // Bindings.
+               
                native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_x[0], nullptr);
                native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-               native_device_context->VSSetShader(device_data.native_vertex_shaders.at(Math::CompileTimeStringHash("Bloom VS")).get(), nullptr, 0);
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(Math::CompileTimeStringHash(Bloom_Downsample1_PS)).get(), nullptr, 0);
-               native_device_context->PSSetConstantBuffers(11, 1, &managed_resources.buffers["luma_bloom_cb"_h]);
+               native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Shaders::Bloom_VS)).get(), nullptr, 0);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Bloom_DownsampleBeforePrefilter_PS)).get(), nullptr, 0);
+               native_device_context->PSSetConstantBuffers(11, 1, &Shaders::bloom_cb);
                const std::array ps_samplers = { device_data.sampler_state_linear.get() };
                native_device_context->PSSetSamplers(0, ps_samplers.size(), ps_samplers.data());
                native_device_context->PSSetShaderResources(0, 1, &Resources::orig_full_srv);
                native_device_context->RSSetViewports(1, &viewport_x);
                native_device_context->RSSetState(nullptr);
             
-               // Draw X pass.
                native_device_context->Draw(3, 0);
-            
+
+               // Y
                std::vector<D3D11_VIEWPORT> viewports_y(Resources::nmips);
                viewports_y[0].Width = y_mip0_width;
                viewports_y[0].Height = y_mip0_height;
             
-               // Update CB.
                cb_data.src_size = float2(x_mip0_width, x_mip0_height);
                cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
                cb_data.axis = float2(0.0f, 1.0f);
                update_constant_buffer();
             
-               // Bindings.
                native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[0], nullptr);
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Prefilter PS"_h).get(), nullptr, 0);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Bloom_Prefilter_PS)).get(), nullptr, 0);
                native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_x[0]);
                native_device_context->RSSetViewports(1, &viewports_y[0]);
             
-               // Draw Y pass.
                native_device_context->Draw(3, 0);
             
                //
@@ -2636,43 +2663,38 @@ namespace Bloom
                //
             
                // Render downsample passes.
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Downsample PS"_h).get(), nullptr, 0); // 1st special downsample
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Bloom_Downsample_PS)).get(), nullptr, 0);
                for (UINT i = 1; i < Resources::nmips; i++)
                {
-                  // view port
+                  // X
                   viewport_x.Width = max(1u, x_mip0_width >> i);
                   viewport_x.Height = max(1u, x_mip0_height >> i);
             
-                  // Update CB.
                   cb_data.src_size = float2(viewports_y[i - 1].Width, viewports_y[i - 1].Height);
                   cb_data.axis = float2(1.0f, 0.0f);
                   cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
                   cb_data.sigma += sigma_increase;
                   update_constant_buffer();
             
-                  // Bindings.
                   native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_x[i], nullptr);
                   native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i - 1]);
                   native_device_context->RSSetViewports(1, &viewport_x);
-            
-                  // Draw X pass.
+                  
                   native_device_context->Draw(3, 0);
-            
+
+                  // Y
                   viewports_y[i].Width = max(1u, y_mip0_width >> i);
                   viewports_y[i].Height = max(1u, y_mip0_height >> i);
             
-                  // Update CB.
                   cb_data.src_size = float2(viewport_x.Width, viewport_x.Height);
                   cb_data.axis = float2(0.0f, 1.0f);
                   cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
                   update_constant_buffer();
             
-                  // Bindings.
                   native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y[i], nullptr);
                   native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_x[i]);
                   native_device_context->RSSetViewports(1, &viewports_y[i]);
             
-                  // Draw Y pass.
                   native_device_context->Draw(3, 0);
                }
             
@@ -2681,18 +2703,18 @@ namespace Bloom
                //
 
                // blend
-               [[unlikely]] if (!managed_resources.blends["luma_bloom_blend"_h])
+               [[unlikely]] if (!Shaders::bloom_blend_state)
                {
                   CD3D11_BLEND_DESC blend_desc(D3D11_DEFAULT);
                   blend_desc.RenderTarget[0].BlendEnable = TRUE;
                   blend_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_BLEND_FACTOR;
                   blend_desc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
-                  ensure(native_device->CreateBlendState(&blend_desc, managed_resources.blends["luma_bloom_blend"_h].put()), >= 0);
+                  ensure(native_device->CreateBlendState(&blend_desc, Shaders::bloom_blend_state.put()), >= 0);
                }
 
                // upsample 4 mips up
                uint8_t budget = 4;
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at("Bloom Upsample PS"_h).get(), nullptr, 0);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Bloom_Upsample_PS)).get(), nullptr, 0);
                for (int i = Resources::nmips - 1; i > 0; i--)
                {
                   // do only necessary
@@ -2711,7 +2733,7 @@ namespace Bloom
                   native_device_context->OMSetRenderTargets(1, budget == 1 ? &Resources::rtv_mips_y1[i - 1] : &Resources::rtv_mips_y[i - 1], nullptr); // #WeirdSwap
                   native_device_context->PSSetShaderResources(0, 1, &Resources::srv_mips_y[i]);
                   native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
-                  native_device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
+                  native_device_context->OMSetBlendState(Shaders::bloom_blend_state.get(), blend_factor, UINT_MAX);
                
                   native_device_context->Draw(3, 0);
                }
@@ -2896,8 +2918,8 @@ namespace Bloom
             }
             
             // Set VS PS
-            native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Bloom_Blur0_VS)).get(), nullptr, 0);
-            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Bloom_Blur0_PS)).get(), nullptr, 0);
+            native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Shaders::Bloom_Blur0_VS)).get(), nullptr, 0);
+            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Bloom_Blur0_PS)).get(), nullptr, 0);
 
             state = BloomCombine;
             break;
@@ -2919,7 +2941,7 @@ namespace Bloom
             native_device_context->OMSetRenderTargets(1, &Resources::rtv_mips_y1[mip], nullptr);
 
             // set our combine shader
-            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Bloom_Combine_PS)).get(), nullptr, 0);
+            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Bloom_Combine_PS)).get(), nullptr, 0);
             
             // viewport to size of mip0
             D3D11_VIEWPORT viewport = Resources::rtv_mips_y_viewports[mip];
@@ -2949,11 +2971,7 @@ namespace Bloom
 
    void OnInit()
    {
-      // TODO: since we load our own and have Bloom pass copy-pasted here, dont rely on ENABLE_BLOOM?
-      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Downsample1_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_downsample1_ps"));
-      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Combine_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_combine_ps"));
-      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_PS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "bloom_blur0_ps"));
-      native_shaders_definitions.emplace(CompileTimeStringHash(Bloom_Blur0_VS), ShaderDefinition("Luma_Bloom_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "bloom_blur0_vs"));
+      Shaders::OnInit();
    }
 
    void OnPresent()
@@ -3224,10 +3242,10 @@ namespace AntiAliasing
    };
    State state; // denotes next shader to be drawn
 
-   constexpr const char* Luma_DLAA = "Luma_DLAA";
-   constexpr const char* Luma_DLAA_VS = "Luma_DLAA_VS";
-   constexpr const char* Luma_DLAA_PreFilter = "Luma_DLAA_PreFilter";
-   constexpr const char* Luma_DLAA_Resolve = "Luma_DLAA_Resolve";
+   constexpr const char* Luma_MegaMix_DLAA = "Luma_MegaMix_DLAA";
+   constexpr const char* Luma_MegaMix_DLAA_VS = "Luma_MegaMix_DLAA_VS";
+   constexpr const char* Luma_MegaMix_DLAA_PreFilter = "Luma_MegaMix_DLAA_PreFilter";
+   constexpr const char* Luma_MegaMix_DLAA_Resolve = "Luma_MegaMix_DLAA_Resolve";
 
    namespace Resources
    {
@@ -3329,17 +3347,17 @@ namespace AntiAliasing
                }
             
                // VS
-               native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Luma_DLAA_VS)).get(), nullptr, 0);
+               native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Luma_MegaMix_DLAA_VS)).get(), nullptr, 0);
             
                // prefilter
                native_device_context->OMSetRenderTargets(1, &Resources::rtv, nullptr);
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_DLAA_PreFilter)).get(), nullptr, 0);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_DLAA_PreFilter)).get(), nullptr, 0);
                native_device_context->Draw(4,0);
             
                // resolve
                native_device_context->OMSetRenderTargets(1, &rtv0, nullptr);
                native_device_context->PSSetShaderResources(0, 1, &Resources::srv);
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_DLAA_Resolve)).get(), nullptr, 0);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_DLAA_Resolve)).get(), nullptr, 0);
                native_device_context->Draw(4,0);
             }
             else if (enabled == Disable) // Disable
@@ -3370,9 +3388,9 @@ namespace AntiAliasing
    
    void OnInit()
    {
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_DLAA_VS), ShaderDefinition(Luma_DLAA, reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "fullscreen_vs"));
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_DLAA_PreFilter), ShaderDefinition(Luma_DLAA, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "prefilter_ps"));
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_DLAA_Resolve), ShaderDefinition(Luma_DLAA, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "resolve_ps"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DLAA_VS), ShaderDefinition(Luma_MegaMix_DLAA, reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "fullscreen_vs"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DLAA_PreFilter), ShaderDefinition(Luma_MegaMix_DLAA, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "prefilter_ps"));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DLAA_Resolve), ShaderDefinition(Luma_MegaMix_DLAA, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "resolve_ps"));
    }
    
    void OnLoad(reshade::api::effect_runtime* runtime)
@@ -3632,7 +3650,7 @@ namespace PS4Blur
 
 namespace LUTBiasCached
 {
-   constexpr const char* Luma_LUTBiasCached = "Luma_LUTBiasCached";
+   constexpr const char* Luma_MegaMix_LUTBiasCached = "Luma_MegaMix_LUTBiasCached";
 
    constexpr int LUT_OUTPUT_SIZE = 2048;
    
@@ -3692,7 +3710,7 @@ namespace LUTBiasCached
       native_device_context->CSSetUnorderedAccessViews(0, 1, &Resources::uav, nullptr);
       native_device_context->CSSetSamplers(0, 1, &device_data.sampler_state_point);
       SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
-      native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_LUTBiasCached)).get(), nullptr, 0);
+      native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_MegaMix_LUTBiasCached)).get(), nullptr, 0);
       native_device_context->Dispatch((LUT_OUTPUT_SIZE + 63) / 64, 1, 1);
 
       // clean CS
@@ -3711,7 +3729,7 @@ namespace LUTBiasCached
 
    void OnInit()
    {
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_LUTBiasCached), ShaderDefinition(Luma_LUTBiasCached, reshade::api::pipeline_subobject_type::compute_shader));
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_LUTBiasCached), ShaderDefinition(Luma_MegaMix_LUTBiasCached, reshade::api::pipeline_subobject_type::compute_shader));
    }
 }
 
@@ -3732,74 +3750,50 @@ namespace ShadowMap
          - SRV20 Depth Low (g_shadow_depth_textures_1_) 512x512 R32F
             - Used by forward render lighting after SSS
    */
-
-   enum EnabledDepth : uint8_t
-   {
-      DepthOff, // PBR: 2048, NPR: 1024
-      Depth4096,
-      Depth8192,
-   };
-   EnabledDepth enabled_depth = DepthOff;
+   
    uint GetEnabledDepthSize()
    {
-      switch (enabled_depth)
+      switch (ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE))
       {
-         case DepthOff: return 0;
-         case Depth4096: return 4096;
-         case Depth8192: return 8192;
+         case 1: return 1024; // index is also parsed in shader HLSL!
+         case 2: return 2048;
+         case 3: return 4096;
+         case 4: return 8192;
          default: return 0;
       }
    }
-   constexpr const char* reshadesave_enabled_depth = "ShadowMapEnabledDepth";
    
-   enum EnabledTex : uint8_t
-   {
-      TexOff, // 512
-      Tex1024,
-      //TODO: higher?
-   };
-   EnabledTex enabled_tex = TexOff;
-   uint GetEnabledTexSize()
-   {
-      switch (enabled_tex)
-      {
-         case TexOff: return 0;
-         case Tex1024: return 1024;
-         default: return 0;
-      }
-   }
-   constexpr const char* reshadesave_enabled_tex = "ShadowMapEnabledTex";
+   constexpr const char* reshadesave_enabled_color_mips = "ShadowMapEnabledColorMips";
+   constexpr int enabled_color_mips_def = 2;
+   int enabled_color_mips = enabled_color_mips_def;
 
-   bool IsEnabled() {return enabled_depth != DepthOff || enabled_tex != TexOff;}
-   bool IsEnabledDepth() {return enabled_depth != DepthOff;}
-   bool IsEnabledTex() {return enabled_tex != TexOff;}
+   constexpr const char* reshadesave_color_mips_skip = "ShadowMapColorMipsSkip";
+   constexpr int color_mips_skip_def = -1;
+   int color_mips_skip = color_mips_skip_def;
    
-   void DisableCompletely()
-   {
-      enabled_depth = DepthOff;
-      enabled_tex = TexOff;
-   }
+   bool IsEnabled() {return ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE);}
+   void DisableCompletely() {ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE, 0);}
 
    // ps that draws to shadow map tex before expand/downsample/blur
-   constexpr std::array<uint32_t, 2> shadow_cast_shaders = {
+   constexpr std::array<uint32_t, 2> silhouette_shaders = {
       0xF2368D1C, // has alpha 
       0x8BD626DD, // completely opaque
-      // (seems like those 2 are all, for both PBR and NPR)
+      // (there are other named variants, but the cso's are the exact same)
    };
 
    // shadow map & render progress state
    enum State : uint8_t
    {
-      ShadowCast,
+      Silhouette,
       
       TexBDownsample0, // 0x58A712B5
       TexB4TapBlur0, // 0x4E2A88FE
       TexBCopy0, // 0x58A712B5
       
-      DepthExpand0, // 0x54B1FF52 (this means shadows have all cast) (more accurately as gaussian horizontal blur)
-      DepthExpand1, // 0x54B1FF52 (more accurately as gaussian vertical blur)
-      DepthDownsample0, // 0x5F8E8C7E
-      DepthExpand2, // 0x723E27C4
+      DepthExpand0, // 0x54B1FF52 (this means silhouettes are done) (aka gaussian horizontal blur)
+      DepthExpand1, // 0x54B1FF52 (aka gaussian vertical blur)
+      DepthDownsample0, // 0x5F8E8C7E (aka minimize)
+      DepthExpand2, // 0x723E27C4 (aka erosion)
       
       TexADownsample0, // 0x58A712B5
       Tex4TapBlur0, // 0x4E2A88FE
@@ -3814,20 +3808,46 @@ namespace ShadowMap
 
       Done,
    };
-   State state = ShadowCast; // denotes next shader to be drawn
+   State state = Silhouette; // denotes next shader to be drawn
    bool state_texb_used_this_frame = false; // denotes if multiple objects (TexB) were used this frame, skipping unecessary stuff if not
    uint8_t state_shadow_cast_count = 0; // counts how many shadow cast shaders have been drawn this frame
-   bool state_replacetoken_shadowcast = true; // only needs RTV/DSV replacement once for the sub-pass
+   bool state_replacetoken_silhouette = true; // only needs RTV/DSV replacement once for the sub-pass
    bool state_replacetoken_sss = true; // only needs SRV replacement once for the whole pass
    bool state_is_pbr = true; // determined by 1st gaussian blur shader
 
    void ResetState()
    {
-      state = ShadowCast;
+      state = Silhouette;
       state_texb_used_this_frame = false;
       state_shadow_cast_count = 0;
-      state_replacetoken_shadowcast = true;
+      state_replacetoken_silhouette = true;
       state_replacetoken_sss = true;
+   }
+
+   namespace Shaders
+   {
+      constexpr const char* Luma_MegaMix_ESMDepthGaussian = "Luma_MegaMix_ESMDepthGaussian"; // file name
+      constexpr const char* Luma_MegaMix_ESMDepthGaussian_Default = "Luma_MegaMix_ESMDepthGaussian_Default"; // shader name: gaussian as expected
+      constexpr const char* Luma_MegaMix_ESMDepthGaussian_NPRNormalize = "Luma_MegaMix_ESMDepthGaussian_NPRNormalize"; // shader name: gaussian with normalization (x * 0.5 + 0.5) per sample for NPR
+
+      constexpr const char* Luma_MegaMix_ESMColorGaussian = "Luma_MegaMix_ESMColorGaussian"; // file name
+      constexpr const char* Luma_MegaMix_ESMColorGaussian_MainVS = "Luma_MegaMix_ESMColorGaussian_MainVS"; // shader name: fullscreen
+      constexpr const char* Luma_MegaMix_ESMColorGaussian_DownPreFilter = "Luma_MegaMix_ESMColorGaussian_DownPreFilter"; // shader name: downsample gaussian, prefilter o0.xy = r0.xxxw
+      constexpr const char* Luma_MegaMix_ESMColorGaussian_Down = "Luma_MegaMix_ESMColorGaussian_Down"; // shader name: downsample gaussian as expected 
+      constexpr const char* Luma_MegaMix_ESMColorGaussian_Up = "Luma_MegaMix_ESMColorGaussian_Up"; // shader name: upsample
+      constexpr const char* Luma_MegaMix_ESMColorGaussian_UpPostFilter = "Luma_MegaMix_ESMColorGaussian_UpPostFilter"; // shader name: upsample, postfilter o0.xyzw = r0.xxxy
+      
+      void OnInit()
+      {
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMDepthGaussian_Default), ShaderDefinition{ Luma_MegaMix_ESMDepthGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "main", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMDepthGaussian_NPRNormalize), ShaderDefinition{ Luma_MegaMix_ESMDepthGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "main", {{"CUSTOM_ESM_DEPTH_NORMALIZE", "1"}}});
+
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMColorGaussian_MainVS), ShaderDefinition{ Luma_MegaMix_ESMColorGaussian, reshade::api::pipeline_subobject_type::vertex_shader,   nullptr, "MainVS", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMColorGaussian_DownPreFilter), ShaderDefinition{ Luma_MegaMix_ESMColorGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "DownPreFilter", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMColorGaussian_Down), ShaderDefinition{ Luma_MegaMix_ESMColorGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "Down", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMColorGaussian_Up), ShaderDefinition{ Luma_MegaMix_ESMColorGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "Up", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMColorGaussian_UpPostFilter), ShaderDefinition{ Luma_MegaMix_ESMColorGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "UpPostFilter", {{}}});
+      }
    }
 
    namespace Resources
@@ -3873,46 +3893,66 @@ namespace ShadowMap
       uint depth_size_new = 0; // if 0, resources are not created
       bool IsDepthNewReady() { return depth_size_new > 0; }
 
-      ComPtr<ID3D11ShaderResourceView> depthdraw_srv = nullptr;
-      ComPtr<ID3D11DepthStencilView> depthdraw_dsv = nullptr;
+      ComPtr<ID3D11ShaderResourceView> draw_depth_srv = nullptr; // r32f
+      ComPtr<ID3D11DepthStencilView> draw_depth_dsv = nullptr;
       
-      ComPtr<ID3D11ShaderResourceView> depthaux_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> depthaux_rtv = nullptr;
+      ComPtr<ID3D11ShaderResourceView> draw_depth_aux_srv = nullptr; // r32f
+      ComPtr<ID3D11RenderTargetView> draw_depth_aux_rtv = nullptr;
       
-      ComPtr<ID3D11ShaderResourceView> depthuse_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> depthuse_rtv = nullptr;
+      ComPtr<ID3D11ShaderResourceView> draw_depth_use_srv = nullptr; // r32f
+      ComPtr<ID3D11RenderTargetView> draw_depth_use_rtv = nullptr;
 
-      // ComPtr<ID3D11ShaderResourceView> depthdownuse_srv = nullptr;
-      // ComPtr<ID3D11RenderTargetView> depthdownuse_rtv = nullptr;
+      ComPtr<ID3D11ShaderResourceView> draw_depth_use_eroded_srv = nullptr; // r32f
+      ComPtr<ID3D11RenderTargetView> draw_depth_use_eroded_rtv = nullptr;
 
-      uint tex_size_new = 0; // if 0, resources are not created
-      bool IsTexNewReady() { return tex_size_new > 0; }
-      
-      ComPtr<ID3D11ShaderResourceView> texdraw_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> texdraw_rtv = nullptr;
-      
-      ComPtr<ID3D11ShaderResourceView> texaux_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> texaux_rtv = nullptr;
-      
-      ComPtr<ID3D11ShaderResourceView> texusea_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> texusea_rtv = nullptr;
+      ComPtr<ID3D11ShaderResourceView> draw_color_srv = nullptr; // rgba8u
+      ComPtr<ID3D11RenderTargetView> draw_color_rtv = nullptr;
 
-      ComPtr<ID3D11ShaderResourceView> texuseb_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> texuseb_rtv = nullptr;
+      uint color_size_new = 0; // if 0, resources are not created. 1/2 of depth_size_new
+      bool IsColorNewReady() { return color_size_new > 0; } // TODO: this is tied to depth, so remove
+      int color_mips_new = 0;
+      int color_mips_skip_new = 0;
+      UINT x_mip0_width  = 0;
+      UINT x_mip0_height = 0;
+      UINT y_mip0_width  = 0;
+      UINT y_mip0_height = 0;
+      
+      std::vector<ID3D11ShaderResourceView*> color_aux_x_srvs(8); // height = width * 2
+      std::vector<ID3D11RenderTargetView*>   color_aux_x_rtvs(8); 
+
+      std::vector<ID3D11ShaderResourceView*> color_aux_y_srvs(8); // height = width
+      std::vector<ID3D11RenderTargetView*>   color_aux_y_rtvs(8); 
+      
+      ComPtr<ID3D11ShaderResourceView> color_use_a_srv; // mip0 is use
+      ComPtr<ID3D11RenderTargetView>   color_use_a_rtv;
+
+      ComPtr<ID3D11ShaderResourceView> color_use_b_srv; // mip0 is use
+      ComPtr<ID3D11RenderTargetView>   color_use_b_rtv;
+
+      struct alignas(16) CBMegaMixColorAux
+      {
+         float2 src_size;
+         float2 inv_src_size;
+         float2 axis;
+      };
+      ComPtr<ID3D11Buffer> color_aux_cb;
+      
+      ComPtr<ID3D11BlendState> color_aux_blendstate;
 
       void Reset_Resources()
       {
          depth_size_new = 0;
-         depthdraw_srv.reset(); depthdraw_dsv.reset();
-         depthaux_srv.reset(); depthaux_rtv.reset();
-         depthuse_srv.reset(); depthuse_rtv.reset();
-         // depthdownuse_srv.reset(); depthdownuse_rtv.reset();
+         draw_depth_srv.reset(); draw_depth_dsv.reset();
+         draw_color_srv.reset(); draw_color_rtv.reset();
+         draw_depth_aux_srv.reset(); draw_depth_aux_rtv.reset();
+         draw_depth_use_srv.reset(); draw_depth_use_rtv.reset();
+         draw_depth_use_eroded_srv.reset(); draw_depth_use_eroded_rtv.reset();
 
-         tex_size_new = 0;
-         texdraw_srv.reset(); texdraw_rtv.reset();
-         texaux_srv.reset(); texaux_rtv.reset();
-         texusea_srv.reset(); texusea_rtv.reset();
-         texuseb_srv.reset(); texuseb_rtv.reset();
+         color_size_new = 0; 
+         ResetCOMArray(color_aux_x_srvs); ResetCOMArray(color_aux_x_rtvs);
+         ResetCOMArray(color_aux_y_srvs); ResetCOMArray(color_aux_y_rtvs);
+         color_use_a_srv.reset(); color_use_a_rtv.reset();
+         color_use_b_srv.reset(); color_use_b_rtv.reset();
       }
       
       void Reset()
@@ -3921,22 +3961,51 @@ namespace ShadowMap
          Reset_Handles();
       }
 
-      bool TryCreate(ID3D11Device* native_device)
+      bool is_dirty_check_token = true; // grant by ImGui open, so we dont have to recheck all each
+      bool TryCreateIfDirty(ID3D11Device* native_device)
       {
+         // token?
+         [[likely]] if (!is_dirty_check_token) return false;
+         is_dirty_check_token = false; // consume
+
          // dirty?
-         uint depth_size_desired = GetEnabledDepthSize();
-         uint tex_size_desired = GetEnabledTexSize();
-         bool is_dirty_depth = depth_size_desired != depth_size_new;
-         bool is_dirty_tex = tex_size_desired != tex_size_new;
-         bool is_dirty = is_dirty_tex || is_dirty_depth;
-         [[likely]] if (!is_dirty) return false;
+         bool is_dirty = false;
+         {
+            // depth size
+            static int prev_enabled_depth;
+            int new_enabled_depth = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE);
+
+            // color mips
+            static int prev_enabled_color_mips;
+            color_mips_new = enabled_color_mips;
+            color_mips_new = max(color_mips_new, 1);
+            color_mips_new = min(color_mips_new, color_aux_x_srvs.size());
+            int new_enabled_tex_mips = color_mips_new;
+
+            // color mips skip
+            static int prev_color_mips_skip;
+            color_mips_skip_new = color_mips_skip;
+            if (color_mips_skip_new < 0) color_mips_skip_new = max(0, new_enabled_depth - 2); // treat as if always 2048x2048, so first mip0 is 1024x1024
+
+            // dirty?
+            is_dirty =
+               prev_enabled_depth != new_enabled_depth
+            || prev_enabled_color_mips != new_enabled_tex_mips
+            || prev_color_mips_skip != color_mips_skip;
+
+            // save to prev
+            prev_enabled_depth = new_enabled_depth;
+            prev_enabled_color_mips = new_enabled_tex_mips;
+            prev_color_mips_skip = color_mips_skip;
+         }
+         if (!is_dirty) return false;
          
          // reset
          if (is_dirty) Reset_Resources();
 
          // set
-         depth_size_new = depth_size_desired;
-         tex_size_new = tex_size_desired;
+         depth_size_new = GetEnabledDepthSize();
+         color_size_new = depth_size_new / pow(2, 1 + color_mips_skip_new);
 
          ComPtr<ID3D11Texture2D> tex_ptr;
 
@@ -3954,7 +4023,7 @@ namespace ShadowMap
          depth_desc.CPUAccessFlags = 0;
          depth_desc.MiscFlags = 0;
          
-         if (is_dirty && depth_size_new > 0)
+         ASSERT_MSG(depth_size_new > 0, "ShadowMap: TryCreate() depth_size_new is 0");
          {
             D3D11_DEPTH_STENCIL_VIEW_DESC depth_dsv_desc;
             depth_dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
@@ -3976,9 +4045,9 @@ namespace ShadowMap
             // depth draw
             auto hr0 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
             ASSERT_MSG(SUCCEEDED(hr0), "ShadowMap: Create() hr0");
-            auto hr1 = native_device->CreateShaderResourceView(tex_ptr.get(), &depth_srv_desc, depthdraw_srv.put());
+            auto hr1 = native_device->CreateShaderResourceView(tex_ptr.get(), &depth_srv_desc, draw_depth_srv.put());
             ASSERT_MSG(SUCCEEDED(hr1), "ShadowMap: Create() hr1");
-            auto hr2 = native_device->CreateDepthStencilView(tex_ptr.get(), &depth_dsv_desc, depthdraw_dsv.put());
+            auto hr2 = native_device->CreateDepthStencilView(tex_ptr.get(), &depth_dsv_desc, draw_depth_dsv.put());
             ASSERT_MSG(SUCCEEDED(hr2), "ShadowMap: Create() hr2");
 
             // depth aux & use
@@ -3987,130 +4056,347 @@ namespace ShadowMap
 
             auto hr3 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
             ASSERT_MSG(SUCCEEDED(hr3), "ShadowMap: Create() hr3");
-            auto hr4 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, depthaux_srv.put());
+            auto hr4 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, draw_depth_aux_srv.put());
             ASSERT_MSG(SUCCEEDED(hr4), "ShadowMap: Create() hr4");
-            auto hr5 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, depthaux_rtv.put());
+            auto hr5 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, draw_depth_aux_rtv.put());
             ASSERT_MSG(SUCCEEDED(hr5), "ShadowMap: Create() hr5");
 
             auto hr6 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
             ASSERT_MSG(SUCCEEDED(hr6), "ShadowMap: Create() hr6");
-            auto hr7 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, depthuse_srv.put());
+            auto hr7 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, draw_depth_use_srv.put());
             ASSERT_MSG(SUCCEEDED(hr7), "ShadowMap: Create() hr7");
-            auto hr8 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, depthuse_rtv.put());
+            auto hr8 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, draw_depth_use_rtv.put());
             ASSERT_MSG(SUCCEEDED(hr8), "ShadowMap: Create() hr8");
 
-            // auto hr009 = native_device->CreateTexture2D(&depth_desc, nullptr, tex_ptr.put());
-            // ASSERT_MSG(SUCCEEDED(hr009), "ShadowMap: Create() hr009");
-            // auto hr010 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, depthdownuse_srv.put());
-            // ASSERT_MSG(SUCCEEDED(hr010), "ShadowMap: Create() hr010");
-            // auto hr011 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, depthdownuse_rtv.put());
-            // ASSERT_MSG(SUCCEEDED(hr011), "ShadowMap: Create() hr011");
-
-            // tex draw // TODO: ugly naming
+            // tex draw
             D3D11_TEXTURE2D_DESC tex_desc = depth_desc;
-            tex_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // TODO: why does the game even use rgba for monochrome shadows?
+            tex_desc.Format = DXGI_FORMAT_R8G8_UNORM; // why does the game even use rgba for monochrome shadows?
             tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
             
             auto hr9 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
             ASSERT_MSG(SUCCEEDED(hr9), "ShadowMap: Create() hr9");
-            auto hr10 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texdraw_srv.put());
+            auto hr10 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, draw_color_srv.put());
             ASSERT_MSG(SUCCEEDED(hr10), "ShadowMap: Create() hr10");
-            auto hr11 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texdraw_rtv.put());
+            auto hr11 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, draw_color_rtv.put());
             ASSERT_MSG(SUCCEEDED(hr11), "ShadowMap: Create() hr11");
 
             // log
             reshade::log::message(reshade::log::level::info, std::format("ShadowMap: Created Resources for depth {}x{}", depth_size_new, depth_size_new).c_str());
          }
          
-         if (is_dirty && tex_size_new > 0)
+         ASSERT_MSG(color_size_new > 0, "ShadowMap: TryCreate() color_size_new is 0");
          {
-            // tex aux // TODO: ugly naming
-            D3D11_TEXTURE2D_DESC tex_desc = depth_desc;
-            tex_desc.Width = tex_size_new;
-            tex_desc.Height = tex_size_new;
-            tex_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // TODO: why does the game even use rgba for monochrome shadows?
-            tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-
-            auto hr12 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
-            ASSERT_MSG(SUCCEEDED(hr12), "ShadowMap: Create() hr12");
-            auto hr13 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texaux_srv.put());
-            ASSERT_MSG(SUCCEEDED(hr13), "ShadowMap: Create() hr13");
-            auto hr14 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texaux_rtv.put());
-            ASSERT_MSG(SUCCEEDED(hr14), "ShadowMap: Create() hr14");
-
             // tex use a & b
+            D3D11_TEXTURE2D_DESC tex_desc = depth_desc;
+            tex_desc.Width = color_size_new;
+            tex_desc.Height = color_size_new;
+            tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+            
+            tex_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; // TODO: why does the game even use rgba for monochrome shadows?
             tex_desc.MipLevels = 4;
             tex_desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS; // farther away = higher mip
 
             auto hr15 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
             ASSERT_MSG(SUCCEEDED(hr15), "ShadowMap: Create() hr15");
-            auto hr16 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texusea_srv.put());
+            auto hr16 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, color_use_a_srv.put());
             ASSERT_MSG(SUCCEEDED(hr16), "ShadowMap: Create() hr16");
-            auto hr17 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texusea_rtv.put());
+            auto hr17 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, color_use_a_rtv.put());
             ASSERT_MSG(SUCCEEDED(hr17), "ShadowMap: Create() hr17");
 
             auto hr18 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
             ASSERT_MSG(SUCCEEDED(hr18), "ShadowMap: Create() hr18");
-            auto hr19 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, texuseb_srv.put());
+            auto hr19 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, color_use_b_srv.put());
             ASSERT_MSG(SUCCEEDED(hr19), "ShadowMap: Create() hr19");
-            auto hr20 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, texuseb_rtv.put());
+            auto hr20 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, color_use_b_rtv.put());
             ASSERT_MSG(SUCCEEDED(hr20), "ShadowMap: Create() hr20");
 
+            // tex aux: setup
+            tex_desc.MiscFlags = 0;
+            tex_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+            tex_desc.MipLevels = color_mips_new;
+            
+            x_mip0_width  = color_size_new * 2; // depth
+            x_mip0_height = color_size_new;     // depth / 2
+            
+            y_mip0_width  = color_size_new; // depth / 2
+            y_mip0_height = color_size_new; // depth / 2
+
+            // tex aux: y (mipmap chain)
+            tex_desc.Width = y_mip0_width;
+            tex_desc.Height = y_mip0_height;
+
+            auto hr21 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
+            ASSERT_MSG(SUCCEEDED(hr21), "ShadowMap: Create() hr21");
+
+            D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+            rtv_desc.Format = tex_desc.Format;
+            rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+            
+            D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+            srv_desc.Format = tex_desc.Format;
+            srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srv_desc.Texture2D.MipLevels = 1; // allow only 1 mip to get accessed
+
+            for (int i = 0; i < color_mips_new; i++)
+            {
+               rtv_desc.Texture2D.MipSlice = i;
+               auto hr22 = native_device->CreateRenderTargetView(tex_ptr.get(), &rtv_desc, &color_aux_y_rtvs[i]);
+               ASSERT_MSG(SUCCEEDED(hr22), "ShadowMap: Create() hr22");
+                     
+               srv_desc.Texture2D.MostDetailedMip = i;
+               auto hr23 = native_device->CreateShaderResourceView(tex_ptr.get(), &srv_desc, &color_aux_y_srvs[i]);
+               ASSERT_MSG(SUCCEEDED(hr23), "ShadowMap: Create() hr23");
+            }
+
+            // tex aux: x (unlike y, needs individual tex)
+            tex_desc.Width = x_mip0_width;
+            tex_desc.Height = x_mip0_height;
+            tex_desc.MipLevels = 1;
+            
+            auto hr24 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
+            ASSERT_MSG(SUCCEEDED(hr24), "ShadowMap: Create() hr24");
+            auto hr25 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, &color_aux_x_rtvs[0]);
+            ASSERT_MSG(SUCCEEDED(hr25), "ShadowMap: Create() hr25");
+            auto hr26 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, &color_aux_x_srvs[0]);
+            ASSERT_MSG(SUCCEEDED(hr26), "ShadowMap: Create() hr26");
+
+            for (UINT i = 1; i < color_mips_new; ++i)
+            {
+               tex_desc.Width = max(1u, x_mip0_width >> i);
+               tex_desc.Height = max(1u, x_mip0_height >> i);
+               auto hr27 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
+               ASSERT_MSG(SUCCEEDED(hr27), "ShadowMap: Create() hr27");
+               auto hr28 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, &color_aux_x_rtvs[i]);
+               ASSERT_MSG(SUCCEEDED(hr28), "ShadowMap: Create() hr28");
+               auto hr29 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, &color_aux_x_srvs[i]);
+               ASSERT_MSG(SUCCEEDED(hr29), "ShadowMap: Create() hr29");
+            }
+
+            // cb
+            [[unlikely]] if (!color_aux_cb)
+            {
+               D3D11_BUFFER_DESC buffer_desc = {};
+               buffer_desc.ByteWidth = sizeof(CBMegaMixColorAux);
+               buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
+               buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+               buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+               auto hr30 = native_device->CreateBuffer(&buffer_desc, nullptr, color_aux_cb.put());
+               ASSERT_MSG(SUCCEEDED(hr30), "ShadowMap: Create() hr30");
+            }
+            
+
+            // blend
+            [[unlikely]] if (!color_aux_blendstate)
+            {
+               CD3D11_BLEND_DESC blend_desc(D3D11_DEFAULT);
+               blend_desc.RenderTarget[0].BlendEnable = TRUE;
+               blend_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_BLEND_FACTOR;
+               blend_desc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
+               auto hr31 = native_device->CreateBlendState(&blend_desc, color_aux_blendstate.put());
+               ASSERT_MSG(SUCCEEDED(hr31), "ShadowMap: Create() hr31");
+            }
+            
             // log
-            reshade::log::message(reshade::log::level::info, std::format("ShadowMap: Created Resources for tex {}x{}", tex_size_new, tex_size_new).c_str());
+            reshade::log::message(reshade::log::level::info, std::format("ShadowMap: Created Resources for tex {}x{}", color_size_new, color_size_new).c_str());
          }
 
          return true;
       }
    }
 
-   namespace Shaders
+   void DrawWorldDownsamplePass(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, bool is_texb)
    {
-      constexpr const char* Luma_MegaMix_ESMDepthGaussian = "Luma_MegaMix_ESMDepthGaussian"; // file name
-      constexpr const char* Luma_MegaMix_ESMDepthGaussian_New4096 = "Luma_MegaMix_ESMDepthGaussian_New4096"; // shader name
-      constexpr const char* Luma_MegaMix_ESMDepthGaussian_New8192 = "Luma_MegaMix_ESMDepthGaussian_New8192"; // shader name
+      ASSERT_MSG(Resources::IsDepthNewReady(), "ShadowMap: DrawWorldDownsamplePass() Resources::IsDepthNewReady() false");
+      ASSERT_MSG(Resources::IsColorNewReady(), "ShadowMap: DrawWorldDownsamplePass() Resources::IsColorNewReady() false");
+      ASSERT_MSG(Resources::color_aux_cb, "ShadowMap: DrawWorldDownsamplePass() Resources::color_aux_cb null");
 
-      void OnInit()
+      // Backup TODO: del unneeded backups
+      D3D11_PRIMITIVE_TOPOLOGY primitive_topology_original;
+      native_device_context->IAGetPrimitiveTopology(&primitive_topology_original);
+      
+      // ComPtr<ID3D11VertexShader> vs_original;
+      // native_device_context->VSGetShader(vs_original.put(), nullptr, nullptr);
+      
+      // ComPtr<ID3D11PixelShader> ps_original;
+      // native_device_context->PSGetShader(ps_original.put(), nullptr, nullptr);
+      
+      // ComPtr<ID3D11Buffer> cb_orginal;
+      // native_device_context->PSGetConstantBuffers(11, 1, cb_orginal.put());
+      
+      ComPtr<ID3D11SamplerState> ps_sampler_original;
+      native_device_context->PSGetSamplers(0, 1, ps_sampler_original.put());
+      
+      // ComPtr<ID3D11ShaderResourceView> ps_srv_original;
+      // native_device_context->PSGetShaderResources(0, 1, ps_srv_original.put());
+      
+      // UINT num_viewports = 1;
+      // std::array<D3D11_VIEWPORT, 1> viewports_original;
+      // native_device_context->RSGetViewports(&num_viewports, viewports_original.data());
+      
+      // ComPtr<ID3D11RasterizerState> rasterizer_original;
+      // native_device_context->RSGetState(rasterizer_original.put());
+      
+      // ComPtr<ID3D11BlendState> blend_original;
+      // FLOAT blend_factor_original[1];
+      // UINT sample_mask_original;
+      // native_device_context->OMGetBlendState(blend_original.put(), blend_factor_original, &sample_mask_original);
+      
+      // std::array<ID3D11RenderTargetView*, 1> rtvs_original = {};
+      // ComPtr<ID3D11DepthStencilView> dsv_original;
+      // native_device_context->OMGetRenderTargets(rtvs_original.size(), rtvs_original.data(), dsv_original.put());
+      
+      // cb
+      Resources::CBMegaMixColorAux cb_data;
+      auto update_constant_buffer = [&]()
       {
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMDepthGaussian_New4096), ShaderDefinition{ Luma_MegaMix_ESMDepthGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "main", {{ "CUSTOM_ESM_DEPTH_NEW_SIZE", "4096"}}});
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ESMDepthGaussian_New8192), ShaderDefinition{ Luma_MegaMix_ESMDepthGaussian, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "main", {{ "CUSTOM_ESM_DEPTH_NEW_SIZE", "8192"}}});
+         D3D11_MAPPED_SUBRESOURCE mapped_subresource;
+         auto hr = native_device_context->Map(Resources::color_aux_cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_subresource);
+         ASSERT_MSG(SUCCEEDED(hr), "DrawWorldDownsamplePass: Map() failed");
+         std::memcpy(mapped_subresource.pData, &cb_data, sizeof(Resources::CBMegaMixColorAux));
+         native_device_context->Unmap(Resources::color_aux_cb.get(), 0);
+      };
+
+      // 0th Downsample: X w/ Prefilter
+      D3D11_VIEWPORT viewport_x = {};
+      viewport_x.Width = Resources::x_mip0_width;
+      viewport_x.Height = Resources::x_mip0_height;
+
+      cb_data.src_size = float2(Resources::color_size_new, Resources::color_size_new);
+      cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+      cb_data.axis = float2(1.0f, 0.0f);
+      // cb_data.sigma = sigma;
+      update_constant_buffer();
+
+      native_device_context->OMSetRenderTargets(1, &Resources::color_aux_x_rtvs[0], nullptr);
+      native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_ESMColorGaussian_MainVS)).get(), nullptr, 0); // same for the rest
+      native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_ESMColorGaussian_DownPreFilter)).get(), nullptr, 0);
+      native_device_context->PSSetConstantBuffers(11, 1, &Resources::color_aux_cb); // same for the rest
+      const std::array ps_samplers = { device_data.sampler_state_linear.get() }; // same for the rest
+      native_device_context->PSSetSamplers(0, ps_samplers.size(), ps_samplers.data());
+      native_device_context->PSSetShaderResources(0, 1, &Resources::draw_color_srv);
+      native_device_context->RSSetViewports(1, &viewport_x);
+      native_device_context->RSSetState(nullptr);
+
+      native_device_context->Draw(3, 0);
+
+      // 0th Downsample: Y
+      std::vector<D3D11_VIEWPORT> viewports_y(Resources::color_mips_new);
+      viewports_y[0].Width = Resources::y_mip0_width;
+      viewports_y[0].Height = Resources::y_mip0_height;
+      
+      cb_data.src_size = float2(Resources::x_mip0_width, Resources::x_mip0_height);
+      cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+      cb_data.axis = float2(0.0f, 1.0f);
+      update_constant_buffer();
+      
+      native_device_context->OMSetRenderTargets(1, &Resources::color_aux_y_rtvs[0], nullptr);
+      native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_ESMColorGaussian_Down)).get(), nullptr, 0);
+      native_device_context->PSSetShaderResources(0, 1, &Resources::color_aux_x_srvs[0]);
+      native_device_context->RSSetViewports(1, &viewports_y[0]);
+      
+      native_device_context->Draw(3, 0);
+
+      // Downsample
+      UINT x_mip0_width_eff  = Resources::x_mip0_width;
+      UINT x_mip0_height_eff = Resources::x_mip0_height;
+      UINT y_mip0_width_eff  = Resources::y_mip0_width;
+      UINT y_mip0_height_eff = Resources::y_mip0_height;
+      for (UINT i = 1; i < Resources::color_mips_new; i++)
+      {
+         // X
+         viewport_x.Width = max(1u, x_mip0_width_eff >> i);
+         viewport_x.Height = max(1u, x_mip0_height_eff >> i);
+         
+         cb_data.src_size = float2(viewports_y[i - 1].Width, viewports_y[i - 1].Height);
+         cb_data.axis = float2(1.0f, 0.0f);
+         cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+         // cb_data.sigma += color_sigma_increase;
+         update_constant_buffer();
+         
+         native_device_context->OMSetRenderTargets(1, &Resources::color_aux_x_rtvs[i], nullptr);
+         native_device_context->PSSetShaderResources(0, 1, &Resources::color_aux_y_srvs[i - 1]);
+         native_device_context->RSSetViewports(1, &viewport_x);
+          
+         native_device_context->Draw(3, 0);
+
+         // Y
+         viewports_y[i].Width = max(1u, y_mip0_width_eff >> i);
+         viewports_y[i].Height = max(1u, y_mip0_height_eff >> i);
+            
+         cb_data.src_size = float2(viewport_x.Width, viewport_x.Height);
+         cb_data.axis = float2(0.0f, 1.0f);
+         cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+         update_constant_buffer();
+         
+         native_device_context->OMSetRenderTargets(1, &Resources::color_aux_y_rtvs[i], nullptr);
+         native_device_context->PSSetShaderResources(0, 1, &Resources::color_aux_x_srvs[i]);
+         native_device_context->RSSetViewports(1, &viewports_y[i]);
+         
+         native_device_context->Draw(3, 0);
       }
 
-      uint32_t GetShaderHashFromEnabledDepth(EnabledDepth depth)
+      // Upsample (climb up Y mips, until final where we postfilter into use a/b)
+      native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_ESMColorGaussian_Up)).get(), nullptr, 0);
+      for (int i = Resources::color_mips_new - 1; i > 0; i--)
       {
-         switch (depth)
-         {
-            case Depth4096: return CompileTimeStringHash(Luma_MegaMix_ESMDepthGaussian_New4096);
-            case Depth8192: return CompileTimeStringHash(Luma_MegaMix_ESMDepthGaussian_New8192);
-            default: return 0;
-         }
+         bool is_final = i == 1;
+         static constexpr FLOAT blend_factor_half[] = { 0.5f, 0.5f, 0.5f, 0.5f };
+         static constexpr FLOAT blend_factor_1[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+      
+         cb_data.src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
+         cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+         update_constant_buffer();
+      
+         if (is_final) native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_ESMColorGaussian_UpPostFilter)).get(), nullptr, 0); // final: postfilter
+         native_device_context->OMSetRenderTargets(1, !is_final ? &Resources::color_aux_y_rtvs[i - 1] : (!is_texb ? &Resources::color_use_a_rtv : &Resources::color_use_b_rtv), nullptr);
+         native_device_context->PSSetShaderResources(0, 1, &Resources::color_aux_y_srvs[i]);
+         native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
+         native_device_context->OMSetBlendState(!is_final ? Resources::color_aux_blendstate.get() : nullptr, !is_final ? blend_factor_half : blend_factor_1, UINT_MAX); // final: full blend to stop prev frame bleed
+      
+         native_device_context->Draw(3, 0);
       }
+
+      // Restore and Clean
+      // native_device_context->OMSetBlendState(blend_original.get(), blend_factor_original, sample_mask_original);
+      // native_device_context->OMSetRenderTargets(rtvs_original.size(), rtvs_original.data(), dsv_original.get());
+      native_device_context->IASetPrimitiveTopology(primitive_topology_original);
+      // native_device_context->VSSetShader(vs_original.get(), nullptr, 0);
+      // native_device_context->PSSetShader(ps_original.get(), nullptr, 0);
+      // native_device_context->PSSetConstantBuffers(11, 1, &cb_orginal);
+      native_device_context->PSSetSamplers(0, 1, &ps_sampler_original);
+      // native_device_context->PSSetShaderResources(0, 1, &ps_srv_original);
+      // native_device_context->RSSetViewports(viewports_original.size(), viewports_original.data());
+      // native_device_context->RSSetState(rasterizer_original.get());
+      // ResetCOMArray(rtvs_original);
    }
 
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
-      if (!IsEnabled()) return DrawOrDispatchOverrideType::None;
-      if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
+      DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
+      if (!IsEnabled()) return result;
+      if (DEVELOPMENT && !IsModEnabled()) return result;
       
       // force skips state
       if (state_shadow_cast_count > 0)
       {
          if (state <= DepthExpand0 && state_shadow_cast_count && (ps == 0x54B1FF52 || ps == 0xCEDAC7C0)) state = DepthExpand0; // to DepthExpand0
-         else if (state == ShadowCast && state_shadow_cast_count && ps == 0x58A712B5) state = TexBDownsample0; // to TexBDownsample0
+         else if (state == Silhouette && state_shadow_cast_count && ps == 0x58A712B5) state = TexBDownsample0; // to TexBDownsample0
       }
-      
+
+      BeginningOfSwitch:
       switch (state)
       {
-         case ShadowCast:
+         case Silhouette:
          {
             // shadow caster ps?
-            bool is_shadow_cast_shader = std::find(shadow_cast_shaders.begin(), shadow_cast_shaders.end(), ps) != shadow_cast_shaders.end();
+            bool is_shadow_cast_shader = std::find(silhouette_shaders.begin(), silhouette_shaders.end(), ps) != silhouette_shaders.end();
             if (is_shadow_cast_shader) state_shadow_cast_count++; // count++
             
             // ready
-            if (Resources::IsOriginalSearchReady() && Resources::IsDepthNewReady() && is_shadow_cast_shader && state_replacetoken_shadowcast)
+            if (Resources::IsOriginalSearchReady() && Resources::IsDepthNewReady() && is_shadow_cast_shader && state_replacetoken_silhouette)
             {
-               // verify RTV0 & DSV are expected handles (this will correctly fail when PBR vs NPR switches)
+               // verify RTV0 & DSV are expected handles (this will correctly fail when PBR vs NPR switches. late 1 frame, but whatever since the game always uses transition effects when switching)
                ComPtr<ID3D11RenderTargetView> rtv0;
                ComPtr<ID3D11DepthStencilView> dsv;
                native_device_context->OMGetRenderTargets(1, rtv0.put(), dsv.put());
@@ -4126,8 +4412,6 @@ namespace ShadowMap
                uint64_t dsv_handle = reinterpret_cast<uint64_t>(dsv_res.get());
                if (rtv0_handle != Resources::orig_tex_handle || dsv_handle != Resources::orig_depthdraw_handle)
                {
-                  // reshade::log::message(reshade::log::level::warning, std::format("ShadowMap: ShadowCast RTV0 handle 0x{:X} or DSV handle 0x{:X} does not match expected orig_tex_handle 0x{:X} or orig_depthdraw_handle 0x{:X}", rtv0_handle, dsv_handle, Resources::orig_tex_handle, Resources::orig_depthdraw_handle).c_str());
-                  ASSERT_MSG(false, "ShadowMap: ShadowCast RTV0 or DSV handle does not match expected orig_tex_handle or orig_depthdraw_handle"); // TODO: since correct, remove this
                   Resources::Reset_Handles();
                   break;
                }
@@ -4136,13 +4420,13 @@ namespace ShadowMap
                if (state_shadow_cast_count == 1)
                {
                   constexpr float clear_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-                  native_device_context->ClearRenderTargetView(Resources::texdraw_rtv.get(), clear_color);
-                  native_device_context->ClearDepthStencilView(Resources::depthdraw_dsv.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+                  native_device_context->ClearRenderTargetView(Resources::draw_color_rtv.get(), clear_color);
+                  native_device_context->ClearDepthStencilView(Resources::draw_depth_dsv.get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
                }
                
                // RTV0 & DSV as ours
-               state_replacetoken_shadowcast = false; // consume
-               native_device_context->OMSetRenderTargets(1, &Resources::texdraw_rtv, Resources::depthdraw_dsv.get());
+               state_replacetoken_silhouette = false; // consume
+               native_device_context->OMSetRenderTargets(1, &Resources::draw_color_rtv, Resources::draw_depth_dsv.get());
 
                // viewport to size
                float ratio = static_cast<float>(Resources::depth_size_new) / static_cast<float>(Resources::depth_size_orig);
@@ -4187,23 +4471,14 @@ namespace ShadowMap
                if (Resources::IsDepthNewReady())
                {
                   // replace
-                  native_device_context->PSSetShaderResources(0, 1, &Resources::texdraw_srv); // SRV0: tex draw
+                  native_device_context->PSSetShaderResources(0, 1, &Resources::draw_color_srv); // SRV0: tex draw
                }
 
-               if (Resources::IsTexNewReady())
+               if (Resources::IsColorNewReady())
                {
-                  // replace
-                  native_device_context->OMSetRenderTargets(1, &Resources::texuseb_rtv, nullptr); // RTV0: tex use b
-                  
-                  // viewport to size
-                  D3D11_VIEWPORT viewport;
-                  viewport.TopLeftX = 0;
-                  viewport.TopLeftY = 0;
-                  viewport.Width  = Resources::tex_size_new;
-                  viewport.Height = Resources::tex_size_new;
-                  viewport.MinDepth = 0;
-                  viewport.MaxDepth = 1;
-                  native_device_context->RSSetViewports(1, &viewport);
+                  // replace with downsample gaussian pass
+                  DrawWorldDownsamplePass(native_device, native_device_context, cmd_list_data, device_data, true);
+                  result = DrawOrDispatchOverrideType::Replaced; // replaced
                }
             }
 
@@ -4221,13 +4496,9 @@ namespace ShadowMap
             }
 
             // ready
-            if (Resources::IsOriginalSearchReady() && Resources::IsTexNewReady())
+            if (Resources::IsOriginalSearchReady() && Resources::IsColorNewReady())
             {
-               // replace
-               native_device_context->PSSetShaderResources(0, 1, &Resources::texuseb_srv); // SRV0: tex use b
-               native_device_context->OMSetRenderTargets(1, &Resources::texaux_rtv, nullptr); // RTV0: tex aux
-            
-               // TODO: 4 taps are not enough
+               result = DrawOrDispatchOverrideType::Replaced; // replaced prior
             }
 
             // next
@@ -4244,19 +4515,17 @@ namespace ShadowMap
             }
 
             // ready
-            if (Resources::IsOriginalSearchReady() && Resources::IsTexNewReady())
+            if (Resources::IsOriginalSearchReady() && Resources::IsColorNewReady())
             {
-               // replace
-               native_device_context->PSSetShaderResources(0, 1, &Resources::texaux_srv); // SRV0: tex aux
-               native_device_context->OMSetRenderTargets(1, &Resources::texuseb_rtv, nullptr); // RTV0: tex use b
+               result = DrawOrDispatchOverrideType::Replaced; // replaced prior
             }
             
             // state
             state_texb_used_this_frame = true;
 
             // next (continues casting shadows)
-            state = ShadowCast;
-            state_replacetoken_shadowcast = true;
+            state = Silhouette;
+            state_replacetoken_silhouette = true;
             break;
          }
          // (multiple ShadowCast shader draws expected in between) ///////////////////////////
@@ -4267,7 +4536,7 @@ namespace ShadowMap
             state_is_pbr = ps == 0x54B1FF52;
 
             // create resources
-            Resources::TryCreate(native_device);
+            Resources::TryCreateIfDirty(native_device);
 
             // not ready
             [[unlikely]] if (Resources::state == Resources::FindDepthDrawHandle) 
@@ -4307,9 +4576,9 @@ namespace ShadowMap
             else if (Resources::IsOriginalSearchReady() && Resources::IsDepthNewReady())
             {
                // replace
-               native_device_context->PSSetShaderResources(0, 1, &Resources::depthdraw_srv); // SRV0: depth draw
-               native_device_context->OMSetRenderTargets(1, &Resources::depthaux_rtv, nullptr); // RTV0: depth aux
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(Shaders::GetShaderHashFromEnabledDepth(enabled_depth)).get(), nullptr, 0); // PS: higher quality depth gaussian blur
+               native_device_context->PSSetShaderResources(0, 1, &Resources::draw_depth_srv); // SRV0: depth draw
+               native_device_context->OMSetRenderTargets(1, &Resources::draw_depth_aux_rtv, nullptr); // RTV0: depth aux
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(state_is_pbr ? CompileTimeStringHash(Shaders::Luma_MegaMix_ESMDepthGaussian_Default) : CompileTimeStringHash(Shaders::Luma_MegaMix_ESMDepthGaussian_NPRNormalize)).get(), nullptr, 0); // PS: higher quality depth gaussian blur
 
                // viewport to size
                D3D11_VIEWPORT viewport;
@@ -4367,9 +4636,9 @@ namespace ShadowMap
                }
                
                // replace
-               native_device_context->PSSetShaderResources(0, 1, &Resources::depthaux_srv); // SRV0: depth aux
-               native_device_context->OMSetRenderTargets(1, &Resources::depthuse_rtv, nullptr); // RTV0: depth use (no more RTV use starting here! used as SRV19 later)
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(Shaders::GetShaderHashFromEnabledDepth(enabled_depth)).get(), nullptr, 0); // PS: higher quality depth gaussian blur
+               native_device_context->PSSetShaderResources(0, 1, &Resources::draw_depth_aux_srv); // SRV0: depth aux
+               native_device_context->OMSetRenderTargets(1, &Resources::draw_depth_use_rtv, nullptr); // RTV0: depth use (no more RTV use starting here! used as SRV19 later)
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_ESMDepthGaussian_Default)).get(), nullptr, 0); // PS: higher quality depth gaussian blur
             }
 
             // next
@@ -4386,23 +4655,9 @@ namespace ShadowMap
             }
 
             // ready
-            if (Resources::IsOriginalSearchReady())
+            if (Resources::IsOriginalSearchReady() && Resources::IsDepthNewReady())
             {
-               // replace
-               native_device_context->PSSetShaderResources(0, 1, &Resources::depthuse_srv); // SRV0: depth use
-
-               // TODO: del, as replacing downsample is completely worthless (perf waste) for the later forward lighting passes
-               // native_device_context->OMSetRenderTargets(1, &Resources::depthaux_rtv, nullptr); // RTV0: depth aux
-               //
-               // // viewport to size (originally downscaled to 512x512)
-               // D3D11_VIEWPORT viewport;
-               // viewport.TopLeftX = 0;
-               // viewport.TopLeftY = 0;
-               // viewport.Width = static_cast<float>(Resources::size_new.x);
-               // viewport.Height = static_cast<float>(Resources::size_new.y);
-               // viewport.MinDepth = 0;
-               // viewport.MaxDepth = 1;
-               // native_device_context->RSSetViewports(1, &viewport);
+               native_device_context->PSSetShaderResources(0, 1, &Resources::draw_depth_use_srv); // SRV0: depth use
             }
 
             // next
@@ -4431,15 +4686,6 @@ namespace ShadowMap
                rtv0->GetResource(rtv0_res.put());
                Resources::orig_depthusedown_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
             }
-
-            // TODO: del, as replacing downsample is completely worthless (perf waste) for the later forward lighting passes
-            // // ready
-            // else if (Resources::IsOriginalSearchReady())
-            // {
-            //    // replace
-            //    native_device_context->PSSetShaderResources(0, 1, &Resources::depthaux_srv); // SRV0: depth aux
-            //    native_device_context->OMSetRenderTargets(1, &Resources::depthdownuse_rtv, nullptr); // RTV0: depth down use (no more RTV use starting here! used as SRV20 later)
-            // }
 
             // next
             state = TexADownsample0;
@@ -4499,23 +4745,24 @@ namespace ShadowMap
                if (Resources::IsDepthNewReady())
                {
                   // replace
-                  native_device_context->PSSetShaderResources(0, 1, &Resources::texdraw_srv); // SRV0: tex draw
+                  native_device_context->PSSetShaderResources(0, 1, &Resources::draw_color_srv); // SRV0: tex draw
                }
 
-               if (Resources::IsTexNewReady())
+               if (Resources::IsColorNewReady())
                {
-                  // replace
-                  native_device_context->OMSetRenderTargets(1, &Resources::texusea_rtv, nullptr); // RTV0: tex use a
-               
-                  // viewport to size (originally downscaled to 512x512)
-                  D3D11_VIEWPORT viewport;
-                  viewport.TopLeftX = 0;
-                  viewport.TopLeftY = 0;
-                  viewport.Width  = Resources::tex_size_new;
-                  viewport.Height = Resources::tex_size_new;
-                  viewport.MinDepth = 0;
-                  viewport.MaxDepth = 1;
-                  native_device_context->RSSetViewports(1, &viewport);
+                  // replace with downsample gaussian pass
+                  DrawWorldDownsamplePass(native_device, native_device_context, cmd_list_data, device_data, false);
+                  result = DrawOrDispatchOverrideType::Replaced; // replaced
+
+                  // bind aux for debug view
+                  if (DEVELOPMENT)
+                  {
+                     const std::array<ID3D11ShaderResourceView*, 9> srvs = {
+                        Resources::color_aux_y_srvs[0], // has all mips
+                        Resources::color_aux_x_srvs[0], Resources::color_aux_x_srvs[1], Resources::color_aux_x_srvs[2], Resources::color_aux_x_srvs[3], Resources::color_aux_x_srvs[4], Resources::color_aux_x_srvs[5], Resources::color_aux_x_srvs[6], Resources::color_aux_x_srvs[7]
+                     };
+                     native_device_context->PSSetShaderResources(64, srvs.size(), srvs.data());
+                  }
                }
             }
 
@@ -4533,13 +4780,9 @@ namespace ShadowMap
             }
 
             // ready
-            if (Resources::IsOriginalSearchReady() && Resources::IsTexNewReady())
+            if (Resources::IsOriginalSearchReady() && Resources::IsColorNewReady())
             {
-               // replace
-               native_device_context->PSSetShaderResources(0, 1, &Resources::texusea_srv); // SRV0: tex use a
-               native_device_context->OMSetRenderTargets(1, &Resources::texaux_rtv, nullptr); // RTV0: tex aux
-            
-               // TODO: 4 taps are not enough
+               result = DrawOrDispatchOverrideType::Replaced; // replaced prior
             }
 
             // next
@@ -4554,27 +4797,20 @@ namespace ShadowMap
                ASSERT_MSG(false, "ShadowMap: TexACopy0 ps not 0x58A712B5!?!?!");
                break;
             }
-            
-            // ready: replace
-            if (Resources::IsOriginalSearchReady() && Resources::IsTexNewReady())
-            {
-               native_device_context->PSSetShaderResources(0, 1, &Resources::texaux_srv); // SRV0: tex aux
-               native_device_context->OMSetRenderTargets(1, &Resources::texusea_rtv, nullptr); // RTV0: tex use a
-            }
 
-            // Draw(4)
-            native_device_context->Draw(4, 0); // replaced!!!
-
-            // ready: generate mips
-            if (Resources::IsOriginalSearchReady() && Resources::IsTexNewReady())
+            // ready
+            if (Resources::IsOriginalSearchReady() && Resources::IsColorNewReady())
             {
-               native_device_context->GenerateMips(Resources::texusea_srv.get());
-               if (state_texb_used_this_frame) native_device_context->GenerateMips(Resources::texuseb_srv.get());
+               // generate mips
+               native_device_context->GenerateMips(Resources::color_use_a_srv.get());
+               if (state_texb_used_this_frame) native_device_context->GenerateMips(Resources::color_use_b_srv.get());
+               
+               result = DrawOrDispatchOverrideType::Replaced; // replaced prior
             }
 
             // next
             state = SSSSetup;
-            return DrawOrDispatchOverrideType::Replaced; // replaced!!!
+            break;
          }
          case SSSSetup: 
          {
@@ -4606,21 +4842,23 @@ namespace ShadowMap
                   }
                }
 
-               // TODO: del, as replacing downsample is completely worthless (perf waste) for the later forward lighting passes
-               // // replace SRV 19-20
-               // state_replacetoken_sss = false; // consume
-               // const std::array<ID3D11ShaderResourceView*, 2> srvs1 = { Resources::depthuse_srv.get(), Resources::depthdownuse_srv.get() };
-               // native_device_context->PSSetShaderResources(19, srvs1.size(), srvs1.data());
-
                // replace SRV 19
                state_replacetoken_sss = false; // consume
-               native_device_context->PSSetShaderResources(19, 1, &Resources::depthuse_srv);
+               native_device_context->PSSetShaderResources(19, 1, &Resources::draw_depth_use_srv);
             }
             
             break;
          }
          case MainRender:
          {
+            // SPECIAL disgusting jump: Project X 100% res duplicate world reflections
+            if (ps == 0x93881580)
+            {
+               // redo switch on prev state
+               state = SSSSetup;
+               goto BeginningOfSwitch;
+            }
+            
             // replace
             if (Resources::IsOriginalSearchReady())
             {
@@ -4634,29 +4872,24 @@ namespace ShadowMap
                uint64_t srv19_handle = reinterpret_cast<uint64_t>(srv19_res.get());
                if (srv19_handle != Resources::orig_depthuse_handle) break; // failed: not expected handle
 
-               if (Resources::IsTexNewReady())
+               if (Resources::IsColorNewReady())
                {
                   // replace SRV 6-7
                   if (!state_texb_used_this_frame) // only 6 (A)
                   {
-                     native_device_context->PSSetShaderResources(6, 1, &Resources::texusea_srv);
+                     native_device_context->PSSetShaderResources(6, 1, &Resources::color_use_a_srv);
                   }
                   else // 6-7 (A & B)
                   {
-                     const std::array<ID3D11ShaderResourceView*, 2> srvs2 = { Resources::texusea_srv.get(), Resources::texuseb_srv.get() };
+                     const std::array<ID3D11ShaderResourceView*, 2> srvs2 = { Resources::color_use_a_srv.get(), Resources::color_use_b_srv.get() };
                      native_device_context->PSSetShaderResources(6, srvs2.size(), srvs2.data());
                   }
                }
 
                if (Resources::IsDepthNewReady())
                {
-                  // TODO: del, as replacing downsample is completely worthless (perf waste) for the later forward lighting passes
-                  // // replace SRV 19-20
-                  // const std::array<ID3D11ShaderResourceView*, 2> srvs1 = { Resources::depthuse_srv.get(), Resources::depthdownuse_srv.get() };
-                  // native_device_context->PSSetShaderResources(19, srvs1.size(), srvs1.data());
-                  
                   // replace SRV 19
-                  native_device_context->PSSetShaderResources(19, 1, &Resources::depthuse_srv);
+                  native_device_context->PSSetShaderResources(19, 1, &Resources::draw_depth_use_srv);
                }
                
                // next
@@ -4666,10 +4899,21 @@ namespace ShadowMap
             break;
          }
          case Done:
+         {
+            // SPECIAL disgusting jump: Project X 100% res duplicate world reflections + TV screen
+            if ((ps == ShaderHashesLists::ToSwapchain || ps == 0x4E2A88FE) && !TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo)) // copy or 4 tap blur before tonemap/final
+            {
+               // redo switch on prev state
+               state = MainRender;
+               goto BeginningOfSwitch;
+            }
+            
+            break;
+         }
          default: break;
       }
 
-      return DrawOrDispatchOverrideType::None;
+      return result;
    }
 
    void OnPresent(ID3D11Device* native_device)
@@ -4690,13 +4934,8 @@ namespace ShadowMap
 
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
-      int x = 0;
-      
-      if (reshade::get_config_value(runtime, NAME, reshadesave_enabled_depth, x))
-         enabled_depth = static_cast<EnabledDepth>(x);
-
-      if (reshade::get_config_value(runtime, NAME, reshadesave_enabled_tex, x))
-         enabled_tex = static_cast<EnabledTex>(x);
+      reshade::get_config_value(runtime, NAME, reshadesave_enabled_color_mips, enabled_color_mips);
+      reshade::get_config_value(runtime, NAME, reshadesave_color_mips_skip, color_mips_skip);
    }
 }
 
@@ -4704,7 +4943,15 @@ namespace DuplicateWorldReflection
 {
    const std::unordered_set<uint32_t> duplicate_world_reflection_ps = {
       0x208EEA46,
+      0x8C19842C,
+      0x74805C84,
    };
+
+   // 512x256 rgba16f
+
+   // (doesnt have 0x58A712B5 before!)
+   // 0x4E2A88FE: 4 taps
+   // 0x58A712B5: copy with multiplier
 }
 
 #if DEVELOPMENT
@@ -5733,7 +5980,7 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       ImGui::PushID("###SSS");
-      if (DrawCollapsingHeaderEnabledColored("Character Rendering", SSS::enabled))
+      if (DrawCollapsingHeaderEnabledColored("Characters", SSS::enabled))
       {
          DrawColoredSubHeader("PBR/FutureTone: Sub-Surface Scattering (SSS)");
 
@@ -5743,7 +5990,7 @@ public:
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Allow the screen-space SSS alogrithm to compute in full resolution."
                               "\n\n(This stops the bottle necking for shadow maps, but not having high quality blur to match high res can cause"
-                              "\nstripes of SSS glow for rare cases. Still, I'd rather have this 1%%-of-cases fail than the 99%%-of-cases bottle neck.)");
+                              "\nstrips of SSS glow for rare cases. Still, I'd rather fail the 1th percentile than the 99th.)");
 
          if (ImGui::SliderFloat("SSS Radius", &cb_luma_global_settings.GameSettings.SSSRadius, 0.5f, 1.5f))
             reshade::set_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
@@ -5785,42 +6032,48 @@ public:
       
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
+      // grant dirty check token
+      ShadowMap::Resources::is_dirty_check_token = true;
+      
       ImGui::PushID("###ShadowMap");
       if (DrawCollapsingHeaderEnabledColored("Shadow Map", ShadowMap::IsEnabled()))
       {
          DrawColoredSubHeader("Exponential Shadow Map");
-         
-         int enabled_depth_i = ShadowMap::enabled_depth;
-         constexpr std::array<const char*, 3> enabled_depth_items = { "FutureTone: 2048x2048, MegaMix: 1024x1024", "4096x4096", "8192x8192 (Impractical)" };
-         if (ImGui::Combo("Character: Resolution", &enabled_depth_i, enabled_depth_items.data(), enabled_depth_items.size()))
-         {
-            ShadowMap::enabled_depth = static_cast<ShadowMap::EnabledDepth>(enabled_depth_i);
-            reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_enabled_depth, enabled_depth_i);
-         }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Used by Sub-Surface Scattering / on characters.\nReduces artifacts, but with a performance cost.");
-         if (DrawResetButton(enabled_depth_i, 0, ShadowMap::reshadesave_enabled_depth, runtime)) ShadowMap::enabled_depth = ShadowMap::EnabledDepth::DepthOff;
 
-         ImGui::BeginDisabled(!ShadowMap::enabled_depth);
-         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Character: Steps Reduce", { "0 (Imperceptible Gain)", "1 (Practically Vanilla)", "2", "3", "4", "5", "6", "7" },
-            "(Soft shadows are done by gaussian blur.\nSample count has already been increased for higher size, but it we can be frugal.)\n\nReduce the number of samples for the gaussian blur.\nThis will increase performance to where 8192x8192 becomes tolerable, but shadows are no longer soft as intended.");
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE, "Base Resolution",
+            { "(Off) FutureTone: 2048x2048, MegaMix: 1024x1024", "1024x1024", "2048x2048", "4096x4096", "8192x8192" },
+            "The raw size of the shadow map texture to draw silhouettes.\n\nEven with 2048x2048, shadows casting onto the world are improved (see \"World: Blur Mips\" tooltip).");
          
-         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_SIGMAINCREASE, "Character: Sigma Multiplier", { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" },
-            "Increase to the gaussian kernel's sigma for more softness.\nWill need \"Steps Reduce\" at 0 for higher/wider values.\n\n(This dropdown for optimization, as compiler can unroll/hardcode weights into the shader instead of computing them on the fly.)");
-         ImGui::EndDisabled();
-
          ImGui::NewLine();
-
-         int enabled_tex_i = ShadowMap::enabled_tex;
-         constexpr std::array<const char*, 2> enabled_tex_items = { "512x512", "1024x1024" };
-         if (ImGui::Combo("World: Resolution", &enabled_tex_i, enabled_tex_items.data(), enabled_tex_items.size()))
+         
+         ImGui::BeginDisabled(!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE));
          {
-            ShadowMap::enabled_tex = static_cast<ShadowMap::EnabledTex>(enabled_tex_i);
-            reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_enabled_tex, enabled_tex_i);
+            ImGui::BeginDisabled(ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE) <= 2);
+            {
+               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Characters: Steps Reduce", { "0 (Perfect Extension)", "1 (Essentially Vanilla)", "2", "3", "4", "5", "6", "7" },
+                  "The raw shadow map is duplicated for character rendering (i.e. SSS) and is gaussian blurred for erosion.\n\nIf > 2048x2048, steps are mathematically increased for the higher resolution, but it's nice to be frugal.\nHowever, too frugal and shadows are no longer soft and SSS won't have smooth normals for proper gradients.");
+            }
+            ImGui::EndDisabled();
+
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_SIGMAINCREASE, "Characters: Sigma", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" },
+               "Change gaussian kernel's sigma to control softness.\nWill need \"Steps Reduce\" at 0 for higher/wider values.");
          }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Used by world geometry.\nReduces artifacts, but with a performance cost as filtering (gaussian blur) must also increase.");
-         if (DrawResetButton(enabled_tex_i, 0, ShadowMap::reshadesave_enabled_tex, runtime)) ShadowMap::enabled_tex = ShadowMap::EnabledTex::TexOff;
+         ImGui::EndDisabled();
+         
+         ImGui::NewLine();
+         
+         if (ImGui::SliderInt("World: Blur Mips", &ShadowMap::enabled_color_mips, 1, ShadowMap::Resources::color_aux_x_srvs.size()))
+            reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_enabled_color_mips, ShadowMap::enabled_color_mips);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The raw shadow map is also duplicate for static world rendering.\nOriginally, it skips down to 512x512 before a quick 4 taps box blur.\n\nHere, you can have an unbroken mip chain for higher quality softness.");
+         DrawResetButton(ShadowMap::enabled_color_mips, ShadowMap::enabled_color_mips_def, ShadowMap::reshadesave_enabled_color_mips, runtime);
+
+         if (ImGui::SliderInt("World: Mips Skip", &ShadowMap::color_mips_skip, -1, ShadowMap::Resources::color_aux_x_srvs.size(), ShadowMap::color_mips_skip >= 0 ? "%d" : "Auto"))
+            reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_color_mips_skip, ShadowMap::color_mips_skip);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("For the first downsample, how many mips to skip?");
+         DrawResetButton(ShadowMap::color_mips_skip, ShadowMap::color_mips_skip_def, ShadowMap::reshadesave_color_mips_skip, runtime);
+         
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_COLOR_SIGMA, "World: Sigma", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
+            "Change the gaussian kernel's sigma to control softness.");
 
          if (GlobalsMegaMix::UIIsAdvanced)
          {
@@ -5831,7 +6084,7 @@ public:
             constexpr auto c_red = ImVec4(1.f, 0.4f, 0.4f, 1.f);
             constexpr auto c_yellow = ImVec4(1.f, 1.f, 0.4f, 1.f);
 
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Character: %dx%d", ShadowMap::Resources::depth_size_orig, ShadowMap::Resources::depth_size_orig);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Characters: %dx%d", ShadowMap::Resources::depth_size_orig, ShadowMap::Resources::depth_size_orig);
             ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("World: %dx%d", ShadowMap::Resources::tex_size_orig, ShadowMap::Resources::tex_size_orig);
 
             ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthdraw_handle ? c_green : c_red);
@@ -5868,8 +6121,8 @@ public:
             ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Character: %s", ShadowMap::Resources::IsDepthNewReady() ? "Ready" : "Not Ready");
             ImGui::PopStyleColor();
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::IsTexNewReady() ? c_green : c_yellow);
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("World: %s", ShadowMap::Resources::IsTexNewReady() ? "Ready" : "Not Ready");
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::IsColorNewReady() ? c_green : c_yellow);
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("World: %s", ShadowMap::Resources::IsColorNewReady() ? "Ready" : "Not Ready");
             ImGui::PopStyleColor();
             
             if (ImGui::Button("Reset")) ShadowMap::Resources::Reset_Resources();

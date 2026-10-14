@@ -1,15 +1,11 @@
-// Bloom
-//
-
 #include "./common1.hlsl"
 
-cbuffer LumaBloom : register(b11)
+cbuffer CBMegaMixBloom : register(b11)
 {
   float2 src_size;
   float2 inv_src_size;
   float2 axis;
   float sigma;
-  float tex_noise_index;
 }
 #define SUGMA sigma
 
@@ -119,24 +115,24 @@ float3 bloom_downsample_almost_max(float4 pos, float2 texcoord, float sigmaBoost
   return csum;
 }
 
-float3 bloom_downsample_all_within(float4 pos, float2 texcoord)
-{
-  // texcoord
-  const float f = dot(frac(texcoord * src_size - 0.5), axis);
-  const float2 tc = texcoord - f * inv_src_size * axis;
-
-  float3 b0 = tex.SampleLevel(smp, tc, 0.0).rgb;
-  float3 b1 = tex.SampleLevel(smp, tc + inv_src_size * axis, 0.0).rgb;
-  // float3 csum = (b0 + b1) * 0.5; // box avg
-  // float3 csum = max(b0, b1); // per channel max
-
-  float3 b2 = tex.SampleLevel(smp, tc + 2.0 * inv_src_size * axis, 0.0).rgb;
-  float3 b3 = tex.SampleLevel(smp, tc - 1.0 * inv_src_size * axis, 0.0).rgb;
-
-  float3 csum = (b0 + b1 + b2 + b3) * 0.25; // box avg 4
-
-  return csum;
-}
+// float3 bloom_downsample_all_within(float4 pos, float2 texcoord)
+// {
+//   // texcoord
+//   const float f = dot(frac(texcoord * src_size - 0.5), axis);
+//   const float2 tc = texcoord - f * inv_src_size * axis;
+// 
+//   float3 b0 = tex.SampleLevel(smp, tc, 0.0).rgb;
+//   float3 b1 = tex.SampleLevel(smp, tc + inv_src_size * axis, 0.0).rgb;
+//   // float3 csum = (b0 + b1) * 0.5; // box avg
+//   // float3 csum = max(b0, b1); // per channel max
+// 
+//   float3 b2 = tex.SampleLevel(smp, tc + 2.0 * inv_src_size * axis, 0.0).rgb;
+//   float3 b3 = tex.SampleLevel(smp, tc - 1.0 * inv_src_size * axis, 0.0).rgb;
+// 
+//   float3 csum = (b0 + b1 + b2 + b3) * 0.25; // box avg 4
+// 
+//   return csum;
+// }
 
 float3 bloom_downsample_guassian(float4 pos, float2 texcoord, float sigmaBoost = 0)
 {
@@ -206,7 +202,7 @@ float4 bloom_downsample_and_prefilter(float4 pos, float2 texcoord, bool isPrefil
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // full to mip0, right before prefilter
-float4 bloom_downsample1_ps(float4 pos: SV_Position, float2 texcoord: TEXCOORD) : SV_Target
+float4 bloom_downsamplebeforeprefilter_ps(float4 pos: SV_Position, float2 texcoord: TEXCOORD) : SV_Target
 {
   return bloom_downsample_and_prefilter(pos, texcoord, false);
 }

@@ -75,7 +75,7 @@ void frag_main()
     float2 _100 = float2(TEXCOORD.x, TEXCOORD.y);
     float4 _103 = t0.Sample(s0, _100);
     float _105 = _103.w;
-    if (_105 == 0.0f)
+    if (_105 == 0.0f) // early exit, depth == zero
     {
         SV_Target.x = 0.0f;
         SV_Target.y = 0.0f;
@@ -84,9 +84,10 @@ void frag_main()
         gl_FragDepth = 0.0f;
         return;
     }
+
     float4 _117 = t1.Sample(s1, _100);
     float _118 = _117.x;
-    if (_103.y > 99.0f)
+    if (_103.y > 99.0f) // early exit, > far
     {
         SV_Target.x = 0.0f;
         SV_Target.y = 0.0f;
@@ -95,6 +96,8 @@ void frag_main()
         gl_FragDepth = _118;
         return;
     }
+    
+    // uv stuff
     bool _126 = _105 > 0.5f;
     float _132 = 1.0f / (_118 - g_near_far_1.x);
     float _135 = _132 * g_near_far_1.y;
@@ -106,7 +109,8 @@ void frag_main()
 
     float _168 = mad(_161, 1.0f - _157, _157) * (cb0_m1.x * GS.NPRContourRadius);
     float _171 = mad(_161, 1.0f - _158, _158) * (cb0_m1.y * GS.NPRContourRadius);
-    
+
+    // search for edges and contour stuff idk
     float _175 = _168 * cb4_m3.x;
     float _176 = _171 * cb4_m3.x;
     float _177 = mad(_175, -1.0f, TEXCOORD.x);
@@ -205,7 +209,7 @@ SPIRV_Cross_Output main(SPIRV_Cross_Input stage_input)
     return stage_output;
 }
 
-
+// (FAILED DECOMP)
 // // ---- Created with 3Dmigoto v1.3.16 on Tue Sep 02 15:46:11 2025
 // 
 // cbuffer Quad : register(b0)
