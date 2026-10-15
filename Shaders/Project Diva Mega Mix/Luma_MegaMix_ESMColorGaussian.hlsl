@@ -50,7 +50,7 @@ float2 downsample_guassian(float4 pos, float2 texcoord, bool isSwizzleRW, float 
     else c = cRaw.xy;
 
     const float w = get_gaussian_weight(i - f, sigma1);
-    csum += c.xy * w;
+    csum += c * w;
     wsum += w;
   }
   

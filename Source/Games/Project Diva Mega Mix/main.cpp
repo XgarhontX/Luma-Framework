@@ -316,6 +316,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_ESM_DEPTH_FILTERREDUCE     = char_ptr_crc32("CUSTOM_ESM_DEPTH_FILTERREDUCE");
    constexpr uint32_t CUSTOM_ESM_DEPTH_SIGMAINCREASE    = char_ptr_crc32("CUSTOM_ESM_DEPTH_SIGMAINCREASE");
    constexpr uint32_t CUSTOM_ESM_COLOR_SIGMA            = char_ptr_crc32("CUSTOM_ESM_COLOR_SIGMA");
+   constexpr uint32_t CUSTOM_DWR_SIGMA                  = char_ptr_crc32("CUSTOM_DWR_SIGMA");
 
    void OnInit()
    {
@@ -348,6 +349,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_ESM_DEPTH_FILTERREDUCE", '1', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
          {"CUSTOM_ESM_DEPTH_SIGMAINCREASE", '0', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
          {"CUSTOM_ESM_COLOR_SIGMA", '4', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_DWR_SIGMA", '4', true, !DEVELOPMENT, "Duplicate World Reflections sigma.", 9},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, !DEVELOPMENT, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
          {"XEGTAO_SLICECOUNT", '1', true, !DEVELOPMENT, "XeGTAO samples.", 6},
          {"XEGTAO_STEPSPERSLICE", '0', true, !DEVELOPMENT, "XeGTAO samples.", 2},
@@ -3991,8 +3993,8 @@ namespace ShadowMap
             if (color_mips_skip_new < 0) color_mips_skip_new = max(0, new_enabled_depth - 2); // treat as if always 2048x2048, so first mip0 is 1024x1024
 
             // dirty?
-            is_dirty =
-               prev_enabled_depth != new_enabled_depth
+            is_dirty = !IsColorNewReady() || !IsDepthNewReady()
+            || prev_enabled_depth != new_enabled_depth
             || prev_enabled_color_mips != new_enabled_tex_mips
             || prev_color_mips_skip != color_mips_skip;
 
@@ -4113,16 +4115,16 @@ namespace ShadowMap
             auto hr20 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, color_use_b_rtv.put());
             ASSERT_MSG(SUCCEEDED(hr20), "ShadowMap: Create() hr20");
 
-            // tex aux: setup
+            // tex aux: setup // TODO: make helper to remove duplicate code in DuplicateWorldReflections
             tex_desc.MiscFlags = 0;
             tex_desc.Format = DXGI_FORMAT_R8G8_UNORM;
             tex_desc.MipLevels = color_mips_new;
             
-            x_mip0_width  = color_size_new * 2; // depth
-            x_mip0_height = color_size_new;     // depth / 2
+            x_mip0_width  = color_size_new * 2; // size / 2 (x pass is first)
+            x_mip0_height = color_size_new;     // size
             
-            y_mip0_width  = color_size_new; // depth / 2
-            y_mip0_height = color_size_new; // depth / 2
+            y_mip0_width  = color_size_new; // size / 2
+            y_mip0_height = color_size_new; // size / 2
 
             // tex aux: y (mipmap chain)
             tex_desc.Width = y_mip0_width;
@@ -4163,10 +4165,11 @@ namespace ShadowMap
             auto hr26 = native_device->CreateShaderResourceView(tex_ptr.get(), nullptr, &color_aux_x_srvs[0]);
             ASSERT_MSG(SUCCEEDED(hr26), "ShadowMap: Create() hr26");
 
-            for (UINT i = 1; i < color_mips_new; ++i)
+            for (UINT i = 1; i < color_mips_new; i++)
             {
                tex_desc.Width = max(1u, x_mip0_width >> i);
                tex_desc.Height = max(1u, x_mip0_height >> i);
+               
                auto hr27 = native_device->CreateTexture2D(&tex_desc, nullptr, tex_ptr.put());
                ASSERT_MSG(SUCCEEDED(hr27), "ShadowMap: Create() hr27");
                auto hr28 = native_device->CreateRenderTargetView(tex_ptr.get(), nullptr, &color_aux_x_rtvs[i]);
@@ -4183,6 +4186,7 @@ namespace ShadowMap
                buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
                buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
                buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+               
                auto hr30 = native_device->CreateBuffer(&buffer_desc, nullptr, color_aux_cb.put());
                ASSERT_MSG(SUCCEEDED(hr30), "ShadowMap: Create() hr30");
             }
@@ -4195,6 +4199,7 @@ namespace ShadowMap
                blend_desc.RenderTarget[0].BlendEnable = TRUE;
                blend_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_BLEND_FACTOR;
                blend_desc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
+               
                auto hr31 = native_device->CreateBlendState(&blend_desc, color_aux_blendstate.put());
                ASSERT_MSG(SUCCEEDED(hr31), "ShadowMap: Create() hr31");
             }
@@ -4299,15 +4304,11 @@ namespace ShadowMap
       native_device_context->Draw(3, 0);
 
       // Downsample
-      UINT x_mip0_width_eff  = Resources::x_mip0_width;
-      UINT x_mip0_height_eff = Resources::x_mip0_height;
-      UINT y_mip0_width_eff  = Resources::y_mip0_width;
-      UINT y_mip0_height_eff = Resources::y_mip0_height;
       for (UINT i = 1; i < Resources::color_mips_new; i++)
       {
          // X
-         viewport_x.Width = max(1u, x_mip0_width_eff >> i);
-         viewport_x.Height = max(1u, x_mip0_height_eff >> i);
+         viewport_x.Width  = max(1u, Resources::x_mip0_width >> i);
+         viewport_x.Height = max(1u, Resources::x_mip0_height >> i);
          
          cb_data.src_size = float2(viewports_y[i - 1].Width, viewports_y[i - 1].Height);
          cb_data.axis = float2(1.0f, 0.0f);
@@ -4322,8 +4323,8 @@ namespace ShadowMap
          native_device_context->Draw(3, 0);
 
          // Y
-         viewports_y[i].Width = max(1u, y_mip0_width_eff >> i);
-         viewports_y[i].Height = max(1u, y_mip0_height_eff >> i);
+         viewports_y[i].Width  = max(1u, Resources::y_mip0_width >> i);
+         viewports_y[i].Height = max(1u, Resources::y_mip0_height >> i);
             
          cb_data.src_size = float2(viewport_x.Width, viewport_x.Height);
          cb_data.axis = float2(0.0f, 1.0f);
@@ -4339,11 +4340,11 @@ namespace ShadowMap
 
       // Upsample (climb up Y mips, until final where we postfilter into use a/b)
       native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_ESMColorGaussian_Up)).get(), nullptr, 0);
+      constexpr FLOAT blend_factor_half[] = { 0.5f, 0.5f, 0.5f, 0.5f };
+      constexpr FLOAT blend_factor_1[] = { 1.0f, 1.0f, 1.0f, 1.0f };
       for (int i = Resources::color_mips_new - 1; i > 0; i--)
       {
          bool is_final = i == 1;
-         static constexpr FLOAT blend_factor_half[] = { 0.5f, 0.5f, 0.5f, 0.5f };
-         static constexpr FLOAT blend_factor_1[] = { 1.0f, 1.0f, 1.0f, 1.0f };
       
          cb_data.src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
          cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
@@ -4913,7 +4914,7 @@ namespace ShadowMap
       return result;
    }
 
-   void OnPresent(ID3D11Device* native_device)
+   void OnPresent()
    {
       if (!IsEnabled()) return;
       ResetState();
@@ -4953,13 +4954,13 @@ namespace DuplicateWorldReflections
    constexpr const char* reshadesave_enabled = "DuplicateWorldReflectionsEnabled";
    bool enabled = false;
 
-   constexpr const char* reshadesave_blur_mips_count = "DuplicateWorldReflectionsBlurMipsCount";
-   constexpr int blur_mips_count_def = 2;
-   int blur_mips_count = blur_mips_count_def;
+   constexpr const char* reshadesave_blur_mips = "DuplicateWorldReflectionsBlurMips";
+   constexpr int blur_mips_def = 2;
+   int blur_mips = blur_mips_def;
 
    constexpr const char* reshadesave_desired_resolution_x = "DuplicateWorldReflectionsDesiredResolutionX";
    constexpr const char* reshadesave_desired_resolution_y = "DuplicateWorldReflectionsDesiredResolutionY";
-   constexpr uint2 desired_resolution_def = {512, 256}; // int2 for reshade serialize
+   constexpr uint2 desired_resolution_def = {512, 256};
    uint2 desired_resolution = desired_resolution_def;
    
    enum State : uint8_t
@@ -4976,7 +4977,7 @@ namespace DuplicateWorldReflections
    bool state_noreset_is_pbr_last_frame = true; // updated on present
    void ResetState()
    {
-      ASSERT_MSG(state != Use, "DuplicateWorldReflections: ResetState() called while in Use state!"); // meaning: setup without any usage???
+      ASSERT_MSG(state != Use || *MemoryHack::addr_pvTimeSec <= 1, "DuplicateWorldReflections: ResetState() called while in Use state!"); // meaning: setup without any usage???
       state = SSS;
       state_draw_count = 0;
    }
@@ -4992,7 +4993,11 @@ namespace DuplicateWorldReflections
       
       void OnInit()
       {
-         // native_shaders_definitions
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DuplicateWorldReflections_MainVS), ShaderDefinition{ Luma_MegaMix_DuplicateWorldReflections, reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "MainVS", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DuplicateWorldReflections_Down), ShaderDefinition{ Luma_MegaMix_DuplicateWorldReflections, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "Down", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DuplicateWorldReflections_DownFilter), ShaderDefinition{ Luma_MegaMix_DuplicateWorldReflections, reshade::api::pipeline_subobject_type::pixel_shader,nullptr, "DownFilter", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DuplicateWorldReflections_UpFilter), ShaderDefinition{ Luma_MegaMix_DuplicateWorldReflections, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "UpFilter", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DuplicateWorldReflections_Up), ShaderDefinition{ Luma_MegaMix_DuplicateWorldReflections, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "Up", {{}}});
       }
    }
 
@@ -5010,15 +5015,41 @@ namespace DuplicateWorldReflections
 
       uint2 effective_resolution = {0,0};
       bool IsReadyResource() { return effective_resolution.x > 0; }
-      uint8_t effective_mips_count = 0;
+      uint effective_mips = 0;
+      uint2 x_mip0 = {0,0};
+      uint2 y_mip0 = {0,0};
 
       ComPtr<ID3D11DepthStencilView> dsv;
+
+      ComPtr<ID3D11ShaderResourceView> srv;
+      ComPtr<ID3D11RenderTargetView>   rtv;
       
       std::vector<ID3D11ShaderResourceView*> srvs_x(8);
       std::vector<ID3D11RenderTargetView*>   rtvs_x(8);
       
       std::vector<ID3D11ShaderResourceView*> srvs_y(8);
       std::vector<ID3D11RenderTargetView*>   rtvs_y(8);
+
+      std::array<uint2, 8> viewport_y_sizes = {};
+
+      struct alignas(16) CBMegaMixDuplicateWorldReflections
+      {
+         float2 src_size;
+         float2 inv_src_size;
+         float2 axis;
+      };
+      ComPtr<ID3D11Buffer> cb;
+      CBMegaMixDuplicateWorldReflections cb_data = {};
+      void CBUpdate(ID3D11DeviceContext* native_device_context)
+      {
+         D3D11_MAPPED_SUBRESOURCE mapped_subresource;
+         auto hr = native_device_context->Map(cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_subresource);
+         ASSERT_MSG(SUCCEEDED(hr), "CBUpdate: Map() failed");
+         std::memcpy(mapped_subresource.pData, &cb_data, sizeof(CBMegaMixDuplicateWorldReflections));
+         native_device_context->Unmap(cb.get(), 0);
+      };
+      
+      ComPtr<ID3D11BlendState> blendstate;
 
       void Reset_Resources()
       {
@@ -5047,19 +5078,19 @@ namespace DuplicateWorldReflections
          effective_resolution_new.x = max(16u, effective_resolution_new.x);
          effective_resolution_new.y = max(16u, effective_resolution_new.y);
 
-         static uint8_t effective_mips_count_prev = 0; // mips count
-         uint8_t effective_mips_count_new = blur_mips_count;
-         effective_mips_count_new = min(effective_mips_count_new, srvs_x.size());
-         effective_mips_count_new = max(1, effective_mips_count_new);
+         static uint8_t effective_mips_prev = 0; // mips count
+         uint8_t effective_mips_new = blur_mips;
+         effective_mips_new = min(effective_mips_new, srvs_x.size());
+         effective_mips_new = max(1, effective_mips_new);
 
          // dirty?
-         bool is_dirty =
-            effective_resolution_new != effective_resolution_prev
-         || effective_mips_count_new != effective_mips_count_prev;
+         bool is_dirty = !IsReadyResource()
+         || effective_resolution_new != effective_resolution_prev
+         || effective_mips_new != effective_mips_prev;
 
          // save to prev
          effective_resolution_prev = effective_resolution_new;
-         effective_mips_count_prev = effective_mips_count_new;
+         effective_mips_prev = effective_mips_new;
 
          // gatekeep: dirty
          if (!is_dirty) return;
@@ -5067,14 +5098,14 @@ namespace DuplicateWorldReflections
          // clear
          Reset_Resources();
          effective_resolution = effective_resolution_new;
-         effective_mips_count = effective_mips_count_new;
+         effective_mips = effective_mips_new;
 
          // create setup
          ComPtr<ID3D11Texture2D> tex;
          
          D3D11_TEXTURE2D_DESC tex_desc = {};
-         tex_desc.Width = effective_resolution_new.x;
-         tex_desc.Height = effective_resolution_new.y;
+         tex_desc.Width = effective_resolution.x;
+         tex_desc.Height = effective_resolution.y;
          tex_desc.ArraySize = 1;
          tex_desc.SampleDesc.Count = 1;
          tex_desc.Usage = D3D11_USAGE_DEFAULT;
@@ -5096,22 +5127,226 @@ namespace DuplicateWorldReflections
          auto hr1 = native_device->CreateDepthStencilView(tex.get(), &dsv_desc, dsv.put());
          ASSERT_MSG(SUCCEEDED(hr1), "DuplicateWorldReflections: Create hr1");
 
-         // color y
-         // TODO: make mip chain for blur
+         // color  
          tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
          tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
          tex_desc.MipLevels = 1;
+
          auto hr2 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
          ASSERT_MSG(SUCCEEDED(hr2), "DuplicateWorldReflections: Create hr2");
-         auto hr3 = native_device->CreateShaderResourceView(tex.get(), nullptr, &srvs_y[0]);
+         auto hr3 = native_device->CreateShaderResourceView(tex.get(), nullptr, srv.put());
          ASSERT_MSG(SUCCEEDED(hr3), "DuplicateWorldReflections: Create hr3");
-         auto hr4 = native_device->CreateRenderTargetView(tex.get(), nullptr, &rtvs_y[0]);
+         auto hr4 = native_device->CreateRenderTargetView(tex.get(), nullptr, rtv.put());
          ASSERT_MSG(SUCCEEDED(hr4), "DuplicateWorldReflections: Create hr4");
 
-         // color x
-         // TODO: make
+         // color mips setup
+         tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+         tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+         tex_desc.MipLevels = effective_mips;
 
-         reshade::log::message(reshade::log::level::info, std::format("DuplicateWorldReflections: Created resources {}x{}, {} mips", effective_resolution.x, effective_resolution.y, effective_mips_count).c_str());
+         x_mip0.x = effective_resolution.x / 2; // size / 2 (x pass is first)
+         x_mip0.y = effective_resolution.y;     // size 
+         
+         y_mip0.x = effective_resolution.x / 2; // size / 2
+         y_mip0.y = effective_resolution.y / 2; // size / 2
+
+         // color y (mipmap chain)
+         tex_desc.Width = y_mip0.x;
+         tex_desc.Height = y_mip0.y;
+
+         auto hr5 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+         ASSERT_MSG(SUCCEEDED(hr5), "DuplicateWorldReflections: Create hr5");
+
+         D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+         rtv_desc.Format = tex_desc.Format;
+         rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+         
+         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+         srv_desc.Format = tex_desc.Format;
+         srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+         srv_desc.Texture2D.MipLevels = 1; // allow only 1 mip to get accessed 
+
+         for (int i = 0; i < effective_mips; i++)
+         {
+            rtv_desc.Texture2D.MipSlice = i;
+            auto hr6 = native_device->CreateRenderTargetView(tex.get(), &rtv_desc, &rtvs_y[i]);
+            ASSERT_MSG(SUCCEEDED(hr6), "DuplicateWorldReflections: Create hr6");
+                     
+            srv_desc.Texture2D.MostDetailedMip = i;
+            auto hr7 = native_device->CreateShaderResourceView(tex.get(), &srv_desc, &srvs_y[i]);
+            ASSERT_MSG(SUCCEEDED(hr7), "DuplicateWorldReflections: Create hr7");
+         }
+
+         // color x (needs individual tex)
+         tex_desc.Width = x_mip0.x;
+         tex_desc.Height = x_mip0.y;
+         tex_desc.MipLevels = 1;
+
+         auto hr8 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+         ASSERT_MSG(SUCCEEDED(hr8), "DuplicateWorldReflections: Create hr8");
+         auto hr9 = native_device->CreateShaderResourceView(tex.get(), nullptr, &srvs_x[0]);
+         ASSERT_MSG(SUCCEEDED(hr9), "DuplicateWorldReflections: Create hr9");
+         auto hr10 = native_device->CreateRenderTargetView(tex.get(), nullptr, &rtvs_x[0]);
+         ASSERT_MSG(SUCCEEDED(hr10), "DuplicateWorldReflections: Create hr10");
+
+         for (UINT i = 1; i < effective_mips; i++)
+         {
+            tex_desc.Width  = max(1u, x_mip0.x >> i);
+            tex_desc.Height = max(1u, x_mip0.y >> i);
+
+            auto hr11 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+            ASSERT_MSG(SUCCEEDED(hr11), "DuplicateWorldReflections: Create hr11");
+            auto hr12 = native_device->CreateRenderTargetView(tex.get(), nullptr, &rtvs_x[i]);
+            ASSERT_MSG(SUCCEEDED(hr12), "DuplicateWorldReflections: Create hr12");
+            auto hr13 = native_device->CreateShaderResourceView(tex.get(), nullptr, &srvs_x[i]);
+            ASSERT_MSG(SUCCEEDED(hr13), "DuplicateWorldReflections: Create hr13");
+         }
+
+         // cb
+         [[unlikely]] if (!cb)
+         {
+            D3D11_BUFFER_DESC buffer_desc = {};
+            buffer_desc.ByteWidth = sizeof(CBMegaMixDuplicateWorldReflections);
+            buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
+            buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            buffer_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+               
+            auto hr14 = native_device->CreateBuffer(&buffer_desc, nullptr, cb.put());
+            ASSERT_MSG(SUCCEEDED(hr14), "DuplicateWorldReflections: Create hr14");
+         }
+
+         // blend
+         [[unlikely]] if (!blendstate)
+         {
+            CD3D11_BLEND_DESC blend_desc(D3D11_DEFAULT);
+            blend_desc.RenderTarget[0].BlendEnable = TRUE;
+            blend_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_BLEND_FACTOR;
+            blend_desc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
+               
+            auto hr15 = native_device->CreateBlendState(&blend_desc, blendstate.put());
+            ASSERT_MSG(SUCCEEDED(hr15), "DuplicateWorldReflections: Create hr15");
+         }
+
+         reshade::log::message(reshade::log::level::info, std::format("DuplicateWorldReflections: Created resources {}x{}, {} mips", effective_resolution.x, effective_resolution.y, effective_mips).c_str());
+      }
+
+      void DrawDownsample(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data)
+      {
+         // 0th Downsample: X
+         D3D11_VIEWPORT viewport_x = {};
+         viewport_x.Width = x_mip0.x;
+         viewport_x.Height = x_mip0.y;
+
+         cb_data.src_size = float2(effective_resolution.x, effective_resolution.y);
+         cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+         cb_data.axis = float2(1.0f, 0.0f);
+         // cb_data.sigma = sigma;
+         CBUpdate(native_device_context);
+
+         native_device_context->OMSetRenderTargets(1, &Resources::rtvs_x[0], nullptr);
+         native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+         native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DuplicateWorldReflections_MainVS)).get(), nullptr, 0); // same for the rest
+         native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DuplicateWorldReflections_Down)).get(), nullptr, 0);
+         native_device_context->PSSetConstantBuffers(11, 1, &cb);
+         const std::array ps_samplers = { device_data.sampler_state_linear.get() };
+         native_device_context->PSSetSamplers(0, ps_samplers.size(), ps_samplers.data());
+         native_device_context->PSSetShaderResources(0, 1, &srv);
+         native_device_context->RSSetViewports(1, &viewport_x);
+         native_device_context->RSSetState(nullptr);
+
+         native_device_context->Draw(3, 0);
+         
+         // 0th Downsample: Y
+         D3D11_VIEWPORT viewport_y = {};
+         viewport_y.Width  = y_mip0.x;
+         viewport_y.Height = y_mip0.y;
+         viewport_y_sizes[0] = y_mip0; // save for upsample later
+      
+         cb_data.src_size = float2(viewport_y.Width, viewport_y.Height);
+         cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+         cb_data.axis = float2(0.0f, 1.0f);
+         CBUpdate(native_device_context);
+      
+         native_device_context->OMSetRenderTargets(1, &rtvs_y[0], nullptr);
+         native_device_context->PSSetShaderResources(0, 1, &srvs_x[0]);
+         native_device_context->RSSetViewports(1, &viewport_y);
+      
+         native_device_context->Draw(3, 0);
+
+         // Downsample
+         for (uint i = 1; i < effective_mips; i++)
+         {
+            bool is_last = i + 1 >= effective_mips;
+            
+            // X
+            viewport_x.Width  = max(1u, x_mip0.x >> i);
+            viewport_x.Height = max(1u, x_mip0.y >> i);
+         
+            cb_data.src_size = float2(viewport_y_sizes[i - 1].x, viewport_y_sizes[i - 1].y);
+            cb_data.axis = float2(1.0f, 0.0f);
+            cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+            // cb_data.sigma += color_sigma_increase;
+            CBUpdate(native_device_context);
+         
+            native_device_context->OMSetRenderTargets(1, &rtvs_x[i], nullptr);
+            native_device_context->PSSetShaderResources(0, 1, &srvs_y[i - 1]);
+            native_device_context->RSSetViewports(1, &viewport_x);
+          
+            native_device_context->Draw(3, 0);
+
+            // Y
+            viewport_y_sizes[i].x = max(1u, y_mip0.x >> i);
+            viewport_y_sizes[i].y = max(1u, y_mip0.y >> i);
+            viewport_y.Width  = viewport_y_sizes[i].x;
+            viewport_y.Height = viewport_y_sizes[i].y;
+
+            cb_data.src_size = float2(viewport_x.Width, viewport_x.Height);
+            cb_data.axis = float2(0.0f, 1.0f);
+            cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+            CBUpdate(native_device_context);
+
+            if (is_last) native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DuplicateWorldReflections_DownFilter)).get(), nullptr, 0); // filter
+            native_device_context->OMSetRenderTargets(1, &rtvs_y[i], nullptr);
+            native_device_context->PSSetShaderResources(0, 1, &srvs_x[i]);
+            native_device_context->RSSetViewports(1, &viewport_y);
+
+            native_device_context->Draw(3, 0);
+         }
+      }
+
+      void DrawUpsample(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data)
+      {
+         native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+         native_device_context->VSSetShader(device_data.native_vertex_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DuplicateWorldReflections_MainVS)).get(), nullptr, 0); // same for the rest
+         native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DuplicateWorldReflections_UpFilter)).get(), nullptr, 0);
+         // native_device_context->PSSetConstantBuffers(11, 1, &cb);
+         // const std::array ps_samplers = { device_data.sampler_state_linear.get() };
+         // native_device_context->PSSetSamplers(0, ps_samplers.size(), ps_samplers.data());
+
+         D3D11_VIEWPORT viewport_y = {};
+         constexpr FLOAT blend_factor_half[] = { 0.5f, 0.5f, 0.5f, 0.5f };
+         for (int i = effective_mips - 1; i > 0; i--)
+         {
+            bool is_2nd_draw = (effective_mips - 1 - 1) == i;
+            
+            viewport_y.Width  = viewport_y_sizes[i - 1].x;
+            viewport_y.Height = viewport_y_sizes[i - 1].y;
+      
+            cb_data.src_size = float2(viewport_y_sizes[i].x, viewport_y_sizes[i].y);
+            cb_data.inv_src_size = float2(1.0f / cb_data.src_size.x, 1.0f / cb_data.src_size.y);
+            CBUpdate(native_device_context);
+      
+            if (is_2nd_draw) native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DuplicateWorldReflections_Up)).get(), nullptr, 0); // filter only once
+            native_device_context->OMSetRenderTargets(1, &rtvs_y[i - 1], nullptr);
+            native_device_context->PSSetShaderResources(0, 1, &srvs_y[i]);
+            native_device_context->RSSetViewports(1, &viewport_y);
+            native_device_context->OMSetBlendState(blendstate.get(), blend_factor_half, UINT_MAX);
+      
+            native_device_context->Draw(3, 0);
+         }
+
+         // constexpr FLOAT blend_factor_1[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+         // native_device_context->OMSetBlendState(nullptr, blend_factor_1, UINT_MAX); // restore
       }
    }
 
@@ -5121,14 +5356,18 @@ namespace DuplicateWorldReflections
       if (!enabled) return result;
       if (DEVELOPMENT && !IsModEnabled()) return result;
 
-      // skip to state
-      if (state == Draw && state_draw_count > 0)
+      // force state
+      if (state_draw_count > 0)
       {
-         // started blurring
-         if (ps == 0x4E2A88FE) state = Blur;
-         if (ps == 0x58A712B5) ASSERT_MSG(false, "DuplicateWorldReflections: Unexpected Copy shader 0x58A712B5 before Blur 0x4E2A88FE!"); // this means we got the wrong pass
+         // from Draw
+         if (state == Draw)
+         {
+            if (ps == 0x4E2A88FE) state = Blur; // started Blur, so skip to it.
+            else if (ps == 0x93881580) state = SSS; // another SSS pass detected, backtrack to SSS // TODO: this must be from X Song Pack. does that mean we should skip the PV since this would be useless?
+            else if (DEVELOPMENT && ps == 0x58A712B5) ASSERT_MSG(false, "DuplicateWorldReflections: Unexpected Copy before Blur!"); // this means we got the wrong pass
+         }
       }
-
+      
       switch (state)
       {
          case SSS:
@@ -5203,7 +5442,7 @@ namespace DuplicateWorldReflections
                   }
 
                   // verify viewport
-                  if (DEVELOPMENT)
+                  if (DEVELOPMENT) // TODO: del, no-duh moment, since RTV and DSV are shared 
                   {
                      D3D11_VIEWPORT viewport;
                      UINT num_viewports = 1;
@@ -5222,21 +5461,28 @@ namespace DuplicateWorldReflections
                {
                   // create resources
                   Resources::CreateIfDirty(native_device);
+                  ASSERT_MSG(Resources::IsReadyResource(), "DuplicateWorldReflections: Resources::IsReadyResource() failed after CreateIfDirty()");
 
-                  // replace
-                  if (Resources::IsReadyResource())
+                  // clear
+                  if (state_draw_count == 1)
                   {
-                     native_device_context->OMSetRenderTargets(1, &Resources::rtvs_y[0], Resources::dsv.get());
-
-                     D3D11_VIEWPORT viewport;
-                     viewport.TopLeftX = 0;
-                     viewport.TopLeftY = 0;
-                     viewport.Width  = static_cast<float>(Resources::effective_resolution.x);
-                     viewport.Height = static_cast<float>(Resources::effective_resolution.y);
-                     viewport.MinDepth = 0;
-                     viewport.MaxDepth = 1;
-                     native_device_context->RSSetViewports(1, &viewport);
+                     constexpr float clear_color[4] = {0,0,0,0};
+                     native_device_context->ClearRenderTargetView(Resources::rtv.get(), clear_color); // TODO: does the game use a different clear color?
+                     native_device_context->ClearDepthStencilView(Resources::dsv.get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
                   }
+
+                  // replace RTV & DSV
+                  native_device_context->OMSetRenderTargets(1, &Resources::rtv, Resources::dsv.get());
+
+                  // replace viewport
+                  D3D11_VIEWPORT viewport;
+                  viewport.TopLeftX = 0;
+                  viewport.TopLeftY = 0;
+                  viewport.Width  = Resources::effective_resolution.x;
+                  viewport.Height = Resources::effective_resolution.y;
+                  viewport.MinDepth = 0;
+                  viewport.MaxDepth = 1;
+                  native_device_context->RSSetViewports(1, &viewport);
                }
             }
             
@@ -5247,9 +5493,13 @@ namespace DuplicateWorldReflections
             // this is always next
             ASSERT_MSG(ps == 0x4E2A88FE, "DuplicateWorldReflections: Unexpected, Blur shader 0x4E2A88FE not next!");
 
-            // TODO: blurring downsample
+            // downsample
+            if (Resources::IsReadyHandles() && Resources::IsReadyResource())
+            {
+               Resources::DrawDownsample(native_device, native_device_context, device_data);
+               result = DrawOrDispatchOverrideType::Skip; 
+            }
             
-            result = DrawOrDispatchOverrideType::Skip; 
             state = Copy;
             break;
          }
@@ -5258,9 +5508,13 @@ namespace DuplicateWorldReflections
             // this is always next
             ASSERT_MSG(ps == 0x58A712B5, "DuplicateWorldReflections: Unexpected, Copy shader 0x58A712B5 not next!");
 
-            // TODO: blurring upsample
+            // upsample
+            if (Resources::IsReadyHandles() && Resources::IsReadyResource())
+            {
+               Resources::DrawUpsample(native_device, native_device_context, device_data);
+               result = DrawOrDispatchOverrideType::Skip;
+            }
             
-            result = DrawOrDispatchOverrideType::Skip;
             state = Use;
             break;
          }
@@ -5272,16 +5526,26 @@ namespace DuplicateWorldReflections
                // scan SRV15 usage to replace with our resource
                ComPtr<ID3D11ShaderResourceView> srv15;
                native_device_context->PSGetShaderResources(15, 1, srv15.put());
-               if (!srv15) break;
+               if (!srv15) break; // failed: null
                
                ComPtr<ID3D11Resource> srv15_res;
                srv15->GetResource(srv15_res.put());
                
                uint64_t srv15_handle = reinterpret_cast<uint64_t>(srv15_res.get());
-               if (srv15_handle != Resources::orig_handle_color) break;
+               if (srv15_handle != Resources::orig_handle_color) break; // failed: not expected handle
                
                native_device_context->PSSetShaderResources(15, 1, &Resources::srvs_y[0]);
                state = Done;
+
+               // bind SRVs for debug
+               if (DEVELOPMENT)
+               {
+                  const std::array<ID3D11ShaderResourceView*, 9> srvs_debug = {
+                     Resources::srvs_y[0], // mipchain
+                     Resources::srvs_x[0], Resources::srvs_x[1], Resources::srvs_x[2], Resources::srvs_x[3], Resources::srvs_x[4], Resources::srvs_x[5], Resources::srvs_x[6], Resources::srvs_x[7]
+                  };
+                  native_device_context->PSSetShaderResources(94, srvs_debug.size(), srvs_debug.data());
+               }
             }
 
             break;
@@ -5292,16 +5556,26 @@ namespace DuplicateWorldReflections
 
       return result;
    }
+
+   void OnInit()
+   {
+      Shaders::OnInit();
+   }
+
+   void HardReset()
+   {
+      Resources::Reset();
+   }
    
    void OnLoad(reshade::api::effect_runtime* runtime)
    {
       reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
-      reshade::get_config_value(runtime, NAME, reshadesave_blur_mips_count, blur_mips_count);
+      reshade::get_config_value(runtime, NAME, reshadesave_blur_mips, blur_mips);
       reshade::get_config_value(runtime, NAME, reshadesave_desired_resolution_x, desired_resolution.x);
       reshade::get_config_value(runtime, NAME, reshadesave_desired_resolution_y, desired_resolution.y);
    }
 
-   void OnPresent(ID3D11Device* native_device)
+   void OnPresent()
    {
       if (!enabled) return;
       state_noreset_is_pbr_last_frame = TonemapInfo::GetIsPBRFromIndex(TonemapInfo::GetIndex(cb_luma_global_settings.GameSettings.TonemapInfo)); // this is called before clearing TonemapInfo
@@ -5374,26 +5648,14 @@ public:
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
 
-      // XeGTAO
+      // event
       XeGTAO::OnInit();
-
-      // SSS
       SSS::OnInit();
-
-      // Bloom
       Bloom::OnInit();
-
-      // AntiAliasing
       AntiAliasing::OnInit();
-
-      // LUTBiasCache
       LUTBiasCached::OnInit();
-
-      // ShadowMap
       ShadowMap::OnInit();
-
-      // Global default
-      use_os_reference_white_level = false;
+      DuplicateWorldReflections::OnInit();
       
       // GameSettings default
       // default_luma_global_game_settings.TonemapperRolloffStart = cb_luma_global_settings.GameSettings.TonemapperRolloffStart = 36.f;
@@ -5484,42 +5746,23 @@ public:
       // log
       if (is_resolution_changed) reshade::log::message(reshade::log::level::info, std::format("OnInitSwapchain(): resolution changed to {}x{}", size.x, size.y).c_str());
 
-      // SSAA
+      // event
       SSAA::OnInitSwapchain(is_resolution_changed);
-
-      // XeGTAO
       XeGTAO::OnInitSwapchain(is_resolution_changed);
-
-      // SSS
       SSS::HardReset();
-
-      // Bloom
       Bloom::HardReset();
-
-      // SpotLightShadows
       SpotLightShadows::HardReset();
-
-      // AntiAliasing
       AntiAliasing::HardReset();
-
-      // DepthOfField
       DepthOfField::HardReset();
-
-      // PS4Blur
       PS4Blur::HardReset();
-
-      // LUTBuilderScan
 #if DEVELOPMENT
       LUTBuilderScan::OnInitSwapchain();
 #endif
-
-      // // UISeparation
       // UISeparation::ResetOnSwapchain();
-
-      // ShadowMap
       ShadowMap::HardReset();
-      
-      // SwapchainChangeCount
+      DuplicateWorldReflections::HardReset();
+
+      // ++
       GlobalsMegaMix::SwapchainChangeCount++;
    }
 
@@ -5557,6 +5800,11 @@ public:
       // SSS ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       {
          auto r = SSS::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+         if (r != DrawOrDispatchOverrideType::None) return r;
+      }
+      // DuplicateWorldReflections ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      {
+         auto r = DuplicateWorldReflections::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
          if (r != DrawOrDispatchOverrideType::None) return r;
       }
       // Bloom ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -5806,44 +6054,21 @@ public:
 
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data)
    {
-      // CachedCB
+      // event
       CachedCB::Update(); 
-
-      // IndividualPVTuning
       IndividualPVTuning::OnPresent();
-      
-      // HighFPS
       HighFPS::Patch();
-
-      // ProgressBar
       ProgressBar::OnPresent();
-
-      // SeparateUIBrightness
       SeparateUIBrightness::OnPresent();
-
-      // SSAA
       SSAA::OnPresent();
-      
-      // XeGTAO 
       XeGTAO::OnPresent();
-
-      // SSS
       SSS::OnPresent();
-
-      // Bloom
       Bloom::OnPresent();
-
-      // SpotLightShadows
       SpotLightShadows::OnPresent();
-
-      // AntiAliasing
       AntiAliasing::OnPresent();
-
-      // DepthOfField
       DepthOfField::OnPresent();
-
-      // ShadowMap
-      ShadowMap::OnPresent(native_device);
+      ShadowMap::OnPresent();
+      DuplicateWorldReflections::OnPresent();
       
       // reset TonemapInfo
       GlobalsMegaMix::TonemapInfoBackup = cb_luma_global_settings.GameSettings.TonemapInfo;
@@ -6225,9 +6450,9 @@ public:
       }
 
       ImGui::PushID("###XeGTAO");
-      if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion (XeGTAO)", XeGTAO::enabled))
+      if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion", XeGTAO::enabled))
       {
-         DrawColoredSubHeader("Insert Ground Truth Ambient Occlusion for indirect shadowing.");
+         DrawColoredSubHeader("Insert a pass for indirect shadowing.");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("There are slight errors (e.g. occlusion in fog & sky). I might account per PV if it's too noticeable.");
@@ -6236,7 +6461,7 @@ public:
          if (ImGui::Checkbox("Enabled", &XeGTAO::enabled))
             reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_enabled, XeGTAO::enabled);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Insert Intel's implementation of Ground Truth Ambient Occlusion (GTAO).\n\nDebuting in Call of Duty: Black Ops 3 (or Advanced Warfare?),\nit's a screen space AO solution estimating path tracing level quality at a fraction of the cost.\n\nHere, the pass is inserted before transparency rendering & post FX, so no overlapping like generic ReShade FX solutions.\n(Please report if otherwise, especially concerning mod support.)");
+            ImGui::SetTooltip("Insert Intel's implementation (XeGTAO) of Ground Truth Ambient Occlusion (GTAO).\n\nDebuting in Call of Duty: Black Ops 3 (or Advanced Warfare?),\nit's a screen space AO solution estimating path tracing level quality at a fraction of the cost.\n\nHere, the pass is inserted before transparency rendering & post FX, so no overlapping like generic ReShade FX solutions.\n(Please report if otherwise, especially concerning mod support.)");
 
          // TODO: presets
 
@@ -6339,23 +6564,26 @@ public:
       ImGui::PushID("###SSS");
       if (DrawCollapsingHeaderEnabledColored("Characters", SSS::enabled))
       {
-         DrawColoredSubHeader("PBR/FutureTone: Sub-Surface Scattering (SSS)");
+         DrawColoredSubHeader("FutureTone Sub-Surface Scattering (SSS): Simulating glow from light scattering under skin.");
 
          // enabled checkbox
          if (ImGui::Checkbox("Full Resolution", &SSS::enabled))
             reshade::set_config_value(runtime, NAME, SSS::reshadesave_enabled, SSS::enabled);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Allow the screen-space SSS alogrithm to compute in full resolution."
+            ImGui::SetTooltip("Allow the screen-space SSS algorithm to compute in full resolution."
                               "\n\n(This stops the bottle necking for shadow maps, but not having high quality blur to match high res can cause"
                               "\nstrips of SSS glow for rare cases. Still, I'd rather fail the 1th percentile than the 99th.)");
 
-         if (ImGui::SliderFloat("SSS Radius", &cb_luma_global_settings.GameSettings.SSSRadius, 0.5f, 1.5f))
-            reshade::set_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Radius / reach of the glow effect.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.SSSRadius, default_luma_global_game_settings.SSSRadius, "SSSRadius", runtime);
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            if (ImGui::SliderFloat("SSS Radius", &cb_luma_global_settings.GameSettings.SSSRadius, 0.5f, 1.5f))
+               reshade::set_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Radius / reach of the glow effect.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.SSSRadius, default_luma_global_game_settings.SSSRadius, "SSSRadius", runtime);
+         }
 
          ImGui::NewLine();
-         DrawColoredSubHeader("NPR/MegaMix: Contour Lines");
+         DrawColoredSubHeader("MegaMix Contour: Added edges mimicking drawn art.");
          
          if (ImGui::SliderFloat("Strength", &cb_luma_global_settings.GameSettings.NPRContourStrength, 0.f, 2.f))
             reshade::set_config_value(runtime, NAME, "NPRContourStrength", cb_luma_global_settings.GameSettings.NPRContourStrength);
@@ -6393,44 +6621,43 @@ public:
       ShadowMap::Resources::is_dirty_check_token = true;
       
       ImGui::PushID("###ShadowMap");
-      if (DrawCollapsingHeaderEnabledColored("Shadow Map", ShadowMap::IsEnabled()))
+      if (DrawCollapsingHeaderEnabledColored("Exponential Shadow Map", ShadowMap::IsEnabled()))
       {
-         DrawColoredSubHeader("Exponential Shadow Map");
+         DrawColoredSubHeader("Blurred silhouettes from light source position/angle to cast soft shadows of characters.");
 
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE, "Base Resolution",
-            { "(Off) FutureTone: 2048x2048, MegaMix: 1024x1024", "1024x1024", "2048x2048", "4096x4096", "8192x8192" },
-            "The raw size of the shadow map texture to draw silhouettes.\n\nEven with 2048x2048, shadows casting onto the world are improved (see \"World: Blur Mips\" tooltip).");
-         
-         ImGui::NewLine();
-         
-         ImGui::BeginDisabled(!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE));
+            { "(Off) FutureTone: 2048x2048, MegaMix: 1024x1024", "(Low) 1024x1024", "(Recommended) 2048x2048", "(High) 4096x4096", "(Uhhh) 8192x8192" },
+            "The raw size of the texture to draw silhouettes.\nEven with 2048x2048, shadows casting onto the world is improved with gaussian blurring.");
+
+         if (GlobalsMegaMix::UIIsAdvanced)
          {
-            ImGui::BeginDisabled(ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE) <= 2);
+            ImGui::BeginDisabled(!ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE));
             {
-               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Characters: Steps Reduce", { "0 (Perfect Extension)", "1 (Essentially Vanilla)", "2", "3", "4", "5", "6", "7" },
-                  "The raw shadow map is duplicated for character rendering (i.e. SSS) and is gaussian blurred for erosion.\n\nIf > 2048x2048, steps are mathematically increased for the higher resolution, but it's nice to be frugal.\nHowever, too frugal and shadows are no longer soft and SSS won't have smooth normals for proper gradients.");
+               ImGui::BeginDisabled(ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE) <= 2);
+               {
+                  ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Characters: Steps Reduce", { "0 (Perfect Extension)", "1 (Essentially Vanilla)", "2", "3", "4", "5", "6", "7" },
+                     "The raw shadow map is duplicated for character rendering (i.e. SSS) and is gaussian blurred for erosion.\n\nIf > 2048x2048, steps are mathematically increased for the higher resolution, but it's nice to be frugal.\nHowever, too frugal and shadows are no longer soft and SSS won't have smooth normals for proper gradients.");
+               }
+               ImGui::EndDisabled();
+
+               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_SIGMAINCREASE, "Characters: Sigma", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" },
+                  "Change gaussian kernel's sigma to control softness.\nWill need \"Steps Reduce\" at 0 for higher/wider values.");
             }
             ImGui::EndDisabled();
+         
+            if (ImGui::SliderInt("World: Blur Mips", &ShadowMap::enabled_color_mips, 1, ShadowMap::Resources::color_aux_x_srvs.size()))
+               reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_enabled_color_mips, ShadowMap::enabled_color_mips);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The raw shadow map is also duplicate for static world rendering.\nOriginally, it skips down to 512x512 before a quick 4 taps box blur.\n\nHere, you can have an unbroken mip chain for higher quality softness.");
+            DrawResetButton(ShadowMap::enabled_color_mips, ShadowMap::enabled_color_mips_def, ShadowMap::reshadesave_enabled_color_mips, runtime);
 
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_SIGMAINCREASE, "Characters: Sigma", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" },
-               "Change gaussian kernel's sigma to control softness.\nWill need \"Steps Reduce\" at 0 for higher/wider values.");
+            if (ImGui::SliderInt("World: Mips Skip", &ShadowMap::color_mips_skip, -1, ShadowMap::Resources::color_aux_x_srvs.size(), ShadowMap::color_mips_skip >= 0 ? "%d" : "Auto"))
+               reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_color_mips_skip, ShadowMap::color_mips_skip);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("For the first downsample, how many mips to skip?");
+            DrawResetButton(ShadowMap::color_mips_skip, ShadowMap::color_mips_skip_def, ShadowMap::reshadesave_color_mips_skip, runtime);
+         
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_COLOR_SIGMA, "World: Sigma", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
+               "Change the gaussian kernel's sigma to control softness.");
          }
-         ImGui::EndDisabled();
-         
-         ImGui::NewLine();
-         
-         if (ImGui::SliderInt("World: Blur Mips", &ShadowMap::enabled_color_mips, 1, ShadowMap::Resources::color_aux_x_srvs.size()))
-            reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_enabled_color_mips, ShadowMap::enabled_color_mips);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The raw shadow map is also duplicate for static world rendering.\nOriginally, it skips down to 512x512 before a quick 4 taps box blur.\n\nHere, you can have an unbroken mip chain for higher quality softness.");
-         DrawResetButton(ShadowMap::enabled_color_mips, ShadowMap::enabled_color_mips_def, ShadowMap::reshadesave_enabled_color_mips, runtime);
-
-         if (ImGui::SliderInt("World: Mips Skip", &ShadowMap::color_mips_skip, -1, ShadowMap::Resources::color_aux_x_srvs.size(), ShadowMap::color_mips_skip >= 0 ? "%d" : "Auto"))
-            reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_color_mips_skip, ShadowMap::color_mips_skip);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("For the first downsample, how many mips to skip?");
-         DrawResetButton(ShadowMap::color_mips_skip, ShadowMap::color_mips_skip_def, ShadowMap::reshadesave_color_mips_skip, runtime);
-         
-         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_COLOR_SIGMA, "World: Sigma", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
-            "Change the gaussian kernel's sigma to control softness.");
 
          if (GlobalsMegaMix::UIIsAdvanced)
          {
@@ -6493,14 +6720,46 @@ public:
       ImGui::PushID("###Bloom");
       if (DrawCollapsingHeaderEnabledColored("Bloom", Bloom::enabled || ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_BLOOM_THRESHOLD_1)))
       {
+         DrawColoredSubHeader("Bleeding from bright colors simulating glow from camera lens diffraction.");
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            if (ImGui::SliderFloat("Strength: Level 0", &cb_luma_global_settings.GameSettings.BloomStrengths.x, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsX", cb_luma_global_settings.GameSettings.BloomStrengths.x);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 0 Strength: Tightest blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.x, default_luma_global_game_settings.BloomStrengths.x, "BloomStrengthsX", runtime);
+            
+            if (ImGui::SliderFloat("Strength: Level 1", &cb_luma_global_settings.GameSettings.BloomStrengths.y, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsY", cb_luma_global_settings.GameSettings.BloomStrengths.y);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 1 Strength: Medium blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.y, default_luma_global_game_settings.BloomStrengths.y, "BloomStrengthsY", runtime);
+            
+            if (ImGui::SliderFloat("Strength: Level 2", &cb_luma_global_settings.GameSettings.BloomStrengths.z, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsZ", cb_luma_global_settings.GameSettings.BloomStrengths.z);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 2 Strength: Wide blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.z, default_luma_global_game_settings.BloomStrengths.z, "BloomStrengthsZ", runtime);
+            
+            if (ImGui::SliderFloat("Strength: Level 3", &cb_luma_global_settings.GameSettings.BloomStrengths.w, 0.f, 2.f))
+               reshade::set_config_value(runtime, NAME, "BloomStrengthsW", cb_luma_global_settings.GameSettings.BloomStrengths.w);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 3 Strength: Widest blur level/radius.");
+            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.w, default_luma_global_game_settings.BloomStrengths.w, "BloomStrengthsW", runtime);
+         }
+         
+         if (ImGui::SliderFloat("Strength: Final", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom final multiplier.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
+
+         ImGui::NewLine();
+         
          ImGui::PushID("###BloomThreshold");
-         DrawColoredSubHeader("Threshold");
+         DrawColoredSubHeader("Threshold / High Pass Filter");
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_BLOOM_THRESHOLD_1, "Mode",
             { "Vanilla (Crude)", "Slightly Neutral (Recommended)", "More Neutral (Alternative Style)" },
             "The high pass filter for bloom. How should it operate?"
             "\n"
             "\nThe original is a crude per-channel subtraction, horribly shifting hues and boosting saturation."
-            "\nA prime example is \"When First Love Ends\", where red blobs of bloom ruins close ups of skin."
+            "\nOne can say it's mimicking camera halation, but an example failure is \"When First Love Ends\", where red blobs of bloom ruins close ups of skin."
             "\n"
             "\nWe can do better by using luminance to blend towards neutral."
             "\n(Deliberate tinting still applies afterwards.)", false);
@@ -6515,9 +6774,9 @@ public:
             if (!Bloom::enabled) Bloom::HardReset();
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Reduce flickering and blockiness by using high quality gaussian blurring to downsample with an unbroken chain of mipmaps."
-                                                                                          "\nThough impossible to be a 100%% direct vanilla upgrade due to new weights, it's tuned to be respectful."
                                                                                           "\n"
-                                                                                          "\n(There's slight inefficiency decoupling from Auto-Exposure downsampling.)");
+                                                                                          "\n(Though impossible to be a 100%% direct vanilla upgrade due to new weights, it's tuned to be respectful."
+                                                                                          "\nThere's also slight inefficiency decoupling from Auto-Exposure downsampling.)");
 
          if (GlobalsMegaMix::UIIsAdvanced)
          {
@@ -6545,38 +6804,7 @@ public:
             }
             if (!Bloom::enabled) ImGui::EndDisabled();
          }
-
-         ImGui::NewLine();
-         DrawColoredSubHeader("Multipliers");
-
-         if (GlobalsMegaMix::UIIsAdvanced)
-         {
-            if (ImGui::SliderFloat("Level 0", &cb_luma_global_settings.GameSettings.BloomStrengths.x, 0.f, 2.f))
-               reshade::set_config_value(runtime, NAME, "BloomStrengthsX", cb_luma_global_settings.GameSettings.BloomStrengths.x);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 0 Strength: Tightest blur level/radius.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.x, default_luma_global_game_settings.BloomStrengths.x, "BloomStrengthsX", runtime);
-            
-            if (ImGui::SliderFloat("Level 1", &cb_luma_global_settings.GameSettings.BloomStrengths.y, 0.f, 2.f))
-               reshade::set_config_value(runtime, NAME, "BloomStrengthsY", cb_luma_global_settings.GameSettings.BloomStrengths.y);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 1 Strength: Medium blur level/radius.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.y, default_luma_global_game_settings.BloomStrengths.y, "BloomStrengthsY", runtime);
-            
-            if (ImGui::SliderFloat("Level 2", &cb_luma_global_settings.GameSettings.BloomStrengths.z, 0.f, 2.f))
-               reshade::set_config_value(runtime, NAME, "BloomStrengthsZ", cb_luma_global_settings.GameSettings.BloomStrengths.z);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 2 Strength: Wide blur level/radius.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.z, default_luma_global_game_settings.BloomStrengths.z, "BloomStrengthsZ", runtime);
-            
-            if (ImGui::SliderFloat("Level 3", &cb_luma_global_settings.GameSettings.BloomStrengths.w, 0.f, 2.f))
-               reshade::set_config_value(runtime, NAME, "BloomStrengthsW", cb_luma_global_settings.GameSettings.BloomStrengths.w);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom Level 3 Strength: Widest blur level/radius.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrengths.w, default_luma_global_game_settings.BloomStrengths.w, "BloomStrengthsW", runtime);
-         }
          
-         if (ImGui::SliderFloat("Final", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom final multiplier.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength", runtime);
-
          if (GlobalsMegaMix::UIIsAdvanced)
          {
             ImGui::NewLine();
@@ -6605,7 +6833,7 @@ public:
       ImGui::PushID("###AntiAliasing");
       if (DrawCollapsingHeaderEnabledColored("Anti-Aliasing", AntiAliasing::enabled > AntiAliasing::Vanilla))
       {
-         DrawColoredSubHeader("Anti-Aliasing Customization");
+         DrawColoredSubHeader("Blur edges that should be smooth given more sub-pixel information.");
 
          // dropdown Vanilla, Disable, DLAA
          auto curr = static_cast<int>(AntiAliasing::enabled);
@@ -6630,7 +6858,7 @@ public:
          ImGui::PopStyleColor();
 
          ImGui::NewLine();
-         DrawColoredSubHeader("Super Sampling Anti-Aliasing (SSAA)");
+         DrawColoredSubHeader("Super Sampling Anti-Aliasing (SSAA): Bruteforce higher internal resolution.");
 
          if (!SSAA::enabled && ImGui::Button("Download SSAA Enabled by korenkonder")) Website::OpenWebsite("https://github.com/korenkonder/MMPlusMods/releases#release-SSAAEnable-1.03");
          
@@ -6650,7 +6878,7 @@ public:
       ImGui::PushID("###DepthOfField");
       if (DrawCollapsingHeaderEnabledColored("Depth of Field", DepthOfField::enabled > DepthOfField::Vanilla))
       {
-         DrawColoredSubHeader("Depth of Field Customization");
+         DrawColoredSubHeader("Blurring of areas out of focus.");
 
          // dropdown Vanilla, Disable, DLAA
          auto curr = static_cast<int>(DepthOfField::enabled);
@@ -6671,14 +6899,105 @@ public:
 
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
+      DuplicateWorldReflections::Resources::is_dirty_token = true; // grant dirty check token
+      
+      ImGui::PushID("###DuplicateWorldReflections");
+      if (DrawCollapsingHeaderEnabledColored("Duplicate World Reflections", DuplicateWorldReflections::enabled))
+      {
+         DrawColoredSubHeader("Renders the scene again at the reflection angle/point for planar reflections.");
+
+         if (ImGui::Checkbox("Enable", &DuplicateWorldReflections::enabled))
+            reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_enabled, DuplicateWorldReflections::enabled);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Hijack rendering to enable settings below.\nEven at the original 512x256, this improves with gaussian blurring.");
+
+         ImGui::BeginDisabled(!DuplicateWorldReflections::enabled);
+         {
+            // res
+            static int2 desired_resolution = {0,0};
+            desired_resolution = int2(DuplicateWorldReflections::desired_resolution.x, DuplicateWorldReflections::desired_resolution.y);
+
+            static float2 prev_output_resolution = { 0, 0 };
+            static std::array<uint2, 4> res_presets = {};
+            if (prev_output_resolution.x != device_data.output_resolution.x || prev_output_resolution.y != device_data.output_resolution.y)
+            {
+               prev_output_resolution = device_data.output_resolution;
+               res_presets[0] = uint2(device_data.output_resolution.x / 8.f, device_data.output_resolution.y / 8.f);
+               res_presets[1] = uint2(device_data.output_resolution.x / 4.f, device_data.output_resolution.y / 4.f);
+               res_presets[2] = uint2(device_data.output_resolution.x / 2.f, device_data.output_resolution.y / 2.f);
+               res_presets[3] = uint2(device_data.output_resolution.x, device_data.output_resolution.y);
+            }
+            bool is_changed_by_preset = false;
+            ImGui::SameLine(); if (ImGui::Button("512x256")) { desired_resolution = int2(512, 256); is_changed_by_preset = true; }
+            ImGui::SameLine(); if (ImGui::Button(std::format("(Low) {}x{}", res_presets[1].x, res_presets[1].y).c_str())) { desired_resolution = int2(res_presets[1].x, res_presets[1].y); is_changed_by_preset = true; }
+            ImGui::SameLine(); if (ImGui::Button(std::format("(Recommended) {}x{}", res_presets[2].x, res_presets[2].y).c_str())) { desired_resolution = int2(res_presets[2].x, res_presets[2].y); is_changed_by_preset = true; }
+            ImGui::SameLine(); if (ImGui::Button(std::format("(High) {}x{}", res_presets[3].x, res_presets[3].y).c_str())) { desired_resolution = int2(res_presets[3].x, res_presets[3].y); is_changed_by_preset = true; }
+            
+            int max_resolution = max(device_data.output_resolution.x, device_data.output_resolution.y);
+            if (ImGui::SliderInt2("Resolution", &desired_resolution.x, 16, max_resolution) || is_changed_by_preset)
+            {
+               desired_resolution.x = max(16, desired_resolution.x);
+               desired_resolution.y = max(16, desired_resolution.y);
+               DuplicateWorldReflections::desired_resolution = uint2(desired_resolution.x, desired_resolution.y);
+               reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_x, DuplicateWorldReflections::desired_resolution.x);
+               reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_y, DuplicateWorldReflections::desired_resolution.y);
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("New resolution of the planar reflection render target.\n(The original is 512x256.)");
+            
+            if (GlobalsMegaMix::UIIsAdvanced)
+            {
+               // mips
+               if (ImGui::SliderInt("Mips", &DuplicateWorldReflections::blur_mips, 1, DuplicateWorldReflections::Resources::srvs_x.size()))
+                  reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_blur_mips, DuplicateWorldReflections::blur_mips);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The number of mips in the chain used to blur.\n(The original is a quick 4-tap box blur at 512x256.)");
+               DrawResetButton(DuplicateWorldReflections::blur_mips, DuplicateWorldReflections::blur_mips_def, DuplicateWorldReflections::reshadesave_blur_mips, runtime);
+
+               // sigma
+               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DWR_SIGMA, "Sigma", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
+                  "Change the gaussian kernel's sigma to control softness.");
+            }
+         }
+         ImGui::EndDisabled();
+
+         ImGui::NewLine();
+         DrawColoredSubHeader("About X Song Pack's \"reflect_full\" Feature");
+         // ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("If on, the mod uses a different path for native resolution non-blurred reflections unaffected by this.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("If off, the mod doesn't use this type of reflections (or any at all), so it's also unaffected.");
+         // ImGui::PopStyleColor();
+
+         if (GlobalsMegaMix::UIIsAdvanced)
+         {
+            ImGui::NewLine();
+            DrawColoredSubHeader("Auxiliary Resources");
+         
+            ImGui::PushStyleColor(ImGuiCol_Text, DuplicateWorldReflections::Resources::IsReadyHandles() ? ImVec4(0.4f, 1.f, 0.4f, 1.f) : ImVec4(1.f, 1.f, 0.4f, 1.f));
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Original Found: %s", DuplicateWorldReflections::Resources::IsReadyHandles() ? "Yes" : "No");
+            ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+            if (ImGui::Button("Forget")) DuplicateWorldReflections::Resources::Reset_Handles();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Forget to then begin search again.\nShould not be needed unless you change) the game's resolution or something.");
+         
+            ImGui::PushStyleColor(ImGuiCol_Text, DuplicateWorldReflections::Resources::IsReadyResource() ? ImVec4(0.4f, 1.f, 0.4f, 1.f) : ImVec4(1.f, 1.f, 0.4f, 1.f));
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("New Ready: %s", DuplicateWorldReflections::Resources::IsReadyResource() ? "Yes" : "No");
+            ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+            if (ImGui::Button("Reset")) DuplicateWorldReflections::Resources::Reset_Resources();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Release new texture resources to recreate them.\nShould not be needed unless you change the game's resolution or something.");
+         }
+      }
+      
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
       ImGui::PushID("###SpotLightShadows");
       if (DrawCollapsingHeaderEnabledColored("Spotlight Lighting Pass", SpotLightShadows::enabled))
       {
-         DrawColoredSubHeader("Full Resolution Resolve");
+         DrawColoredSubHeader("A separate pass for many accurate spotlights.");
 
-         if (ImGui::Checkbox("Enable", &SpotLightShadows::enabled))
+         if (ImGui::Checkbox("Full Resolution", &SpotLightShadows::enabled))
             reshade::set_config_value(runtime, NAME, SpotLightShadows::reshadesave_enabled, SpotLightShadows::enabled);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Make the separated spotlights lighting pass resolve to a full resolution color buffer.\nProbably has some performance cost.");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Make the separated spotlights lighting pass resolve to a full resolution color buffer.");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This FX is rather rare. 2 PVs using this are Meiteki Cybernetics & Gaikotsu Gakudan to Riria.");
@@ -6691,9 +7010,9 @@ public:
       ImGui::PushID("###PS4Blur");
       if (DrawCollapsingHeaderEnabledColored("PS3/PS4 Frame Blending", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_PS4BLUR_1)))
       {
-         DrawColoredSubHeader("Insert 1-frame delay blending/ghosting seen in Dreamy Theater (PS3) & Future Tone (PS4).");
+         DrawColoredSubHeader("Insert previous frame blending/ghosting seen in Dreamy Theater (PS3) & Future Tone (PS4).");
 
-         auto d = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PS4BLUR_1, "Mode", { "Off", "On", "Horizontal Interlacing" }, "Interlacing doesn't save performance.");
+         auto d = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PS4BLUR_1, "Mode", { "Off", "On", "Horizontal Interlacing" }, "(Interlacing doesn't save performance.)");
 
          if (d != 1) ImGui::BeginDisabled();
          {
@@ -6721,7 +7040,7 @@ public:
       {
          DrawColoredSubHeader("Limit how fast Auto-Exposure history is written, reducing rapid exposure changes on high FPS.");
          
-         if (ImGui::SliderInt("Rate", &AutoExposureFix::rate_replacement, 0, 60, "%d FPS"))
+         if (ImGui::SliderInt("Rate", &AutoExposureFix::rate_replacement, 0, 60, AutoExposureFix::rate_replacement > 0 ? "%d FPS" : "No Limit"))
             reshade::set_config_value(runtime, NAME, AutoExposureFix::reshadesave, AutoExposureFix::rate_replacement);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Auto-Exposure history (32px ring buffer) is done per-frame.\nOn high FPS, this causes rapid exposure changes as older history is rapidly overriden.\n\nThis feature will limit Auto-Exposure rate,\nwhile allowing camera cuts to clear history.");
          DrawResetButton(AutoExposureFix::rate_replacement, 60, AutoExposureFix::reshadesave, runtime);
@@ -6778,7 +7097,7 @@ public:
       ImGui::PushID("###LUTBlowoutReduction");
       if (!is_sdr && DrawCollapsingHeaderEnabledColored("LUT Blowout Reduction", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN)))
       {
-         DrawColoredSubHeader("Regain chrominance for HDR highlights by creating bias on blowout curve through gaussian weighted sampling.");
+         DrawColoredSubHeader("Regain chrominance for HDR highlights by creating bias on blowout curve via gaussian weighted sampling.");
          
          is_disabled = !ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUT_BLOWOUT_GAUSSIAN, "Enabled", "Sample the YCbCr LUT in charged of causing blowout with a gaussian blur,\nbiased towards higher chrominance, helping reduce steep chrominance falloff for HDR's additional stops.");
          if (is_disabled) ImGui::BeginDisabled();
@@ -6804,7 +7123,7 @@ public:
       //HDR Tonemapper Settings
       if (!is_sdr && ImGui::CollapsingHeader("HDR Display-mapping"))
       {
-         DrawColoredSubHeader("Miscellaneous Settings for HDR Display-mapping");
+         DrawColoredSubHeader("Controls how colors are compressed down to fit display.");
 
          {
             if (ImGui::SliderFloat("HDR Tonemapper Expected Max", &CachedCB::white_clip, 0.0001f, 0.2f, "%.4f"))
@@ -6851,7 +7170,7 @@ public:
       
       if (!is_sdr && DrawCollapsingHeaderEnabledColored("Fake BT2020 (Gamut Expansion)", ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_FAKEBT2020)))
       {
-         DrawColoredSubHeader("Fake saturation to decrease BT.709 chrominance clipping.");
+         DrawColoredSubHeader("Fake saturation to from gamma tomfoolery.");
 
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("if on, you'll want Gamma Correction \"Perceptual\" mode to control shadows.");
          
@@ -7207,7 +7526,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    {
       // name
       Globals::SetGlobals(PROJECT_NAME, "Hatsune Miku: Project DIVA Mega Mix+ - Luma Mod");
-      Globals::VERSION = 1;
+      Globals::VERSION = 0; // TODO: for some reason, this is not being saved to ReShade.ini, so anything > than 0 resets shader defines!!!!!!!!?!?!?! 
 
       // fuillscreen state
       prevent_fullscreen_state = true;
