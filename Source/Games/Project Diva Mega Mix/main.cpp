@@ -6987,7 +6987,8 @@ public:
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Release new texture resources to recreate them.\nShould not be needed unless you change the game's resolution or something.");
          }
       }
-      
+      ImGui::PopID();
+
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       ImGui::PushID("###SpotLightShadows");
