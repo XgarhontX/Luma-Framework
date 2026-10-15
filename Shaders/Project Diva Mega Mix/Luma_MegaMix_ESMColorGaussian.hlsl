@@ -7,7 +7,7 @@ cbuffer CBMegaMixColorAux : register(b11)
   float2 axis;
   // float sigma;
 }
-#define SUGMA (CUSTOM_ESM_COLOR_SIGMA / 4.0) * 0.5
+#define SUGMA ((CUSTOM_ESM_COLOR_SIGMA + 1) / 5.0) * 0.5
 
 SamplerState smp : register(s0);
 Texture2D tex : register(t0);
