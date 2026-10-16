@@ -4,6 +4,7 @@
 #define DISABLE_AUTO_DEBUGGER 1
 // #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 0
 // #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
+#define MAX_SHADER_DEFINES_CUSTOM 64
 #include "..\..\Core\core.hpp"
 
 namespace
@@ -321,58 +322,56 @@ namespace ShaderDefineInfo
    void OnInit()
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"GAMMA_CORRECTION_RANGE_TYPE", '0', true, !DEVELOPMENT, "0 - Full range.\n1 - 0-1 only.", 1},
-         // {"SWAPCHAIN_CLAMP_PEAK", '0', true, false, "Clamp the absolute final color.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).", 2},
-         {"SWAPCHAIN_CLAMP_COLORSPACE", '0', true, !DEVELOPMENT, "Clamp colorspace against invalid colors.\n(Really only for OCD, as it should only be inconsequential black.)\n0 - Unclamped.\n1 - BT2020.", 1},
+         {"GAMMA_CORRECTION_RANGE_TYPE", '0', true, false, "0 - Full range.\n1 - 0-1 only.", 1},
+         {"SWAPCHAIN_CLAMP_COLORSPACE", '0', true, false, "Clamp colorspace against invalid colors.\n(Really only for OCD, as it should only be inconsequential black.)\n0 - Unclamped.\n1 - BT2020.", 1},
          {"SWAPCHAIN_TEST_USER_PEAK", '0', true, false, "Show a simple white rectangle peak test.", 1},
-         // {"_____CUSTOM_____", '0', true, false, "Just a divider.", 1},
-         {"CUSTOM_SDR_1", '0', true, !DEVELOPMENT, "SDR path.", 1},
-         {"CUSTOM_TONEMAP_SCALING", '0', true, !DEVELOPMENT, "HDR tonemap scaling.\n0 - Luminance (natural)\n1 - Max-Channel (saturation preserve)", 1},
-         {"CUSTOM_TONEMAP_CLAMP", '1', true, !DEVELOPMENT, "(Only if CUSTOM_TONEMAP_SCALING is luminance scaled.)\nClamp overshoot from luma scaled HDR tonemap.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).", 2},
-         {"CUSTOM_CLAMP_PEAK", '1', true, !DEVELOPMENT, "Clamp the absolute final color.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).\n3 - Per channel rolloff slightly above peak (blows out).", 3},
-         {"CUSTOM_GAMMA_CORRECTION_MODE", '0', true, true, "0 - Per-Channel.\n1 - Perceptual.", 1},
-         {"CUSTOM_FAKEBT2020", '0', true, !DEVELOPMENT, "Encode BT2020 before gamma decode to push colors out to wcg.", 1},
-         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN", '1', true, !DEVELOPMENT, "Enable YCbCr LUT biased gaussian blur to stop steep chrominance drop offs in the curve.", 1},
-         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS", '1', true, !DEVELOPMENT, "Enable YCbCr LUT biased gaussian blur responds to HDR stops.", 1},
-         {"CUSTOM_PCC_QUALITY", '0', true, !DEVELOPMENT, "Quality of Per-CHannel Blowout blending.", 1},
-         {"CUSTOM_COLORGRADE", '0', true, !DEVELOPMENT, "Enable HDR luminance color grading.", 2},
-         {"CUSTOM_COLORGRADE_SATORDER", '0', true, !DEVELOPMENT, "Enable HDR global saturation slider.\n0 - Off\n1 - BT709 Before UI\n2 - BT2020 After UI", 2},
-         {"CUSTOM_HUDBRIGHTNESS", '0', true, !DEVELOPMENT, "Sample shader texture resources to detect specific UI to change their brightness.\nElse, they are too bright.", 2},
-         {"CUSTOM_HDTVREC709_1", '0', true, !DEVELOPMENT, "Decode color and swapchain to HDTV rec.709, like PS4's display output.", 1},
-         {"CUSTOM_GAMMACORRECT22", '1', true, !DEVELOPMENT, "Enable Gamma Correction 2.2 for OS and displays missing it.", 1},
-         {"CUSTOM_PROGRESSBAR", '0', true, !DEVELOPMENT, "Play head progress bar.", 2},
-         {"CUSTOM_PS4BLUR_1", '0', true, !DEVELOPMENT, "PS4 frame blur / ghosting.", 2},
-         {"CUSTOM_BLOOM_THRESHOLD_1", '0', true, !DEVELOPMENT, "Bloom threshold mode.", 4},
-         {"CUSTOM_SSAA_FILTER", '0', true, !DEVELOPMENT, "SSAA downsample filter", 2},
-         {"CUSTOM_HDRTONEMAPONSDR", '0', true, !DEVELOPMENT, "Use new HDR tonemapping in SDR path.", 1},
-         {"CUSTOM_ESM_DEPTH_NEW_SIZE", '0', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
-         {"CUSTOM_ESM_DEPTH_FILTERREDUCE", '1', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
-         {"CUSTOM_ESM_DEPTH_SIGMAINCREASE", '0', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
-         {"CUSTOM_ESM_COLOR_SIGMA", '4', true, !DEVELOPMENT, "Reduce shadow map gaussian blur steps.", 9},
-         {"CUSTOM_DWR_SIGMA", '4', true, !DEVELOPMENT, "Duplicate World Reflections sigma.", 9},
-         {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, !DEVELOPMENT, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
-         {"XEGTAO_SLICECOUNT", '1', true, !DEVELOPMENT, "XeGTAO samples.", 6},
-         {"XEGTAO_STEPSPERSLICE", '0', true, !DEVELOPMENT, "XeGTAO samples.", 2},
-         {"XEGTAO_HALFRES", '1', true, !DEVELOPMENT, "XeGTAO half resolution.", 1},
-         {"XEGTAO_NOISE", '4', true, !DEVELOPMENT, "XeGTAO moving noise.", 9},
-         {"XEGTAO_NORMALSMOOTH_QUALITY", '1', true, !DEVELOPMENT, "XeGTAO smooth normals quality.", 2},
-         {"XEGTAO_MANUALSIZE", '0', true, !DEVELOPMENT, "XeGTAO compute viewport size in shader.", 1},
-         {"XEGTAO_CHECKBOARD", '0', true, !DEVELOPMENT, "XeGTAO checkerboard rendering.", 2},
-         {"XEGTAO_UPSAMPLE", '1', true, !DEVELOPMENT, "XeGTAO Joint Bilateral Upsample.", 1},
-         {"XEGTAO_THREADS_NORMALSGEN", '0', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_AO", '1', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
-         {"XEGTAO_THREADS_DENOISE", '0', true, !DEVELOPMENT, "XeGTAO compute shader thread groups.", 1},
-         {"CUSTOM_TESTBGSPRITES", '0', true, !DEVELOPMENT, "Test BG Sprites layering.", 2},
-         {"CUSTOM_TONEMAP_IDENTIFY", '0', true, !DEVELOPMENT, "Draw binary representation of tonemap uber variant number.", 1},
-         {"CUSTOM_UPSCALE_MOV", '0', true, !DEVELOPMENT, "PumboAutoHDR for FMV.\n0 - Off\n1 - On", 1},
-         {"CUSTOM_UPSCALE_BGSPRITES", '0', true, !DEVELOPMENT, "Auto HDR (Inverse Tonemap) for background 2D sprites in complex \"Future Tone\" scenes (e.g. Torinoko City).", 1},
-         {"CUSTOM_UPSCALE_TOON", '0', true, !DEVELOPMENT, "Auto HDR for flat toon scenes (e.g. Catch the Wave, Deep Sea City Underground, etc.).\n0 - Forced SDR\n1 - Treat as Complex\n2 - On\n3 - On (Ignore Customization Menu)", 3},
-         {"CUSTOM_UPGRADE_DEBUG", '0', true, !DEVELOPMENT, "Show inputs into UpgradeToneMap().", 5},
+         {"CUSTOM_SDR_1", '0', true, false, "SDR path.", 1},
+         {"CUSTOM_TONEMAP_SCALING", '0', true, false, "HDR tonemap scaling.\n0 - Luminance (natural)\n1 - Max-Channel (saturation preserve)", 1},
+         {"CUSTOM_TONEMAP_CLAMP", '1', true, false, "(Only if CUSTOM_TONEMAP_SCALING is luminance scaled.)\nClamp overshoot from luma scaled HDR tonemap.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).", 2},
+         {"CUSTOM_CLAMP_PEAK", '1', true, false, "Clamp the absolute final color.\n0 - Unclamped (up to display).\n1 - Per channel clamp (blows out).\n2 - Scale down by max channel (sat preserving).\n3 - Per channel rolloff slightly above peak (blows out).", 3},
+         {"CUSTOM_GAMMA_CORRECTION_MODE", '0', true, false, "0 - Per-Channel.\n1 - Perceptual.", 1},
+         {"CUSTOM_FAKEBT2020", '0', true, false, "Encode BT2020 before gamma decode to push colors out to wcg.", 1},
+         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN", '1', true, false, "Enable YCbCr LUT biased gaussian blur to stop steep chrominance drop offs in the curve.", 1},
+         {"CUSTOM_LUT_BLOWOUT_GAUSSIAN_STOPS", '1', true, false, "Enable YCbCr LUT biased gaussian blur responds to HDR stops.", 1},
+         {"CUSTOM_PCC_QUALITY", '0', true, false, "Quality of Per-CHannel Blowout blending.", 1},
+         {"CUSTOM_COLORGRADE", '0', true, false, "Enable HDR luminance color grading.", 2},
+         {"CUSTOM_COLORGRADE_SATORDER", '0', true, false, "Enable HDR global saturation slider.\n0 - Off\n1 - BT709 Before UI\n2 - BT2020 After UI", 2},
+         {"CUSTOM_HUDBRIGHTNESS", '0', true, false, "Sample shader texture resources to detect specific UI to change their brightness.\nElse, they are too bright.", 2},
+         {"CUSTOM_HDTVREC709_1", '0', true, false, "Decode color and swapchain to HDTV rec.709, like PS4's display output.", 1},
+         {"CUSTOM_GAMMACORRECT22", '1', true, false, "Enable Gamma Correction 2.2 for OS and displays missing it.", 1},
+         {"CUSTOM_PROGRESSBAR", '0', true, false, "Play head progress bar.", 2},
+         {"CUSTOM_PS4BLUR_1", '0', true, false, "PS4 frame blur / ghosting.", 2},
+         {"CUSTOM_BLOOM_THRESHOLD_1", '0', true, false, "Bloom threshold mode.", 4},
+         {"CUSTOM_SSAA_FILTER", '0', true, false, "SSAA downsample filter", 2},
+         {"CUSTOM_HDRTONEMAPONSDR", '0', true, false, "Use new HDR tonemapping in SDR path.", 1},
+         {"CUSTOM_ESM_DEPTH_NEW_SIZE", '0', true, false, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_ESM_DEPTH_FILTERREDUCE", '1', true, false, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_ESM_DEPTH_SIGMAINCREASE", '0', true, false, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_ESM_COLOR_SIGMA", '4', true, false, "Reduce shadow map gaussian blur steps.", 9},
+         {"CUSTOM_DWR_SIGMA", '4', true, false, "Duplicate World Reflections sigma.", 9},
+         {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
+         {"XEGTAO_SLICECOUNT", '1', true, false, "XeGTAO samples.", 6},
+         {"XEGTAO_STEPSPERSLICE", '0', true, false, "XeGTAO samples.", 2},
+         {"XEGTAO_HALFRES", '1', true, false, "XeGTAO half resolution.", 1},
+         {"XEGTAO_NOISE", '4', true, false, "XeGTAO moving noise.", 9},
+         {"XEGTAO_NORMALSMOOTH_QUALITY", '1', true, false, "XeGTAO smooth normals quality.", 2},
+         {"XEGTAO_MANUALSIZE", '0', true, false, "XeGTAO compute viewport size in shader.", 1},
+         {"XEGTAO_CHECKBOARD", '0', true, false, "XeGTAO checkerboard rendering.", 2},
+         {"XEGTAO_UPSAMPLE", '1', true, false, "XeGTAO Joint Bilateral Upsample.", 1},
+         {"XEGTAO_THREADS_NORMALSGEN", '0', true, false, "XeGTAO compute shader thread groups.", 1},
+         {"XEGTAO_THREADS_NORMALSSMOOTH", '0', true, false, "XeGTAO compute shader thread groups.", 1},
+         {"XEGTAO_THREADS_AO", '1', true, false, "XeGTAO compute shader thread groups.", 1},
+         {"XEGTAO_THREADS_DENOISE", '0', true, false, "XeGTAO compute shader thread groups.", 1},
+         {"CUSTOM_TESTBGSPRITES", '0', true, false, "Test BG Sprites layering.", 2},
+         {"CUSTOM_TONEMAP_IDENTIFY", '0', true, false, "Draw binary representation of tonemap uber variant number.", 1},
+         {"CUSTOM_UPSCALE_MOV", '0', true, false, "PumboAutoHDR for FMV.\n0 - Off\n1 - On", 1},
+         {"CUSTOM_UPSCALE_BGSPRITES", '0', true, false, "Auto HDR (Inverse Tonemap) for background 2D sprites in complex \"Future Tone\" scenes (e.g. Torinoko City).", 1},
+         {"CUSTOM_UPSCALE_TOON", '0', true, false, "Auto HDR for flat toon scenes (e.g. Catch the Wave, Deep Sea City Underground, etc.).\n0 - Forced SDR\n1 - Treat as Complex\n2 - On\n3 - On (Ignore Customization Menu)", 3},
+         {"CUSTOM_UPGRADE_DEBUG", '0', true, false, "Show inputs into UpgradeToneMap().", 5},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       auto_recompile_defines = true; //force
-      assert(shader_defines_data.size() < MAX_SHADER_DEFINES);
+      ASSERT_MSG(shader_defines_data.size() < MAX_SHADER_DEFINES, "Too many shader defines!");
       
       // Default built-in
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1'); GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetValue('1'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValueFixed(true);
@@ -380,6 +379,14 @@ namespace ShaderDefineInfo
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0'); GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetValue('0'); GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetValueFixed(true);
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValue('0'); GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetValueFixed(true);
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2'); GetShaderDefineData(UI_DRAW_TYPE_HASH).SetValue('2'); GetShaderDefineData(UI_DRAW_TYPE_HASH).SetValueFixed(true);
+   }
+
+   void OnLoadConfigs()
+   {
+   }
+
+   void OnShaderDefinesChanged()
+   {
    }
 
    static char InvertCharBool(char b)
@@ -5634,6 +5641,9 @@ public:
       // log
       message(reshade::log::level::info, "OnInit()");
 
+      // force same version to not reset settings
+      reshade::set_config_value(nullptr, NAME, "Version", Globals::VERSION); // TODO: WHY IS THIS TROLLING?!?!?
+
       // OutputHandling
       OutputHandling::OnInit();
 
@@ -6086,6 +6096,8 @@ public:
       
       reshade::api::effect_runtime* runtime = nullptr;
 
+      ShaderDefineInfo::OnLoadConfigs();
+
       //try force 400 nits
       if (!reshade::get_config_value(runtime, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite)) cb_luma_global_settings.ScenePeakWhite = 400.f;
 
@@ -6182,6 +6194,11 @@ public:
       ShadowMap::OnLoad(runtime);
 
       DuplicateWorldReflections::OnLoad(runtime);
+   }
+
+   void OnShaderDefinesChanged()
+   {
+      ShaderDefineInfo::OnShaderDefinesChanged();
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
