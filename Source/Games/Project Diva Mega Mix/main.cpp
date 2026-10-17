@@ -53,7 +53,48 @@ namespace
       }
    }
 #endif
+
+namespace RenderTracker // partial
+{
+   ComPtr<ID3D11Resource> res_main_color; // rgba16f that forward lighting draws to
+   uint64_t res_main_color_handle = 0;
+   uint2 res_main_color_size = {};
    
+   uint64_t last_cleared_rtv_handle = 0;
+
+   uint8_t count_main_color_clears = 0; // count of ClearRenderTargetView on main color
+   uint8_t count_main_color_clears_draws_after = 0; // (exec first-most) count of OnDrawOrDispatch after last ClearRenderTargetView on main color
+
+   enum SSSState : uint8_t
+   {
+      SSSState_Unknown,
+      SSSState_Setup,
+      SSSState_Skipped,
+      SSSState_Resolved,
+   };
+   SSSState sss_state = SSSState_Unknown;
+   bool IsSSSResolvedOrSkipped() { return sss_state >= SSSState_Skipped; }
+   bool IsSSSSetup() { return sss_state == SSSState_Setup; }
+   bool IsSSSSkipped() { return sss_state == SSSState_Skipped; }
+   bool IsSSSResolved() { return sss_state == SSSState_Resolved; }
+   bool IsMainColorBeingOrHasBeenDrawnTo() { return IsSSSResolvedOrSkipped(); }
+   
+   bool is_drawn_to_swapchain = false; // when shader draws
+   bool is_drawn_to_autoexposure0 = false; // when shader draws
+}
+
+namespace GlobalsMegaMix
+{
+   bool IsUI = true;
+   // bool IsFullscreenOverlayFx = true;
+   int TonemapInfoBackup = 0;
+   int SwapchainChangeCount = 0;
+   bool IsUIText = true;
+   bool UIIsReadmeDone = false;
+   bool UIIsAdvanced = false;
+   bool IsGammaCorrectionSyncPaperWhite = true;
+}
+
 namespace TonemapInfo
 {
    int FlagDrawnTonemap =     0x40000000; //1<<30
@@ -190,6 +231,9 @@ namespace ShaderHashesLists
    constexpr uint32_t Downsample1 = 0x7B4E4533; //downsample all the way down to near 1x1 for autoexposure
    constexpr uint32_t AutoExposure0 = 0xA58C1868; //auto exposure ring buffer write 
    constexpr uint32_t AutoExposure1 = 0xDF1AC023; //sample each ring buffer to compute avg (output is used by CPU to set cb value for tonemap v3.y)
+   constexpr uint32_t SSSSetup0 = 0x93881580;
+   constexpr uint32_t SSSSetup1 = 0xCF8047E0;
+   bool IsSSSSetupShader(uint32_t ps) { return ps == SSSSetup0 || ps == SSSSetup1; }
    
    const std::unordered_map<uint32_t, uint8_t> Tonemaps = {
       { 0x7CFCDF1A, 0  }, //complex
@@ -210,35 +254,6 @@ namespace ShaderHashesLists
    constexpr uint32_t UISpritesHPBarDelta = 0xD0162389;
    constexpr uint32_t UISpritesText = 0x7F6C8EC7;
    constexpr uint32_t ToSwapchain = 0xA200B172;
-}
-
-namespace GlobalsMegaMix
-{
-   bool IsUI = true;
-   // bool IsFullscreenOverlayFx = true;
-   int TonemapInfoBackup = 0;
-   int SwapchainChangeCount = 0;
-   bool IsUIText = true;
-   bool UIIsReadmeDone = false;
-   bool UIIsAdvanced = false;
-   bool IsGammaCorrectionSyncPaperWhite = true;
-}
-
-namespace DrawingState
-{
-   bool IsDrawnToSwapchain = false;
-   bool IsDrawnAutoExposure0 = false;
-   // bool IsDrawnMLAA = false;
-   // bool IsDrawnMLAAPrev = false;
-
-   void ResetOnPresent()
-   {
-      IsDrawnToSwapchain = false;
-      IsDrawnAutoExposure0 = false;
-      // IsAutoExposure0ClearingHistory = false; //dont need to reset
-      // IsDrawnMLAAPrev = IsDrawnMLAA;
-      // IsDrawnMLAA = false;
-   }
 }
 
 // namespace UISeparation //TODO: del, compeltely broken
@@ -318,6 +333,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_ESM_DEPTH_SIGMAINCREASE    = char_ptr_crc32("CUSTOM_ESM_DEPTH_SIGMAINCREASE");
    constexpr uint32_t CUSTOM_ESM_COLOR_SIGMA            = char_ptr_crc32("CUSTOM_ESM_COLOR_SIGMA");
    constexpr uint32_t CUSTOM_DWR_SIGMA                  = char_ptr_crc32("CUSTOM_DWR_SIGMA");
+   constexpr uint32_t CUSTOM_SSS_HQBLUR                 = char_ptr_crc32("CUSTOM_SSS_HQBLUR");
 
    void OnInit()
    {
@@ -349,6 +365,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_ESM_DEPTH_SIGMAINCREASE", '0', true, false, "Reduce shadow map gaussian blur steps.", 9},
          {"CUSTOM_ESM_COLOR_SIGMA", '4', true, false, "Reduce shadow map gaussian blur steps.", 9},
          {"CUSTOM_DWR_SIGMA", '4', true, false, "Duplicate World Reflections sigma.", 9},
+         {"CUSTOM_SSS_HQBLUR", '0', true, false, "Increase SSS blur taps.", 1},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '1', true, false, "Emulate luminance loss from LDR per-channel tonemapping on single channel bright colors.", 1},
          {"XEGTAO_SLICECOUNT", '1', true, false, "XeGTAO samples.", 6},
          {"XEGTAO_STEPSPERSLICE", '0', true, false, "XeGTAO samples.", 2},
@@ -588,7 +605,7 @@ namespace CachedCB
       return is;
    }
 
-   void Update()
+   void OnPresent() // Update loop
    {
       //changed?
       bool is_rec709 = ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_HDTVREC709_1);
@@ -1027,7 +1044,6 @@ namespace SeparateUIBrightness
 
 namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/src/SSAAEnable/dllmain.cpp
 {
-   uint2 render_resolution = { 0, 0 };
    bool enabled = false;
    
    constexpr const char* Luma_MegaMix_Final = "Luma_MegaMix_Final"; // file & shader name
@@ -1036,36 +1052,17 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
    {
       native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_Final), ShaderDefinition{ Luma_MegaMix_Final, reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "main", {{"CUSTOM_SSAA", "1"}} });
    }
-   
-   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+
+   void OnRenderResolutionFound(uint2 render_resolution, DeviceData& device_data)
    {
-      [[likely]] if (render_resolution.x > 0) return;
-
-      // RTV0 for resolution
-      ComPtr<ID3D11RenderTargetView> rtv0;
-      native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-      ASSERT_MSG(rtv0 != nullptr, "SSAA::OnTonemapDraw(): Failed to get RTV0.");
-
-      ComPtr<ID3D11Resource> res;
-      rtv0->GetResource(res.put());
-
-      ComPtr<ID3D11Texture2D> tex;
-      auto hr = res->QueryInterface(IID_PPV_ARGS(tex.put()));
-      ASSERT_MSG(SUCCEEDED(hr), "SSAA::OnTonemapDraw(): Failed query.");
-
-      D3D11_TEXTURE2D_DESC desc;
-      tex->GetDesc(&desc);
-
-      render_resolution = { desc.Width, desc.Height };
-
       // check resolution TODO: instead of this, use memory hack?
-      uint rtv_pix = desc.Width * desc.Height;
+      uint rtv_pix = render_resolution.x * render_resolution.y;
       uint native_pix = device_data.output_resolution.x * device_data.output_resolution.y;
       uint thres = native_pix * 1.1f;
       enabled = rtv_pix > thres;
-      reshade::log::message(reshade::log::level::info, std::format("SSAA::OnTonemapDraw(): SSAA {} (RTV0: {}x{}, Native: {}x{})", enabled ? "enabled" : "disabled", desc.Width, desc.Height, device_data.output_resolution.x, device_data.output_resolution.y).c_str());
+      reshade::log::message(reshade::log::level::info, std::format("SSAA::OnRenderResolutionFound(): SSAA {} (Render: {}x{}, Output: {}x{})", enabled ? "enabled" : "disabled", render_resolution.x, render_resolution.y, device_data.output_resolution.x, device_data.output_resolution.y).c_str());
    }
-      
+   
    // normal Final isn't drawn when SSAA. we must find other ways to check
    bool IsFinalDrawing(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
@@ -1091,12 +1088,6 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
       native_device_context->PSSetSamplers(1, 1, &device_data.sampler_state_linear);
    }
 
-   void OnInitSwapchain(bool is_resolution_changed)
-   {
-      // reset
-      render_resolution = { 0, 0 }; 
-   }
-
    void OnPresent()
    {
 
@@ -1108,7 +1099,7 @@ namespace XeGTAO
    bool enabled = false; //TODO: user settings
       constexpr const char* reshadesave_enabled = "XeGTAOEnabled";
 
-   PUBLISHING_CONSTEXPR bool is_fog_dodge = true; // use fog dodging variant
+   PUBLISHING_CONSTEXPR bool is_fog_dodge = true; // use fog dodging variant // TODO: still false pos of not enough dodge (Doubleganger) or too much (Secret Garden)
 
    int denoise_count = 3; // denoise the AO result
       constexpr const char* reshadesave_denoise = "XeGTAODenoise";
@@ -1436,9 +1427,6 @@ namespace XeGTAO
       uint2 size = { 0, 0 };
       bool IsSizeValid() { return size.x > 0 && size.y > 0; }
       uint2 GetSizeHalf() { return { size.x / 2, size.y / 2 }; }
-
-      // found by Tonemap shader (used to cross reference with SSS)
-      uint64_t correct_main_color_res_handle = 0;
       
       namespace Depth
       {
@@ -1460,7 +1448,6 @@ namespace XeGTAO
       void Reset()
       {
          size = { 0, 0 };
-         correct_main_color_res_handle = 0;
          
          Depth::res.reset();
          Depth::srv.reset();
@@ -1538,25 +1525,14 @@ namespace XeGTAO
          //////////////////////
          // Stage 1: Tonemap //
          //////////////////////
-         if (FoundResource::correct_main_color_res_handle == 0 && ShaderHashesLists::Tonemaps.contains(ps))
-         {
-            // SRV0 is main color, get RES from it
-            ComPtr<ID3D11ShaderResourceView> main_color_srv = nullptr;
-            native_device_context->PSGetShaderResources(0, 1, main_color_srv.put());
-            ASSERT_MSG(main_color_srv != nullptr, "XeGTAO::TrySetFromViews() Tonemap SRV0 is nullptr!");
-            ComPtr<ID3D11Resource> main_color_res = nullptr;
-            main_color_srv->GetResource(main_color_res.put());
-            FoundResource::correct_main_color_res_handle = reinterpret_cast<uint64_t>(main_color_res.get());
-         }
-
          // failed: still not found
-         if (FoundResource::correct_main_color_res_handle == 0) return false;
+         if (RenderTracker::res_main_color_handle == 0) return false;
          
          ///////////////////////////////////////
          // Stage 2: SSS for color, depth, cb //
          ///////////////////////////////////////
          // gatekeep: not relevant shader
-         if (ps != 0x93881580) return false;
+         if (!ShaderHashesLists::IsSSSSetupShader(ps)) return false;
     
          // get DSV and RTV0 from original draw
          ComPtr<ID3D11DepthStencilView> dsv = nullptr;
@@ -1570,7 +1546,7 @@ namespace XeGTAO
          rtv->GetResource(color_res.put());
 
          // failed: color_res != FoundResource::correct_main_color_res_handle (i.e. X Song Pack HQ Mirrored World Reflections)
-         if (reinterpret_cast<uint64_t>(color_res.get()) != FoundResource::correct_main_color_res_handle) return false;
+         if (reinterpret_cast<uint64_t>(color_res.get()) != RenderTracker::res_main_color_handle) return false;
 
          // Depth
          FoundResource::Depth::res.attach(depth_res.detach());
@@ -1882,7 +1858,7 @@ namespace XeGTAO
        */
       switch (state)
       {
-         case Unknown:
+         [[unlikely]] case Unknown:
          {
             // try set/saving original resources
             if (TrySetFromViews(native_device, native_device_context, cmd_list_data, device_data, ps))
@@ -1892,8 +1868,8 @@ namespace XeGTAO
          }
          case Ready:
          {
-            // failed: in UI
-            // TODO: false positive for character customization screen
+            // failed: RenderTracker too early
+            if (!RenderTracker::IsMainColorBeingOrHasBeenDrawnTo()) break;
             
             // failed: debug only allows dof or downsample shaders
             if (debug_late && ps != 0x043F4B65 && ps != 0x68722F15) break;
@@ -1944,9 +1920,10 @@ namespace SSS
    {
       Unknown, // start
       Setup,  // Setup skin surface buffer 0x93881580 drawn
+      SubsequentSetups,
       PBR_Downsample,
       PBR_Widen,
-      NPR_Edges,
+      NPR_Contour,
       NPR_Downsample,
       NPR_SSSPrep,
       SSS,
@@ -1967,22 +1944,31 @@ namespace SSS
          uint64_t original_res_handle; // original full res setup RES
          uint64_t replacement_res_handle = 0; // SRV16 to replace
          uint2 size = { 0, 0 };
+         bool IsOriginalMainColor() const { return original_res_handle == RenderTracker::res_main_color_handle; }
 
-         ComPtr<ID3D11ShaderResourceView> original_srv; // our own created to original
+         // orig (our own created to original)
+         ComPtr<ID3D11ShaderResourceView> original_srv;
+         ComPtr<ID3D11RenderTargetView> original_rtv;
 
-         // dual interchanging ring buffer like usage
-         ComPtr<ID3D11ShaderResourceView> new_srv_aux;
-         ComPtr<ID3D11RenderTargetView> new_rtv_aux;
-         ComPtr<ID3D11ShaderResourceView> new_srv_use;
-         ComPtr<ID3D11RenderTargetView> new_rtv_use;
+         // new
+         ComPtr<ID3D11ShaderResourceView> new_draw_srv;
+         ComPtr<ID3D11RenderTargetView> new_draw_rtv;
+         
+         ComPtr<ID3D11ShaderResourceView> new_aux_srv;
+         ComPtr<ID3D11RenderTargetView> new_aux_rtv;
+         
+         ComPtr<ID3D11ShaderResourceView> new_use_srv;
+         ComPtr<ID3D11RenderTargetView> new_use_rtv;
          
          bool IsValid() const { return original_res_handle > 0; }
          void Reset()
          {
             size = { 0, 0 };
             original_res_handle = 0; replacement_res_handle = 0;
-            new_srv_aux.reset(); new_rtv_aux.reset();
-            new_srv_use.reset(); new_rtv_use.reset();
+            original_srv.reset(); original_rtv.reset();
+            new_draw_srv.reset(); new_draw_rtv.reset();
+            new_aux_srv.reset(); new_aux_rtv.reset();
+            new_use_srv.reset(); new_use_rtv.reset();
          }
       };
 
@@ -2017,9 +2003,13 @@ namespace SSS
          return nullptr;
       }
 
-      void Reset()
+      void Reset(bool avoid_main_color = false)
       {
-         for (Item& item : items) item.Reset();
+         for (Item& item : items)
+         {
+            if (avoid_main_color && item.IsOriginalMainColor()) continue;
+            item.Reset();
+         }
       }
    }
 
@@ -2030,39 +2020,41 @@ namespace SSS
       
       /*
          PBR
-         0x93881580: geo setup
+         0x93881580 & 0xCF8047E0: geo setup
          0x26AF16B8: downsample
          0xF2254A92: edges wider
          0x54415551: sss0
 
          NPR
-         0x93881580: geo setup (with edge outline precompute)
-         0x8E7027B5: edge outline resolve (slightly unrelated)
+         0x93881580 & 0xCF8047E0: geo setup (with edge outline precompute)
+         0x8E7027B5: npr contour1 resolve (slightly unrelated)
          0x26AF16B8: downsample
          0x086EEB5C: geo setup resolved to sss0 usable
          0x54415551: sss0
        */
       if (!enabled) return DrawOrDispatchOverrideType::None;
 
-      // if SSS setup shader, force state
-      if (ps == 0x93881580) state = Setup;
+      // if SSS setup shader, force state (aka sss_skina_ps && sss_skinas_ps)
+      if (ShaderHashesLists::IsSSSSetupShader(ps) && state != SubsequentSetups) state = Setup; // TODO: stop hardcoded the pair
 
       static Resources::Item* current_item = nullptr; // acts like token
       static int replace_remaining = 0; // acts like token
       
-      switch (state)
+      switch (state) // alert: weird bruh moment, denotes what has drawn prev
       {
          case Unknown: return DrawOrDispatchOverrideType::None;
          case Setup:
-         {
+         {            
+            // get RTV0
+            ComPtr<ID3D11RenderTargetView> rtv0;
+            ComPtr<ID3D11DepthStencilView> dsv0;
+            native_device_context->OMGetRenderTargets(1, rtv0.put(), dsv0.put());
+            ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() rtv0 is nullptr");
+            ASSERT_MSG(dsv0 != nullptr, "SSS::OnDrawOrDispatchOverride() dsv0 is nullptr");
+            
             // init item (only once per set)
             if (!current_item) 
             {
-               // get RTV0
-               ComPtr<ID3D11RenderTargetView> rtv0;
-               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-               ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() rtv0 is nullptr");
-         
                // get RES from RTV0
                ComPtr<ID3D11Resource> res0;
                rtv0->GetResource(res0.put());
@@ -2095,51 +2087,119 @@ namespace SSS
                   ComPtr<ID3D11Texture2D> replacement_tex;
                   tex_desc.Width = current_item->size.x;
                   tex_desc.Height = current_item->size.y;
-                  tex_desc.MipLevels = 1;
                   tex_desc.ArraySize = 1;
                   tex_desc.SampleDesc.Count = 1;
                   tex_desc.SampleDesc.Quality = 0;
                   tex_desc.Usage = D3D11_USAGE_DEFAULT;
                   tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
                   tex_desc.CPUAccessFlags = 0;
-                  tex_desc.MiscFlags = 0;
-                  
-                  // new 0
-                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; 
-                  auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
-                  ASSERT_MSG(SUCCEEDED(hr0), "SSS::Resources::Item::CreateReplacement() hr0");
-                  auto hr1 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_srv_aux.put());
-                  ASSERT_MSG(SUCCEEDED(hr1), "SSS::Resources::Item::CreateReplacement() hr1");
-                  auto hr2 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_rtv_aux.put());
-                  ASSERT_MSG(SUCCEEDED(hr2), "SSS::Resources::Item::CreateReplacement() hr2");
 
-                  // new 1
-                  tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT; // alpha is ignored by forward lighting skin shader
+                  // new draw
+                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // SSS setup can tint, so not grayscale, requiring RGB
+                  tex_desc.MipLevels = 4; // if we dont, then we need a Blit shader to copy original draw RTV before GenerateMips()
+                  tex_desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+                  auto hr0aa = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr0aa), "SSS::Resources::Item::CreateReplacement() hr0aa");
+                  auto hr0bb = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_draw_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr0bb), "SSS::Resources::Item::CreateReplacement() hr0bb");
+                  auto hr0cc = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_draw_rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr0cc), "SSS::Resources::Item::CreateReplacement() hr0cc");
+
+                  // new use
+                  tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT; // alpha is ignored by forward lighting shaders
+                  tex_desc.MipLevels = 1;
+                  tex_desc.MiscFlags = 0;
                   auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
                   ASSERT_MSG(SUCCEEDED(hr3), "SSS::Resources::Item::CreateReplacement() hr3");
-                  auto hr4 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_srv_use.put());
+                  auto hr4 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_use_srv.put());
                   ASSERT_MSG(SUCCEEDED(hr4), "SSS::Resources::Item::CreateReplacement() hr4");
-                  auto hr5 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_rtv_use.put());
+                  auto hr5 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_use_rtv.put());
                   ASSERT_MSG(SUCCEEDED(hr5), "SSS::Resources::Item::CreateReplacement() hr5");
 
-                  // save original RES handle & create SRV
+                  // save original
                   current_item->original_res_handle = res_handle;
                   auto hr6 = native_device->CreateShaderResourceView(res0.get(), nullptr, current_item->original_srv.put());
                   ASSERT_MSG(SUCCEEDED(hr6), "SSS::Resources::Item::CreateReplacement() hr6");
+                  auto hr7 = native_device->CreateRenderTargetView(res0.get(), nullptr, current_item->original_rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr7), "SSS::Resources::Item::CreateReplacement() hr7");
                }
             }
+            ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() Setup current_item is nullptr right after create!?!?");
+            ASSERT_ONCE_MSG(RenderTracker::count_main_color_clears_draws_after == 1 || !current_item->IsOriginalMainColor(), "SSS::OnDrawOrDispatchOverride() Setup() main_color_clears_draws_after != 1");
 
+            // clear
+            constexpr FLOAT clear_black[4] = { 0.f, 0.f, 0.f, 0.f };
+            native_device_context->ClearRenderTargetView(current_item->new_draw_rtv.get(), clear_black);
+
+            // set RTV as ours, for the rest of setup draws
+            native_device_context->OMSetRenderTargets(1, &current_item->new_draw_rtv, dsv0.get());
+            
+            // next
+            state = SubsequentSetups;
+            return DrawOrDispatchOverrideType::None;
+         }
+         case SubsequentSetups:
+         {
+            ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() Wait current_item is nullptr!");
+            
+            // verify that game didnt rebind RTV0
+            if (DEVELOPMENT && ShaderHashesLists::IsSSSSetupShader(ps))
+            {
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() Wait rtv0 is nullptr");
+               ComPtr<ID3D11Resource> res0;
+               rtv0->GetResource(res0.put());
+               auto res_handle = reinterpret_cast<uint64_t>(res0.get());
+
+               ComPtr<ID3D11Resource> res_new;
+               current_item->new_draw_rtv->GetResource(res_new.put());
+               auto res_new_handle = reinterpret_cast<uint64_t>(res_new.get());
+               
+               ASSERT_MSG(res_handle == res_new_handle, "SSS::OnDrawOrDispatchOverride() Wait rtv0 res_handle != new_draw_rtv res_handle");
+            }
+            
             // PBR_Downsample
             if (ps == 0x26AF16B8) // "sprite simple"
             {
-               state = PBR_Downsample;
+               native_device_context->GenerateMips(current_item->new_draw_srv.get()); // generate mips as downsample
+               
+               state = PBR_Downsample; // next
                return DrawOrDispatchOverrideType::Skip; // skip downsample
             }
 
-            // NPR_Edges
-            if (ps == 0x8E7027B5) // edge outlines
+            // NPR_Contour (legit unused by vanilla game. only like 2 PVs from Megpoid has this.)
+            if (ps == 0x8E7027B5) // "nprcontour1" 
             {
-               state = NPR_Edges;
+               // create new aux
+               [[unlikely]] if (!current_item->new_aux_srv)
+               {
+                  D3D11_TEXTURE2D_DESC tex_desc = {};
+                  ComPtr<ID3D11Texture2D> replacement_tex;
+                  tex_desc.Width = current_item->size.x;
+                  tex_desc.Height = current_item->size.y;
+                  tex_desc.ArraySize = 1;
+                  tex_desc.SampleDesc.Count = 1;
+                  tex_desc.SampleDesc.Quality = 0;
+                  tex_desc.Usage = D3D11_USAGE_DEFAULT;
+                  tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                  tex_desc.CPUAccessFlags = 0;
+
+                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // SSS setup can tint (not grayscale) requiring RGB
+                  tex_desc.MipLevels = 4;
+                  tex_desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+                  auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, replacement_tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr0), "SSS::Resources::Item::CreateReplacement() hr0");
+                  auto hr1 = native_device->CreateShaderResourceView(replacement_tex.get(), nullptr, current_item->new_aux_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr1), "SSS::Resources::Item::CreateReplacement() hr1");
+                  auto hr2 = native_device->CreateRenderTargetView(replacement_tex.get(), nullptr, current_item->new_aux_rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr2), "SSS::Resources::Item::CreateReplacement() hr2");
+               }
+
+               // set SRV0 as new draw
+               native_device_context->PSSetShaderResources(0, 1, &current_item->new_draw_srv);
+               
+               state = NPR_Contour; // next
                return DrawOrDispatchOverrideType::None; // allow this draw to continue
             }
             
@@ -2148,76 +2208,69 @@ namespace SSS
          case PBR_Downsample:
          {
             // PBR_Widen
-            if (ps == 0xF2254A92)
-            {
-               state = PBR_Widen;
-               return DrawOrDispatchOverrideType::Skip; // skip, completely useless to expand SSS surfaces at native res
-            }
-            return DrawOrDispatchOverrideType::None;
+            ASSERT_MSG(ps == 0xF2254A92, "SSS::OnDrawOrDispatchOverride() PBR_Downsample unexpected ps"); // this can false positive once when PV starts
+            state = PBR_Widen; // next
+            return DrawOrDispatchOverrideType::Skip; // skip, completely useless to expand SSS surfaces at native res
          }
-         case NPR_Edges:
+         case NPR_Contour:
          {
             // NPR_Downsample
-            if (ps == 0x26AF16B8)
-            {
-               state = NPR_Downsample;
-               return DrawOrDispatchOverrideType::Skip;
-            }
-            
-            // should not happen, but just in case
-            ASSERT_MSG(false, "SSS::OnDrawOrDispatchOverride() NPR_Edges unexpected ps");
-            return DrawOrDispatchOverrideType::None; 
+            ASSERT_MSG(ps == 0x26AF16B8, "SSS::OnDrawOrDispatchOverride() NPR_Edges unexpected ps");
+            state = NPR_Downsample;
+            return DrawOrDispatchOverrideType::Skip;
          }
          case NPR_Downsample:
          {
             // NPR_SSSPrep
-            if (ps == 0x086EEB5C)
-            {
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_PreSSS)).get(), nullptr, 0);
-               native_device_context->PSSetShaderResources(0, 1, &current_item->original_srv); // SRV0 full res
-               native_device_context->OMSetRenderTargets(1, &current_item->new_rtv_aux, nullptr); // RTV0 new res
+            ASSERT_MSG(ps == 0x086EEB5C, "SSS::OnDrawOrDispatchOverride() NPR_Downsample unexpected ps");
+            
+            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_PreSSS)).get(), nullptr, 0);
+            native_device_context->PSSetShaderResources(0, 1, &current_item->new_draw_srv);    // SRV0 full res
+            native_device_context->OMSetRenderTargets(1, &current_item->new_aux_rtv, nullptr); // RTV0 new res
 
-               // viewport full
-               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
-               native_device_context->RSSetViewports(1, &viewport);
+            // viewport full
+            D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
+            native_device_context->RSSetViewports(1, &viewport);
+
+            native_device_context->Draw(4, 0); // draw
+            native_device_context->GenerateMips(current_item->new_aux_srv.get()); // generate mips as downsample
                
-               state = NPR_SSSPrep;
-            }
-            return DrawOrDispatchOverrideType::None;
+            state = NPR_SSSPrep;
+            return DrawOrDispatchOverrideType::Replaced;
          }
          case NPR_SSSPrep: 
          case PBR_Widen:
          {
             // SSS resolve
-            if (ps == 0x54415551)
-            {
-               ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() PBR_Widen current_item is nullptr");
+            ASSERT_MSG(ps == 0x54415551, "SSS::OnDrawOrDispatchOverride() NPR_SSSPrep/PBR_Widen unexpected ps");
+            
+            ASSERT_MSG(current_item, "SSS::OnDrawOrDispatchOverride() PBR_Widen current_item is nullptr");
+            bool is_pbr = state == PBR_Widen;
 
-               // save RTV0 RES handle for replacement
-               ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
-               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-               ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() PBR_Widen rtv0 is nullptr");
-               
-               ComPtr<ID3D11Resource> replacement_res = nullptr;
-               rtv0->GetResource(replacement_res.put());
-               current_item->replacement_res_handle = reinterpret_cast<uint64_t>(replacement_res.get()); 
+            // save RTV0 RES handle for replacement
+            ComPtr<ID3D11RenderTargetView> rtv0 = nullptr;
+            native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+            ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() PBR_Widen rtv0 is nullptr");
+            
+            ComPtr<ID3D11Resource> replacement_res = nullptr;
+            rtv0->GetResource(replacement_res.put());
+            current_item->replacement_res_handle = reinterpret_cast<uint64_t>(replacement_res.get()); 
 
-               // set SRV0 & RTV0 as full res
-               native_device_context->PSSetShaderResources(0, 1, state == NPR_SSSPrep ? &current_item->new_srv_aux : &current_item->original_srv); // NPR uses aux from pre-sss pass, PBR uses original
-               native_device_context->OMSetRenderTargets(1, &current_item->new_rtv_use, nullptr);
-               
-               // replace SSS0 with our own
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_SSS0)).get(), nullptr, 0);
+            // set SRV0 & RTV0 as full res
+            native_device_context->PSSetShaderResources(0, 1, is_pbr ? &current_item->new_draw_srv : &current_item->new_aux_srv); // NPR uses aux from pre-sss pass, PBR uses original
+            native_device_context->OMSetRenderTargets(1, &current_item->new_use_rtv, nullptr);
+            
+            // replace SSS0 with our own
+            native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Luma_MegaMix_SSS0)).get(), nullptr, 0);
 
-               // viewport full
-               D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
-               native_device_context->RSSetViewports(1, &viewport);
+            // viewport full
+            D3D11_VIEWPORT viewport = {0, 0, static_cast<FLOAT>(current_item->size.x), static_cast<FLOAT>(current_item->size.y), 0.f, 1.f};
+            native_device_context->RSSetViewports(1, &viewport);
 
-               // next state
-               current_item = nullptr; // consume
-               replace_remaining = Resources::GetItemCount(); // rearm
-               state = SSS;
-            }
+            // next state
+            current_item = nullptr;                        // consume
+            replace_remaining = Resources::GetItemCount(); // rearm
+            state = SSS;
             return DrawOrDispatchOverrideType::None;
          }
          case SSS:
@@ -2245,7 +2298,7 @@ namespace SSS
             if (item)
             {
                // set SRV16 as our new
-               native_device_context->PSSetShaderResources(16, 1, &item->new_srv_use);
+               native_device_context->PSSetShaderResources(16, 1, &item->new_use_srv);
                replace_remaining--; // use
             }
 
@@ -2284,17 +2337,6 @@ namespace SSS
 
       // reset state
       state = Unknown;
-
-      // on PV change, purge if multiple SSS items
-      uint32_t new_pv_id = *MemoryHack::addr_pvID;
-      if (new_pv_id != curr_pv_id)
-      {
-         curr_pv_id = new_pv_id; // update
-         if (Resources::GetItemCount() > 1) // multiple?
-         {
-            Resources::Reset(); // purge
-         }
-      }
    }
 }
 
@@ -3029,22 +3071,60 @@ namespace SpotLightShadows
 
       ComPtr<ID3D11DepthStencilView> newdsv = nullptr;
 
-      uint2 main_color_size = { 0, 0 };
-
       void Reset()
       {
          depth_res_handle = 0;
          newcolor_srv.reset();
          newcolor_rtv.reset();
-         main_color_size = { 0, 0 };
       }
    }
 
    void OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
       if (!enabled) return;
-      if (Resources::main_color_size.x == 0) return;
       if (DEVELOPMENT && !IsModEnabled()) return;
+      
+      [[unlikely]] if (!Resources::newcolor_srv && RenderTracker::res_main_color_size.x > 0)
+      {
+         // setup
+         ComPtr<ID3D11Texture2D> new_texture;
+         D3D11_TEXTURE2D_DESC tex_desc;
+         tex_desc.Width  = RenderTracker::res_main_color_size.x;
+         tex_desc.Height = RenderTracker::res_main_color_size.y;
+         tex_desc.MipLevels = 1;
+         tex_desc.ArraySize = 1;
+         tex_desc.SampleDesc.Count = 1;
+         tex_desc.SampleDesc.Quality = 0;
+         tex_desc.Usage = D3D11_USAGE_DEFAULT;
+         tex_desc.CPUAccessFlags = 0;
+         tex_desc.MiscFlags = 0;
+
+         // color
+         tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+         tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+         auto hr2 = native_device->CreateTexture2D(&tex_desc, nullptr, new_texture.put());
+         ASSERT_MSG(SUCCEEDED(hr2), "SpotLightShadows: OnTonemapDraw hr2");
+
+         auto hr3 = native_device->CreateRenderTargetView(new_texture.get(), nullptr, Resources::newcolor_rtv.put());
+         ASSERT_MSG(SUCCEEDED(hr3), "SpotLightShadows: OnTonemapDraw hr3");
+
+         auto hr4 = native_device->CreateShaderResourceView(new_texture.get(), nullptr, Resources::newcolor_srv.put());
+         ASSERT_MSG(SUCCEEDED(hr4), "SpotLightShadows: OnTonemapDraw hr4");
+
+         // depth
+         tex_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+         tex_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+         auto hr5 = native_device->CreateTexture2D(&tex_desc, nullptr, new_texture.put());
+         ASSERT_MSG(SUCCEEDED(hr5), "SpotLightShadows: OnTonemapDraw hr5");
+
+         D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+         dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+         dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+         auto hr6 = native_device->CreateDepthStencilView(new_texture.get(), &dsv_desc, Resources::newdsv.put());
+         ASSERT_MSG(SUCCEEDED(hr6), "SpotLightShadows: OnTonemapDraw hr6");
+         
+         reshade::log::message(reshade::log::level::info, "SpotLightShadows: created new color buffer and views");
+      }
 
       switch (state)
       {
@@ -3060,7 +3140,6 @@ namespace SpotLightShadows
          case DepthFinalize1:
          {
             // wait until shader
-            // if (ps != 0xC1A00F28) break;
             ASSERT_MSG(ps == 0xC1A00F28, "SpotLightShadows: DepthFinalize1 shader not detected next!");
 
             // RTV0 is precompute depth (will be bound SRV18 for Resolve)
@@ -3116,8 +3195,8 @@ namespace SpotLightShadows
             D3D11_VIEWPORT viewport;
             viewport.TopLeftX = 0;
             viewport.TopLeftY = 0;
-            viewport.Width = static_cast<float>(Resources::main_color_size.x);
-            viewport.Height = static_cast<float>(Resources::main_color_size.y);
+            viewport.Width  = RenderTracker::res_main_color_size.x;
+            viewport.Height = RenderTracker::res_main_color_size.y;
             viewport.MinDepth = 0;
             viewport.MaxDepth = 1;
             native_device_context->RSSetViewports(1, &viewport);
@@ -3134,83 +3213,6 @@ namespace SpotLightShadows
 
    void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
    {
-      // initialize from RTV0
-      [[unlikely]] if (enabled && Resources::main_color_size.x == 0)
-      {
-         // get size
-         ComPtr<ID3D11RenderTargetView> rtv0;
-         native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-         ASSERT_MSG(rtv0 != nullptr, "SpotLightShadows: RTV0 is null in OnTonemapDraw");
-         
-         ComPtr<ID3D11Resource> rtv0_resource;
-         rtv0->GetResource(rtv0_resource.put());
-         
-         ComPtr<ID3D11Texture2D> rtv0_texture;
-         auto hr = rtv0_resource->QueryInterface(rtv0_texture.put());
-         ASSERT_MSG(SUCCEEDED(hr), "SpotLightShadows: OnTonemapDraw hr");
-         
-         D3D11_TEXTURE2D_DESC tex_desc;
-         rtv0_texture->GetDesc(&tex_desc);
-         
-         Resources::main_color_size = { tex_desc.Width, tex_desc.Height };
-         reshade::log::message(reshade::log::level::info, std::format("SpotLightShadows: main color size {}x{}", Resources::main_color_size.x, Resources::main_color_size.y).c_str());
-
-         // create Resources
-         {
-            ComPtr<ID3D11Texture2D> new_texture;
-            
-            // newcolor
-            D3D11_TEXTURE2D_DESC new_tex_desc;
-            new_tex_desc.Width = Resources::main_color_size.x;
-            new_tex_desc.Height = Resources::main_color_size.y;
-            new_tex_desc.MipLevels = 1;
-            new_tex_desc.ArraySize = 1;
-            new_tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-            new_tex_desc.SampleDesc.Count = 1;
-            new_tex_desc.SampleDesc.Quality = 0;
-            new_tex_desc.Usage = D3D11_USAGE_DEFAULT;
-            new_tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-            new_tex_desc.CPUAccessFlags = 0;
-            new_tex_desc.MiscFlags = 0;
-            
-            auto hr2 = native_device->CreateTexture2D(&new_tex_desc, nullptr, new_texture.put());
-            ASSERT_MSG(SUCCEEDED(hr2), "SpotLightShadows: OnTonemapDraw hr2");
-
-            auto hr3 = native_device->CreateRenderTargetView(new_texture.get(), nullptr, Resources::newcolor_rtv.put());
-            ASSERT_MSG(SUCCEEDED(hr3), "SpotLightShadows: OnTonemapDraw hr3");
-
-            auto hr4 = native_device->CreateShaderResourceView(new_texture.get(), nullptr, Resources::newcolor_srv.put());
-            ASSERT_MSG(SUCCEEDED(hr4), "SpotLightShadows: OnTonemapDraw hr4");
-
-            // newdsv
-            D3D11_TEXTURE2D_DESC new_dsv_tex_desc;
-            new_dsv_tex_desc.Width = Resources::main_color_size.x;
-            new_dsv_tex_desc.Height = Resources::main_color_size.y;
-            new_dsv_tex_desc.MipLevels = 1;
-            new_dsv_tex_desc.ArraySize = 1;
-            new_dsv_tex_desc.Format = DXGI_FORMAT_R32_TYPELESS;
-            new_dsv_tex_desc.SampleDesc.Count = 1;
-            new_dsv_tex_desc.SampleDesc.Quality = 0;
-            new_dsv_tex_desc.Usage = D3D11_USAGE_DEFAULT;
-            new_dsv_tex_desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-            new_dsv_tex_desc.CPUAccessFlags = 0;
-            new_dsv_tex_desc.MiscFlags = 0;
-
-            auto hr5 = native_device->CreateTexture2D(&new_dsv_tex_desc, nullptr, new_texture.put());
-            ASSERT_MSG(SUCCEEDED(hr5), "SpotLightShadows: OnTonemapDraw hr5");
-
-            D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
-            dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
-            dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-            auto hr6 = native_device->CreateDepthStencilView(new_texture.get(), &dsv_desc, Resources::newdsv.put());
-            ASSERT_MSG(SUCCEEDED(hr6), "SpotLightShadows: OnTonemapDraw hr6");
-         }
-         reshade::log::message(reshade::log::level::info, "SpotLightShadows: created new color buffer and views");
-
-         // skip 1st frame
-         return;
-      }
-
       // replace SRV7
       if (state == TonemapUse) native_device_context->PSSetShaderResources(7, 1, &Resources::newcolor_srv);
    }
@@ -3928,7 +3930,8 @@ namespace ShadowMap
       UINT x_mip0_height = 0;
       UINT y_mip0_width  = 0;
       UINT y_mip0_height = 0;
-      
+      bool is_dirty_check_token = true; // grant by ImGui open, so we dont have to recheck all each
+
       std::vector<ID3D11ShaderResourceView*> color_aux_x_srvs(8); // height = width * 2
       std::vector<ID3D11RenderTargetView*>   color_aux_x_rtvs(8); 
 
@@ -3969,11 +3972,11 @@ namespace ShadowMap
       
       void Reset()
       {
+         is_dirty_check_token = true; // grant
          Reset_Resources();
          Reset_Handles();
       }
 
-      bool is_dirty_check_token = true; // grant by ImGui open, so we dont have to recheck all each
       void CreateIfDirty(ID3D11Device* native_device)
       {
          // token?
@@ -4397,14 +4400,14 @@ namespace ShadowMap
          else if (state == Silhouette && state_shadow_cast_count && ps == 0x58A712B5)
             state = TexBDownsample0;
          
-         // backtrack: X Song Pack 100% res duplicate world reflections
-         else if (state == MainRender && ps == 0x93881580) 
+         // backtrack: X Song Pack 100% res duplicate world reflections SSS again
+         else if (state == MainRender && ShaderHashesLists::IsSSSSetupShader(ps)) 
          {
             state = SSSSetup;
             state_replacetoken_sss = true; // grant token again
          }
          
-         // backtrack: X Song Pack 100% res duplicate world reflections + TV screen
+         // backtrack: X Song Pack 100% res duplicate world reflections usage again
          else if (state == Done && (ps == ShaderHashesLists::ToSwapchain || ps == 0x4E2A88FE) && !TonemapInfo::GetIsDrawnTonemapOrFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
             state = MainRender;
       }
@@ -4846,7 +4849,7 @@ namespace ShadowMap
             }
             
             // gatekeep: ps
-            if (ps != 0x93881580) break;
+            if (!ShaderHashesLists::IsSSSSetupShader(ps)) break;
 
             // ready
             if (Resources::IsOriginalSearchReady() && Resources::IsDepthNewReady() && state_replacetoken_sss)
@@ -4950,6 +4953,8 @@ namespace DuplicateWorldReflections
       0x208EEA46,
       0x8C19842C,
       0x74805C84,
+      // 0x4579859D, // default skin shader (PBR)
+      // 0xA263A14B, // default skin shader (no SSS) (NPR)
    };
 
    // 512x256 rgba16f (but alpha is a waste!)
@@ -4969,24 +4974,32 @@ namespace DuplicateWorldReflections
    constexpr const char* reshadesave_desired_resolution_y = "DuplicateWorldReflectionsDesiredResolutionY";
    constexpr uint2 desired_resolution_def = {512, 256};
    uint2 desired_resolution = desired_resolution_def;
+
+   constexpr const char* reshadesave_allow_full_resolution = "DuplicateWorldReflectionsAllowFullResolution";
+   constexpr bool allow_full_resolution_def = false;
+   bool allow_full_resolution = allow_full_resolution_def; // X Song Pack 100% res duplicate world reflections
    
    enum State : uint8_t
    {
-      SSS, // waits for SSS if PBR
+      Wait, // waits for SSS if PBR
+      Wait2ndSSSPass,
       Draw, // replace draw_shaders with our resource and viewport
+      // FullResDepthOfField,
+      // FullResCopy, // When X Song Pack uses DoF for reflections, this is drawn after DoF is done
       Blur, // 4 tap blur, bypassed for our own downsample, accounting g_color_scale & g_color_offset
       Copy, // copies back to original resource, bypassed for our own upsample, accounting for g_color_scale
       Use, // scan for SRV15 usage to replace with our resource
       Done,
    };
-   State state = SSS; // denotes what comes next
+   State state = Wait; // denotes what comes next
    uint8_t state_draw_count = 0; // counts draw_shaders draws
-   bool state_noreset_is_pbr_last_frame = true; // updated on present
+   bool state_token_4tapblur_before_draw = false; // if 4tap blur detected before any draw_shaders draw
    void ResetState()
    {
       ASSERT_MSG(state != Use || *MemoryHack::addr_pvTimeSec <= 1, "DuplicateWorldReflections: ResetState() called while in Use state!"); // meaning: setup without any usage???
-      state = SSS;
+      state = Wait;
       state_draw_count = 0;
+      state_token_4tapblur_before_draw = false;
    }
 
    namespace Shaders
@@ -5010,14 +5023,18 @@ namespace DuplicateWorldReflections
 
    namespace Resources
    {
-      uint64_t orig_handle_color = 0; // both drawing and blurred
-      uint64_t orig_handle_depth = 0; 
+      uint64_t orig_handle_color = 0; // both drawing, blurred, then used as SRV15
+      uint64_t orig_handle_color_candidate = 0;
       bool IsReadyHandles() { return orig_handle_color != 0; }
+      bool IsHasHandleCandidate() { return orig_handle_color_candidate != 0; }
+      
+      uint2 orig_size_color = {0,0};
+      bool IsOrigFullResolution() {return orig_size_color.x > 512 && orig_size_color.y > 256; } // i.e. X Song Pack path
 
       void Reset_Handles()
       {
-         orig_handle_color = 0;
-         orig_handle_depth = 0;
+         orig_handle_color = 0; orig_handle_color_candidate = 0;
+         orig_size_color = {0,0};
       }
 
       uint2 effective_resolution = {0,0};
@@ -5025,6 +5042,7 @@ namespace DuplicateWorldReflections
       uint effective_mips = 0;
       uint2 x_mip0 = {0,0};
       uint2 y_mip0 = {0,0};
+      bool is_dirty_token = true;
 
       ComPtr<ID3D11DepthStencilView> dsv;
 
@@ -5054,7 +5072,7 @@ namespace DuplicateWorldReflections
          ASSERT_MSG(SUCCEEDED(hr), "CBUpdate: Map() failed");
          std::memcpy(mapped_subresource.pData, &cb_data, sizeof(CBMegaMixDuplicateWorldReflections));
          native_device_context->Unmap(cb.get(), 0);
-      };
+      }
       
       ComPtr<ID3D11BlendState> blendstate;
 
@@ -5068,12 +5086,12 @@ namespace DuplicateWorldReflections
 
       void Reset()
       {
+         is_dirty_token = true; // grant
          Reset_Handles();
          Reset_Resources();
       }
 
-      bool is_dirty_token = true;
-      void CreateIfDirty(ID3D11Device* native_device)
+      void CreateIfDirty(ID3D11Device* native_device, uint2 desired_resolution_override = {0,0})
       {
          // gatekeep: token
          [[likely]] if (!is_dirty_token) return;
@@ -5081,7 +5099,8 @@ namespace DuplicateWorldReflections
 
          // effective
          static uint2 effective_resolution_prev = {0,0};
-         uint2 effective_resolution_new = desired_resolution; // resolution
+         bool is_override = desired_resolution_override.x > 0 && desired_resolution_override.y > 0;
+         uint2 effective_resolution_new = !is_override ? desired_resolution : desired_resolution_override; // resolution
          effective_resolution_new.x = max(16u, effective_resolution_new.x);
          effective_resolution_new.y = max(16u, effective_resolution_new.y);
 
@@ -5104,6 +5123,7 @@ namespace DuplicateWorldReflections
 
          // clear
          Reset_Resources();
+         ASSERT_MSG(!IsReadyResource(), "DuplicateWorldReflections: ready after reset!?");
          effective_resolution = effective_resolution_new;
          effective_mips = effective_mips_new;
 
@@ -5234,6 +5254,7 @@ namespace DuplicateWorldReflections
             ASSERT_MSG(SUCCEEDED(hr15), "DuplicateWorldReflections: Create hr15");
          }
 
+         ASSERT_MSG(IsReadyResource(), "DuplicateWorldReflections: not ready after create!?");
          reshade::log::message(reshade::log::level::info, std::format("DuplicateWorldReflections: Created resources {}x{}, {} mips", effective_resolution.x, effective_resolution.y, effective_mips).c_str());
       }
 
@@ -5356,43 +5377,48 @@ namespace DuplicateWorldReflections
          // native_device_context->OMSetBlendState(nullptr, blend_factor_1, UINT_MAX); // restore
       }
    }
-
+   
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
       DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
       if (!enabled) return result;
       if (DEVELOPMENT && !IsModEnabled()) return result;
 
-      // force state
-      if (state_draw_count > 0)
+      // prev_ps
+      static uint32_t prev_ps = 0;
+
+      // force state: stop waiting
+      if (state == Wait && RenderTracker::IsMainColorBeingOrHasBeenDrawnTo())
       {
-         // from Draw
-         if (state == Draw)
-         {
-            if (ps == 0x4E2A88FE) state = Blur; // started Blur, so skip to it.
-            else if (ps == 0x93881580) state = SSS; // another SSS pass detected, backtrack to SSS // TODO: this must be from X Song Pack. does that mean we should skip the PV since this would be useless?
-            else if (DEVELOPMENT && ps == 0x58A712B5) ASSERT_MSG(false, "DuplicateWorldReflections: Unexpected Copy before Blur!"); // this means we got the wrong pass
-         }
+         state = Draw;
+      }
+      else if (state == Wait2ndSSSPass && ps == 0x54415551)
+      {
+         state = Draw;
+      }
+      // force state: skip to blur (prev must not be Copy 0x58A712B5, else false pos)
+      else if (state == Draw && prev_ps != 0x58A712B5 && ps == 0x4E2A88FE)
+      {
+         state = Blur;
+         if (state_draw_count == 0) state_token_4tapblur_before_draw = true; // grant
+      }
+      // force state: backtrack to SSS, another pass detected (X Song Pack)
+      else if (state == Draw && ShaderHashesLists::IsSSSSetupShader(ps))
+      {
+         state = Wait;
       }
       
       switch (state)
       {
-         case SSS:
-         {
-            // next: if SSS is done, or NPR (no SSS)
-            if (ps == 0x54415551 || !state_noreset_is_pbr_last_frame)
-            {
-               state = Draw;
-            }
-
+         case Wait:
+         case Wait2ndSSSPass:
             break;
-         }
          case Draw:
          {
-            bool is_draw_shader = draw_shaders.contains(ps);
+            bool is_draw_shader = draw_shaders.contains(ps); // TODO: move out before SSS
             
             // continuously scan for orig handle RTV usage to catch missing draw_shaders
-            if (DEVELOPMENT && Resources::IsReadyHandles() && !is_draw_shader)
+            if (DEVELOPMENT && Resources::IsReadyHandles() && !Resources::IsOrigFullResolution() && !is_draw_shader)
             {
                ComPtr<ID3D11RenderTargetView> rtv;
                native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
@@ -5408,13 +5434,13 @@ namespace DuplicateWorldReflections
                reshade::log::message(reshade::log::level::warning, std::format("DuplicateWorldReflections: Found new draw_shaders! 0x{:08X}", ps).c_str());
             }
             AfterDrawShadersCheck:
-
+      
             // drawing!
             if (is_draw_shader)
             {
                // ++
                state_draw_count++;
-
+      
                // not ready
                [[unlikely]] if (!Resources::IsReadyHandles())
                {
@@ -5422,65 +5448,50 @@ namespace DuplicateWorldReflections
                   ComPtr<ID3D11RenderTargetView> rtv;
                   ComPtr<ID3D11DepthStencilView> dsv;
                   native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
-                  ASSERT_MSG(rtv != nullptr, "DuplicateWorldReflections: RTV null Draw");
-
+                  ASSERT_MSG(rtv != nullptr, "DuplicateWorldReflections: RTV null Draw"); 
+                  ASSERT_MSG(dsv != nullptr, "DuplicateWorldReflections: DSV null Draw"); // these ps are for 3D, drawing to depth for ordering/test
+      
                   // save handles
                   ComPtr<ID3D11Resource> rtv_res;
                   rtv->GetResource(rtv_res.put());
                   Resources::orig_handle_color = reinterpret_cast<uint64_t>(rtv_res.get());
-
-                  ComPtr<ID3D11Resource> dsv_res;
-                  dsv->GetResource(dsv_res.put());
-                  Resources::orig_handle_depth = dsv_res ? reinterpret_cast<uint64_t>(dsv_res.get()) : 0;
-
+      
                   // verify size & format
                   ComPtr<ID3D11Texture2D> tex;
                   auto hr = rtv_res->QueryInterface(tex.put());
                   ASSERT_MSG(SUCCEEDED(hr), "DuplicateWorldReflections: QueryInterface rtv_texture Draw");
                   D3D11_TEXTURE2D_DESC tex_desc;
                   tex->GetDesc(&tex_desc);
-                  if (tex_desc.Width != 512 || tex_desc.Height != 256 || tex_desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+                  Resources::orig_size_color = {tex_desc.Width, tex_desc.Height};
+
+                  bool is_correct_format = tex_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+                  bool is_correct_size0 = tex_desc.Width == 512 && tex_desc.Height == 256;
+                  bool is_correct_size1 = tex_desc.Width == RenderTracker::res_main_color_size.x && tex_desc.Height == RenderTracker::res_main_color_size.y; // TODO: X Song Pack path
+                  [[unlikely]] if (!is_correct_format || !is_correct_size0) // TODO: what if there are false positives? else remove
                   {
-                     // TODO: what if there are false positives?
-                     MessageBoxA(nullptr, "Unexpected behavior: Duplicate World Reflections is not 512x256!\n\nAre you on highest graphics settings?\nIs there another mod that is already changing quality (excluding X Song Pack)?\n\nNew Duplicate World Reflections features will now disable.", "Duplicate World Reflections", MB_OK | MB_ICONERROR);
+                     MessageBoxA(nullptr, "Unexpected behavior: Duplicate World Reflections is not 512x256!\n\nAre you on highest graphics settings?\nIs there another mod that is already changing quality (excluding X Song Pack)?\n\nNew Duplicate World Reflections features will now disable.\nIf wrong, please report!", "Duplicate World Reflections", MB_OK | MB_ICONERROR);
                      Resources::Reset();
                      enabled = false;
                      break;
                   }
-
-                  // verify viewport
-                  if (DEVELOPMENT) // TODO: del, no-duh moment, since RTV and DSV are shared 
-                  {
-                     D3D11_VIEWPORT viewport;
-                     UINT num_viewports = 1;
-                     native_device_context->RSGetViewports(&num_viewports, &viewport);
-                     ASSERT_MSG(viewport.Width == 512 && viewport.Height == 256, "DuplicateWorldReflections");
-                     ASSERT_MSG(viewport.TopLeftX == 0 && viewport.TopLeftY == 0, "DuplicateWorldReflections");
-                     ASSERT_MSG(viewport.MinDepth == 0 && viewport.MaxDepth == 1, "DuplicateWorldReflections");
-                     ASSERT_MSG(num_viewports == 1, "DuplicateWorldReflections");
-
-                     reshade::log::message(reshade::log::level::info, std::format("DuplicateWorldReflections: Viewport {}x{}, TopLeft {}x{}, Depth {}-{}", viewport.Width, viewport.Height, viewport.TopLeftX, viewport.TopLeftY, viewport.MinDepth, viewport.MaxDepth).c_str());
-                  }
                }
-
                // ready
                else
                {
                   // create resources
                   Resources::CreateIfDirty(native_device);
-                  ASSERT_MSG(Resources::IsReadyResource(), "DuplicateWorldReflections: Resources::IsReadyResource() failed after CreateIfDirty()");
-
+      
                   // clear
                   if (state_draw_count == 1)
                   {
-                     constexpr float clear_color[4] = {0,0,0,0};
-                     native_device_context->ClearRenderTargetView(Resources::rtv.get(), clear_color); // TODO: does the game use a different clear color?
+                     constexpr float clear_color[4] = {0,0,0,0}; // always
+                     native_device_context->ClearRenderTargetView(Resources::rtv.get(), clear_color);
                      native_device_context->ClearDepthStencilView(Resources::dsv.get(), D3D11_CLEAR_DEPTH, 0.0f, 0);
                   }
-
+      
                   // replace RTV & DSV
                   native_device_context->OMSetRenderTargets(1, &Resources::rtv, Resources::dsv.get());
-
+      
                   // replace viewport
                   D3D11_VIEWPORT viewport;
                   viewport.TopLeftX = 0;
@@ -5499,7 +5510,7 @@ namespace DuplicateWorldReflections
          {
             // this is always next
             ASSERT_MSG(ps == 0x4E2A88FE, "DuplicateWorldReflections: Unexpected, Blur shader 0x4E2A88FE not next!");
-
+      
             // downsample
             if (Resources::IsReadyHandles() && Resources::IsReadyResource())
             {
@@ -5514,7 +5525,7 @@ namespace DuplicateWorldReflections
          {
             // this is always next
             ASSERT_MSG(ps == 0x58A712B5, "DuplicateWorldReflections: Unexpected, Copy shader 0x58A712B5 not next!");
-
+      
             // upsample
             if (Resources::IsReadyHandles() && Resources::IsReadyResource())
             {
@@ -5543,7 +5554,7 @@ namespace DuplicateWorldReflections
                
                native_device_context->PSSetShaderResources(15, 1, &Resources::srvs_y[0]);
                state = Done;
-
+      
                // bind SRVs for debug
                if (DEVELOPMENT)
                {
@@ -5554,12 +5565,15 @@ namespace DuplicateWorldReflections
                   native_device_context->PSSetShaderResources(94, srvs_debug.size(), srvs_debug.data());
                }
             }
-
+      
             break;
          }
          case Done:
          default: break;
       }
+
+      // prev_ps save
+      prev_ps = ps;
 
       return result;
    }
@@ -5580,12 +5594,12 @@ namespace DuplicateWorldReflections
       reshade::get_config_value(runtime, NAME, reshadesave_blur_mips, blur_mips);
       reshade::get_config_value(runtime, NAME, reshadesave_desired_resolution_x, desired_resolution.x);
       reshade::get_config_value(runtime, NAME, reshadesave_desired_resolution_y, desired_resolution.y);
+      reshade::get_config_value(runtime, NAME, reshadesave_allow_full_resolution, allow_full_resolution);
    }
 
    void OnPresent()
    {
       if (!enabled) return;
-      state_noreset_is_pbr_last_frame = TonemapInfo::GetIsPBRFromIndex(TonemapInfo::GetIndex(cb_luma_global_settings.GameSettings.TonemapInfo)); // this is called before clearing TonemapInfo
       ResetState();
    }
 }
@@ -5621,6 +5635,7 @@ namespace LUTBuilderScan
       // insert
       scanned_lut_res.insert(reinterpret_cast<uint64_t>(res.get()));
       reshade::log::message(reshade::log::level::info, std::format("LUTBuilderScan: Found LUTBuilder LUT at SRV2, res={}.", reinterpret_cast<uint64_t>(res.get())).c_str());
+      ASSERT_ONCE_MSG(scanned_lut_res.size() <= 2, "LUTBuilderScan: Found 3 LUTBuilder LUTs, check log!"); // only expect 2
    }
 
    void OnInitSwapchain()
@@ -5631,6 +5646,135 @@ namespace LUTBuilderScan
 }
 #endif
 
+namespace RenderTracker // partial
+{
+   void HardReset()
+   {
+      res_main_color.reset(); res_main_color_handle = 0;
+   }
+
+   void OnPushDescriptors(reshade::api::command_list* cmd_list, reshade::api::shader_stage stages, reshade::api::pipeline_layout layout, uint32_t layout_param, const reshade::api::descriptor_table_update& update)
+   {
+      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
+
+      // TODO: ShadowMap override usage bindings
+      // TODO: SSS override usage bindings
+   }
+
+   uint8_t res_main_color_clear = 0;
+   bool OnClearRenderTargetViewMegaMix(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv, const float color[4], uint32_t rect_count, const reshade::api::rect* rects)
+   {
+      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
+
+      last_cleared_rtv_handle = cmd_list->get_device()->get_resource_from_view(rtv).handle;
+      ID3D11Resource* res = reinterpret_cast<ID3D11Resource*>(last_cleared_rtv_handle);
+
+      bool is_prevent = false;
+      // (Note: SSS setup RTV0 == main forward lit RTV0 == tonemap SRV0, cleared at SSS start)
+      // (Note: MLAA never clears)
+      // (Note: Final never clears)
+      // (Note: back buffer clears right before usage)
+      // TODO: DuplicateWorldReflections know when start
+      // TODO: SSS know when start
+      // TODO: ShadowMap know when start
+      
+      if (last_cleared_rtv_handle == res_main_color_handle)
+      {
+         count_main_color_clears++;
+         count_main_color_clears_draws_after = 0;
+         
+         // event
+         
+      }
+
+      return is_prevent;
+   }
+
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
+
+      // main_color_clears_draws_after ++
+      if (count_main_color_clears > 0) count_main_color_clears_draws_after++;
+
+      // sss_state
+      switch (sss_state)
+      {
+         case SSSState_Unknown:
+         {
+            // depending on immediate subsequent ps of first main_color clear, we can determine if SSS is setup or skipped
+            static const std::unordered_set<uint32_t> sss_draw_shaders = {ShaderHashesLists::SSSSetup0, ShaderHashesLists::SSSSetup1, 0x26AF16B8, 0x8E7027B5 }; // setups, sprite simple, nprcontour1
+            ASSERT_MSG(ps != 0x54415551, "DuplicateWorldReflections: Unexpected, SSS resolve 0x54415551 called before setup!");
+            if (count_main_color_clears == 1) sss_state = sss_draw_shaders.contains(ps) ? SSSState_Setup : SSSState_Skipped;
+            break;
+         }
+         case SSSState_Setup:
+         {
+            if (ps == 0x54415551) sss_state = SSSState_Resolved;
+            break;
+         }
+         case SSSState_Skipped:
+         case SSSState_Resolved:
+            break;
+      }
+
+      return result;
+   }
+   
+   void OnDLLMainAfterCore(DWORD ul_reason_for_call)
+   {
+      if (ul_reason_for_call == DLL_PROCESS_ATTACH)
+      {
+         reshade::register_event<reshade::addon_event::clear_render_target_view>(OnClearRenderTargetViewMegaMix);
+      }
+      else if (ul_reason_for_call == DLL_PROCESS_DETACH)
+      {
+         reshade::register_event<reshade::addon_event::clear_render_target_view>(OnClearRenderTargetViewMegaMix);
+      }
+   }
+
+   void OnInitSwapchain() // TODO: if user is insane enough to change resolution mid-game inside a PV where DoF is active, gg...
+   {
+      // reset
+      HardReset();
+   }
+
+   void OnTonemapDraw(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
+   {
+      [[unlikely]] if (!res_main_color)
+      {
+         // SRV0 for RES
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
+         ASSERT_MSG(srv != nullptr, "DuplicateWorldReflections: SRV0 null TonemapDraw");
+         srv->GetResource(res_main_color.put());
+         res_main_color_handle = reinterpret_cast<uint64_t>(res_main_color.get());
+
+         // TEX for size
+         ComPtr<ID3D11Texture2D> tex;
+         auto hr = res_main_color->QueryInterface(tex.put());
+         D3D11_TEXTURE2D_DESC tex_desc;
+         tex->GetDesc(&tex_desc);
+         res_main_color_size = {tex_desc.Width, tex_desc.Height};
+
+         // event
+         SSAA::OnRenderResolutionFound(res_main_color_size, device_data);
+      }
+   }
+
+   void OnPresent()
+   {
+      // reset 
+      count_main_color_clears = 0;
+      count_main_color_clears_draws_after = 0;
+
+      ASSERT_MSG(!(IsSSSResolved() && count_main_color_clears == 1), "DuplicateWorldReflections OnPresent: SSS for main color resolved, but nothing used it.");
+      sss_state = SSSState_Unknown;
+      
+      is_drawn_to_swapchain = false;
+      is_drawn_to_autoexposure0 = false;
+   }
+}
 } // unnamed namespace
 
 class ProjectDivaMegaMix final : public Game
@@ -5641,7 +5785,7 @@ public:
       // log
       message(reshade::log::level::info, "OnInit()");
 
-      // force same version to not reset settings
+      // force same version before load to not reset settings
       reshade::set_config_value(nullptr, NAME, "Version", Globals::VERSION); // TODO: WHY IS THIS TROLLING?!?!?
 
       // OutputHandling
@@ -5757,7 +5901,7 @@ public:
       if (is_resolution_changed) reshade::log::message(reshade::log::level::info, std::format("OnInitSwapchain(): resolution changed to {}x{}", size.x, size.y).c_str());
 
       // event
-      SSAA::OnInitSwapchain(is_resolution_changed);
+      RenderTracker::OnInitSwapchain();
       XeGTAO::OnInitSwapchain(is_resolution_changed);
       SSS::HardReset();
       Bloom::HardReset();
@@ -5784,6 +5928,9 @@ public:
       // // skip not ps
       // [[unlikely]]
       // if (ps == 0) return DrawOrDispatchOverrideType::None;
+
+      // RenderTracker
+      RenderTracker::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
 
       // LUTBuilderScan
 #if DEVELOPMENT
@@ -5824,12 +5971,12 @@ public:
       }
       // AUTO EXPOSURE FIX ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       if (AutoExposureFix::rate_replacement > 0 &&
-         !DrawingState::IsDrawnAutoExposure0 &&
+         !RenderTracker::is_drawn_to_autoexposure0 &&
          !TonemapInfo::GetDrawnTonemap(cb_luma_global_settings.GameSettings.TonemapInfo) &&
          ps == ShaderHashesLists::AutoExposure0)
       {
          //progress
-         DrawingState::IsDrawnAutoExposure0 = true;
+         RenderTracker::is_drawn_to_autoexposure0 = true;
 
          //detect if writing to all 32x1 (clears history) or just 1x1 (preserves history)
          D3D11_VIEWPORT vp{};
@@ -5875,8 +6022,8 @@ public:
             cb_luma_global_settings.GameSettings.TonemapInfo = ti;
             device_data.cb_luma_global_settings_dirty = true; //reupload for later shaders
 
-            // event (TODO: slight inefficiency as they might all check RTV0, but it's just to setup, rare)
-            SSAA::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
+            // event
+            RenderTracker::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             Bloom::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             SpotLightShadows::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             DepthOfField::OnTonemapAndFinalDraw();
@@ -5961,10 +6108,10 @@ public:
       // TO SWAPCHAIN /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       
       if (TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
-         !DrawingState::IsDrawnToSwapchain &&
+         !RenderTracker::is_drawn_to_swapchain &&
          ps == ShaderHashesLists::ToSwapchain)
       {
-         DrawingState::IsDrawnToSwapchain = true;
+         RenderTracker::is_drawn_to_swapchain = true;
 
          // //UI Transparency
          // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f && UISeparation::UIOutputTex.get() == nullptr)
@@ -6032,10 +6179,10 @@ public:
       //    !TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo))
       // {
       //    //case: FXAA
-      //    if (!DrawingState::IsDrawnMLAAPrev) return DrawOrDispatchOverrideType::Skip;
+      //    if (!ResourceTracker::IsDrawnMLAAPrev) return DrawOrDispatchOverrideType::Skip;
       //
       //    //case: MLAA
-      //    if (DrawingState::IsDrawnMLAA) return DrawOrDispatchOverrideType::Skip;
+      //    if (ResourceTracker::IsDrawnMLAA) return DrawOrDispatchOverrideType::Skip;
       //
       //    //case: wait until MLAA
       //    return DrawOrDispatchOverrideType::None;
@@ -6043,7 +6190,7 @@ public:
       
       //UI
       if (TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) &&
-         !DrawingState::IsDrawnToSwapchain &&
+         !RenderTracker::is_drawn_to_swapchain &&
          ps != ShaderHashesLists::Mov)
       {
          //skip IsUI
@@ -6065,7 +6212,8 @@ public:
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data)
    {
       // event
-      CachedCB::Update(); 
+      RenderTracker::OnPresent();
+      CachedCB::OnPresent(); 
       IndividualPVTuning::OnPresent();
       HighFPS::Patch();
       ProgressBar::OnPresent();
@@ -6083,9 +6231,6 @@ public:
       // reset TonemapInfo
       GlobalsMegaMix::TonemapInfoBackup = cb_luma_global_settings.GameSettings.TonemapInfo;
       cb_luma_global_settings.GameSettings.TonemapInfo = TonemapInfo::GetDefaultReset();
-
-      // reset game/device_data
-      DrawingState::ResetOnPresent();
       device_data.has_drawn_main_post_processing = false;
    }
 
@@ -6230,8 +6375,10 @@ public:
       ShaderDefineInfo::Set(UI_DRAW_TYPE_HASH, 2);
 
       // Info
-      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+      if (GlobalsMegaMix::UIIsAdvanced)
       {
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+         
          // Stops
          float stops = log2(cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite);
          std::string label_hdr_stops_plural = stops > 1.f ? "s" : "";
@@ -6239,9 +6386,17 @@ public:
          ImGui::BulletText(std::format("HDR Stop{}: {}{:.2f}", label_hdr_stops_plural, label_hdr_stops_sign, stops).c_str());
 
          // OutputHandling
+#if DEVELOPMENT
+         ImGui::BulletText("Output: %s (Luma Display Composition: %s)", OutputHandling::IsHDR10() ? "HDR10 (10-bit)" : OutputHandling::IsSDR8bit() ? "SDR (8-bit)" : "scRGB (16-bit)", force_disable_display_composition ? "Disabled" : "Enabled");
+#else
          ImGui::BulletText("Output: %s", OutputHandling::IsHDR10() ? "HDR10 (10-bit)" : OutputHandling::IsSDR8bit() ? "SDR (8-bit)" : "scRGB (16-bit)");
+#endif
+
+         // Render Resolution
+         ImGui::BulletText("Render Resolution: %dx%d", RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y);
+         
+         ImGui::PopStyleColor();
       }
-      ImGui::PopStyleColor();
       
       if (!GlobalsMegaMix::UIIsReadmeDone)
       {
@@ -6547,7 +6702,7 @@ public:
          ImGui::PushStyleColor(ImGuiCol_Text, XeGTAO::FoundResource::IsSizeValid() ? ImVec4(0.4f, 0.8f, 0.4f, 1.f) : ImVec4(0.8f, 0.4f, 0.4f, 1.f));
          std::string status;
          if (XeGTAO::FoundResource::IsSizeValid()) status = std::format("Yes ({}x{})", XeGTAO::FoundResource::size.x, XeGTAO::FoundResource::size.y);
-         else if (XeGTAO::FoundResource::correct_main_color_res_handle > 0)  status = "No (Color found, pending Depth)";
+         else if (RenderTracker::res_main_color_handle > 0)  status = "No (Color found, pending Depth)";
          else status = "No";
          ImGui::TextWrapped("Ready: %s",  status.c_str());
          ImGui::PopStyleColor();
@@ -6587,9 +6742,17 @@ public:
          if (ImGui::Checkbox("Full Resolution", &SSS::enabled))
             reshade::set_config_value(runtime, NAME, SSS::reshadesave_enabled, SSS::enabled);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Allow the screen-space SSS algorithm to compute in full resolution."
-                              "\n\n(This stops the bottle necking for shadow maps, but not having high quality blur to match high res can cause"
-                              "\nstrips of SSS glow for rare cases. Still, I'd rather fail the 1th percentile than the 99th.)");
+            ImGui::SetTooltip("Make the screen-space SSS algorithm to compute in full resolution, stopping the bottlenecking of shadow maps."
+                              "\n"
+                              "\n(The first sample is from full res, while the rest is from downsample for performance.)");
+
+         ImGui::BeginDisabled(!SSS::enabled);
+         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SSS_HQBLUR, "Extreme Quality Blur", "Greatly increase sample count by adding in-between sample positions,"
+                                                                                                                        "\nsuppressing the rare cases where SSS generate strips."
+                                                                                                                        "\nProbably not be worth if you can't notice those strips."
+                                                                                                                        "\n"
+                                                                                                                        "\n(This will freeze game on toggle to compile unrolled/hardcoded gaussian weights for performance.)");
+         ImGui::EndDisabled();
 
          if (GlobalsMegaMix::UIIsAdvanced)
          {
@@ -6620,7 +6783,7 @@ public:
             for (int i = 0; i < SSS::Resources::items.size(); i++)
             {
                SSS::Resources::Item* item = &SSS::Resources::items[i];
-               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("%d. %dx%d", i, item->size.x, item->size.y);
+               ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("%d. %dx%d (%s)", i, item->size.x, item->size.y, item->size.x == 0 ? "" : (item->IsOriginalMainColor() ? "Main Color" : "X Song Pack Full Resolution Reflections"));
             }
          }
 
@@ -6652,27 +6815,27 @@ public:
             {
                ImGui::BeginDisabled(ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_ESM_DEPTH_NEW_SIZE) <= 2);
                {
-                  ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Characters: Steps Reduce", { "0 (Perfect Extension)", "1 (Essentially Vanilla)", "2", "3", "4", "5", "6", "7" },
-                     "The raw shadow map is duplicated for character rendering (i.e. SSS) and is gaussian blurred for erosion.\n\nIf > 2048x2048, steps are mathematically increased for the higher resolution, but it's nice to be frugal.\nHowever, too frugal and shadows are no longer soft and SSS won't have smooth normals for proper gradients.");
+                  ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_FILTERREDUCE, "Characters: Blur Sample Count Reduce", { "0 (Perfect Extension)", "1 (Essentially Vanilla)", "2", "3", "4", "5", "6", "7" },
+                     "The raw shadow map texture is duplicated for character rendering (i.e. SSS) and is gaussian blurred for erosion.\n\nIf > 2048x2048, sample count are mathematically increased for the higher resolution, but it's nice to be frugal.\nHowever, too frugal and shadows are no longer soft as intended, leading SSS tint to posterize.");
                }
                ImGui::EndDisabled();
 
-               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_SIGMAINCREASE, "Characters: Sigma", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" },
-                  "Change gaussian kernel's sigma to control softness.\nWill need \"Steps Reduce\" at 0 for higher/wider values.");
+               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_DEPTH_SIGMAINCREASE, "Characters: Blur Softness", { "1", "2", "3", "4", "5", "6", "7", "8", "9", "10" },
+                  "Change the gaussian kernel's sigma to control softness.\nWill need \"Blur Sample Count Reduce\" at 0 for higher/wider values.");
             }
             ImGui::EndDisabled();
          
             if (ImGui::SliderInt("World: Blur Mips", &ShadowMap::enabled_color_mips, 1, ShadowMap::Resources::color_aux_x_srvs.size()))
                reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_enabled_color_mips, ShadowMap::enabled_color_mips);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The raw shadow map is also duplicate for static world rendering.\nOriginally, it skips down to 512x512 before a quick 4 taps box blur.\n\nHere, you can have an unbroken mip chain for higher quality softness.");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The raw shadow map texture is also duplicate for static world rendering.\nOriginally, it skips down to 512x512 before a quick 4-tap box blur.\n\nHere, you can have an unbroken mip chain for higher quality softness.");
             DrawResetButton(ShadowMap::enabled_color_mips, ShadowMap::enabled_color_mips_def, ShadowMap::reshadesave_enabled_color_mips, runtime);
 
-            if (ImGui::SliderInt("World: Mips Skip", &ShadowMap::color_mips_skip, -1, ShadowMap::Resources::color_aux_x_srvs.size(), ShadowMap::color_mips_skip >= 0 ? "%d" : "Auto"))
+            if (ImGui::SliderInt("World: Blur Mips Skip", &ShadowMap::color_mips_skip, -1, ShadowMap::Resources::color_aux_x_srvs.size(), ShadowMap::color_mips_skip >= 0 ? "%d" : "Auto"))
                reshade::set_config_value(runtime, NAME, ShadowMap::reshadesave_color_mips_skip, ShadowMap::color_mips_skip);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("For the first downsample, how many mips to skip?");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("For the first downsample (which is also final result), how many mips to skip?\nThis greatly improves performance later if world geometry is complex.");
             DrawResetButton(ShadowMap::color_mips_skip, ShadowMap::color_mips_skip_def, ShadowMap::reshadesave_color_mips_skip, runtime);
          
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_COLOR_SIGMA, "World: Sigma", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_ESM_COLOR_SIGMA, "World: Blur Softness", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
                "Change the gaussian kernel's sigma to control softness.");
          }
 
@@ -6799,7 +6962,7 @@ public:
          {
             if (!Bloom::enabled) ImGui::BeginDisabled();
             {
-               if (ImGui::SliderFloat("Gaussian Sigma", &Bloom::sigma, 0.1f, 1.f))
+               if (ImGui::SliderFloat("Blur Softness Initial", &Bloom::sigma, 0.1f, 1.f))
                   reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma, Bloom::sigma);
                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Initial sigma for gaussian blur, where higher means wider radius."
                                                                                                 "\n"
@@ -6807,9 +6970,9 @@ public:
                                                                                                 "\nbut also cost a bit of performance as texture sampling count increases.");
                DrawResetButton(Bloom::sigma, Bloom::sigma_def, Bloom::reshadesave_sigma, runtime);
 
-               if (ImGui::SliderFloat("Gaussian Sigma Increase", &Bloom::sigma_increase, 0.f, 1.f))
+               if (ImGui::SliderFloat("Blur Softness Increase", &Bloom::sigma_increase, 0.f, 1.f))
                   reshade::set_config_value(runtime, NAME, Bloom::reshadesave_sigma_increase, Bloom::sigma_increase);
-               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Additional sigma (blur radius) increase per deeper mipmap level."
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Additional sigma increase per deeper mipmap level."
                                                                                                 "\nToo low and blockiness will reappear.");
                DrawResetButton(Bloom::sigma_increase, Bloom::sigma_increase_def, Bloom::reshadesave_sigma_increase, runtime);
 
@@ -6885,7 +7048,7 @@ public:
          }
          if (!SSAA::enabled) ImGui::EndDisabled();
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Render Resolution: %dx%d", SSAA::render_resolution.x, SSAA::render_resolution.y);
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Render Resolution: %dx%d", RenderTracker::res_main_color_size.x,  RenderTracker::res_main_color_size.y);
          ImGui::PopStyleColor();
       }
       ImGui::PopID();
@@ -6925,7 +7088,7 @@ public:
 
          if (ImGui::Checkbox("Enable", &DuplicateWorldReflections::enabled))
             reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_enabled, DuplicateWorldReflections::enabled);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Hijack rendering to enable settings below.\nEven at the original 512x256, this improves with gaussian blurring.");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Hijack rendering to enable settings below.\nEven if set at the original 512x256, this improves it by gaussian blurring.");
 
          ImGui::BeginDisabled(!DuplicateWorldReflections::enabled);
          {
@@ -6958,19 +7121,19 @@ public:
                reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_x, DuplicateWorldReflections::desired_resolution.x);
                reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_y, DuplicateWorldReflections::desired_resolution.y);
             }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("New resolution of the planar reflection render target.\n(The original is 512x256.)");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("New resolution for reflections.\n(The original is 512x256.)");
             
             if (GlobalsMegaMix::UIIsAdvanced)
             {
                // mips
-               if (ImGui::SliderInt("Mips", &DuplicateWorldReflections::blur_mips, 1, DuplicateWorldReflections::Resources::srvs_x.size()))
+               if (ImGui::SliderInt("Blur Mips", &DuplicateWorldReflections::blur_mips, 1, DuplicateWorldReflections::Resources::srvs_x.size()))
                   reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_blur_mips, DuplicateWorldReflections::blur_mips);
                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The number of mips in the chain used to blur.\n(The original is a quick 4-tap box blur at 512x256.)");
                DrawResetButton(DuplicateWorldReflections::blur_mips, DuplicateWorldReflections::blur_mips_def, DuplicateWorldReflections::reshadesave_blur_mips, runtime);
 
                // sigma
-               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DWR_SIGMA, "Sigma", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
-                  "Change the gaussian kernel's sigma to control softness.");
+               ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DWR_SIGMA, "Blur Softness", { "-4", "-3", "-2", "-1", "0", "1", "2", "3", "4", "5" },
+                  "Change the gaussian kernel's sigma to control the material's roughness.");
             }
          }
          ImGui::EndDisabled();
@@ -7081,13 +7244,13 @@ public:
          if (ImGui::Checkbox("Draw UI", &GlobalsMegaMix::IsUI))
             reshade::set_config_value(runtime, NAME, "IsUI", GlobalsMegaMix::IsUI);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Toggle UI.\nIf off, will discard all UI sprite shaders after the final shader.");
+            ImGui::SetTooltip("Toggle UI.\nIf off, will discard all UI sprite shaders after scene rendering.");
          DrawResetButton(GlobalsMegaMix::IsUI, true, "IsUI", runtime);
          
          if (ImGui::Checkbox("Draw UI Text", &GlobalsMegaMix::IsUIText))
             reshade::set_config_value(runtime, NAME, "IsUIText", GlobalsMegaMix::IsUIText);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Skips text (at least subtitles) after final shader has drawn.");
+            ImGui::SetTooltip("Skips text (at least subtitles) after scene rendering.");
          DrawResetButton(GlobalsMegaMix::IsUIText, true, "IsUIText", runtime);
       }
 
@@ -7430,7 +7593,7 @@ public:
          // std::string s5 = "FMV Mode Detected: " + std::to_string(TonemapInfo::GetIsFMV(Globals::TonemapInfoBackup));
          // ImGui::BulletText(s5.c_str());
 
-         // std::string s7 = "MLAA Detected: " + std::to_string(DrawingState::IsDrawnMLAAPrev);
+         // std::string s7 = "MLAA Detected: " + std::to_string(ResourceTracker::IsDrawnMLAAPrev);
          // ImGui::BulletText(s7.c_str());
          
          std::string s4 = "Swapchain Change Count: " + std::to_string(GlobalsMegaMix::SwapchainChangeCount);
@@ -7544,7 +7707,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    {
       // name
       Globals::SetGlobals(PROJECT_NAME, "Hatsune Miku: Project DIVA Mega Mix+ - Luma Mod");
-      Globals::VERSION = 0; // TODO: for some reason, this is not being saved to ReShade.ini, so anything > than 0 resets shader defines!!!!!!!!?!?!?! 
+      Globals::VERSION = 0; // TODO: for some reason, this is not being saved to ReShade.ini, so anything > than 0 may reset user settings
 
       // fuillscreen state
       prevent_fullscreen_state = true;
@@ -7562,12 +7725,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       texture_format_upgrades_2d_custom_aspect_ratios = { 16.f / 9.f }; 
       texture_format_upgrades_2d_aspect_ratio_pixel_threshold = 32; //leeway
-
+      
       // game
       game = new ProjectDivaMegaMix();
    }
 
+   // Luma core.hpp
    CoreMain(hModule, ul_reason_for_call, lpReserved);
+
+   // ResourceTracker
+   RenderTracker::OnDLLMainAfterCore(ul_reason_for_call);
 
    return TRUE;
 } 

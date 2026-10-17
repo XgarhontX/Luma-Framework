@@ -4,6 +4,7 @@
 
 SamplerState g_sampler_s : register(s0);
 Texture2D<float4> g_texture : register(t0);
+Texture2D<float4> g_texture_down : register(t1);
 
 //////////////////////////////////////////////////
 
@@ -292,14 +293,18 @@ float3 KernelWNearest(float2 o)
     return g_coef[6 * i0.y + i0.x].xyz;
 }
 
+float4 SampleSSSInternal(float2 uv) {
+  return g_texture.SampleLevel(g_sampler_s, uv, 99); // forces lowest mipmap
+}
 void SampleSSS(float2 uv, float2 uvCenter, float2 radius, float3 w, inout float3 aC, inout float3 aW)
 {
-    float4 s = g_texture.SampleLevel(g_sampler_s, uvCenter + uv * radius, 0);
+    float4 s = SampleSSSInternal(uvCenter + uv * radius);
     float3 ws = w * s.w; // tinted weight * SSS intensity
     aC += s.xyz * ws;
     aW += ws;
 }
 
+// AI fart: appox in-between weights
 static float3 gL1, gD1, gD2;
 float3 FitW(float t) { return exp2(gL1 + (t - 1.0) * (gD1 + (t - 9.0) * gD2)); }
 
@@ -317,10 +322,10 @@ void sss0(
   // o0.xyzw = 2;
   // return;
 
-  // center (usually r == g == b monochrome) (rgb is SSS surface w/ specular & shadow map, which SSS blur will expand outwards) (alpha denotes SSS intensity)
-  r0.xyzw = g_texture.SampleLevel(g_sampler_s, v1.xy, 0).xyzw;
+  // center (usually r == g == b monochrome, but can be tinted) (rgb is SSS surface w/ specular & shadow map, which SSS blur will expand outwards) (alpha denotes SSS intensity)
+  r0.xyzw = g_texture.SampleLevel(g_sampler_s, v1.xy, 0).xyzw; // highest mip for shadow map detail
 
-  // skip low/no SSS
+  // cutoff: low/no SSS
   if (r0.w < 0.5) {
     o0.xyz = r0.xyz;
     return;
@@ -329,7 +334,7 @@ void sss0(
   // radius
   r1.xy = g_param.zw * g_texel_size.xy * GS.SSSRadius; // scaling this up makes SSS wider & more apparent
 
-#if 0 // SSS0_NOT_NATIVE_SHADER == 0
+#if SSS0_NOT_NATIVE_SHADER == 0 && CUSTOM_SSS_HQBLUR == 1
   // accumulators: color and weight
   float3 centerW = g_coef[0].xyz + 1e-5; // safe
   float3 aC = r0.xyz * centerW;
@@ -359,100 +364,104 @@ void sss0(
 //       aW += ws;
 //   }
 
-  // TODO: this is not like vanilla
-  [unroll] for (float y = 0; y <= 5; y++)
-  {
-    [unroll] for (float x = 0; x <= 5; x++)
-    {
-      if (x == 0 && y == 0) continue; // skip center
-
-      // sub-sample
-      float2 o = float2(x, y);
-
-      // weight for sub-sample
-      float3 w = KernelWNearest(o);
-      w /= GS.SSSRadius;
-      if (max(w.x, max(w.y, w.z)) < 1e-5) continue; // skip low weights
-
-      // samples
-      SampleSSS(float2( o.x,  o.y), v1, r1.xy, w, aC, aW);
-      SampleSSS(float2(-o.x, -o.y), v1, r1.xy, w, aC, aW);
-      SampleSSS(float2( o.x, -o.y), v1, r1.xy, w, aC, aW);
-      SampleSSS(float2(-o.x,  o.y), v1, r1.xy, w, aC, aW);
-
-      // "in-between" samples
-      #if 0
-        const float2 s0 = r1.xy * 0.5;
-        const float3 w0 = w * 0.22;
-        SampleSSS(float2( o.x,  o.y), v1, s0, w0, aC, aW);
-        SampleSSS(float2(-o.x, -o.y), v1, s0, w0, aC, aW);
-        SampleSSS(float2( o.x, -o.y), v1, s0, w0, aC, aW);
-        SampleSSS(float2(-o.x,  o.y), v1, s0, w0, aC, aW);
-      #elif 0
-        const float2 s0 = r1.xy * 2;
-        const float3 w0 = w * 0.66;
-        SampleSSS(float2( o.x,  o.y), v1, s0, w0, aC, aW);
-        SampleSSS(float2(-o.x, -o.y), v1, s0, w0, aC, aW);
-        SampleSSS(float2( o.x, -o.y), v1, s0, w0, aC, aW);
-        SampleSSS(float2(-o.x,  o.y), v1, s0, w0, aC, aW);
-
-        const float2 s1 = r1.xy * 3;
-        const float3 w1 = w * 0.33;
-        SampleSSS(float2( o.x,  o.y), v1, s1, w1, aC, aW);
-        SampleSSS(float2(-o.x, -o.y), v1, s1, w1, aC, aW);
-        SampleSSS(float2( o.x, -o.y), v1, s1, w1, aC, aW);
-        SampleSSS(float2(-o.x,  o.y), v1, s1, w1, aC, aW);
-      #endif
-    }
-  }
-
-//   // once per pixel, before the loops
-//   float3 L1 = log2(max(g_coef[1].xyz, 1e-30));
-//   float3 L3 = log2(max(g_coef[3].xyz, 1e-30));
-//   float3 L5 = log2(max(g_coef[5].xyz, 1e-30));
-//   gL1 = L1;
-//   gD1 = (L3 - L1) / 8.0;
-//   gD2 = ((L5 - L3) / 16.0 - gD1) / 24.0;
-// 
-//   [unroll] for (int y = 0; y <= 5; y++)
-//   [unroll] for (int x = 0; x <= 5; x++)
+//   // TODO: this is not like vanilla
+//   [unroll] for (float y = 0; y <= 5; y++)
 //   {
-//     if (x == 0 && y == 0) continue;
-//     float3 g = g_coef[6 * y + x].xyz; // exact cell weight (static index after unroll)
-//     if (max(g.x, max(g.y, g.z)) < 1e-5) continue;
-//     float3 corr = min(g / max(FitW(x * x + y * y), 1e-30), 4.0); // pin fit to table at the cell center
-// 
-//     for (int sy = -1; sy <= 1; sy += 2)
-//     for (int sx = -1; sx <= 1; sx += 2)
+//     [unroll] for (float x = 0; x <= 5; x++)
 //     {
-//       if ((x == 0 && sx < 0) || (y == 0 && sy < 0)) continue; // no double-counting on axes
-//       for (int b = -1; b <= 1; b += 2)
-//       for (int a = -1; a <= 1; a += 2)
-//       {
-//         float2 p = float2(sx * x + a * 0.25, sy * y + b * 0.25);
-//         float3 w = FitW(dot(p, p)) * corr * 0.25;
-//         SampleSSS(p, v1, r1.xy, w, aC, aW);
-//       }
+//       if (x == 0 && y == 0) continue; // skip center
+// 
+//       // sub-sample
+//       float2 o = float2(x, y);
+// 
+//       // weight for sub-sample
+//       float3 w = KernelWNearest(o);
+//       w /= GS.SSSRadius;
+//       if (max(w.x, max(w.y, w.z)) < 1e-5) continue; // skip low weights
+// 
+//       // samples
+//       SampleSSS(float2( o.x,  o.y), v1, r1.xy, w, aC, aW);
+//       SampleSSS(float2(-o.x, -o.y), v1, r1.xy, w, aC, aW);
+//       SampleSSS(float2( o.x, -o.y), v1, r1.xy, w, aC, aW);
+//       SampleSSS(float2(-o.x,  o.y), v1, r1.xy, w, aC, aW);
+// 
+//       // "in-between" samples
+//       #if 0
+//         const float2 s0 = r1.xy * 0.5;
+//         const float3 w0 = w * 0.22;
+//         SampleSSS(float2( o.x,  o.y), v1, s0, w0, aC, aW);
+//         SampleSSS(float2(-o.x, -o.y), v1, s0, w0, aC, aW);
+//         SampleSSS(float2( o.x, -o.y), v1, s0, w0, aC, aW);
+//         SampleSSS(float2(-o.x,  o.y), v1, s0, w0, aC, aW);
+//       #elif 0
+//         const float2 s0 = r1.xy * 2;
+//         const float3 w0 = w * 0.66;
+//         SampleSSS(float2( o.x,  o.y), v1, s0, w0, aC, aW);
+//         SampleSSS(float2(-o.x, -o.y), v1, s0, w0, aC, aW);
+//         SampleSSS(float2( o.x, -o.y), v1, s0, w0, aC, aW);
+//         SampleSSS(float2(-o.x,  o.y), v1, s0, w0, aC, aW);
+// 
+//         const float2 s1 = r1.xy * 3;
+//         const float3 w1 = w * 0.33;
+//         SampleSSS(float2( o.x,  o.y), v1, s1, w1, aC, aW);
+//         SampleSSS(float2(-o.x, -o.y), v1, s1, w1, aC, aW);
+//         SampleSSS(float2( o.x, -o.y), v1, s1, w1, aC, aW);
+//         SampleSSS(float2(-o.x,  o.y), v1, s1, w1, aC, aW);
+//       #endif
 //     }
 //   }
 
+  // AI fart: appox in-between weights
+  float3 L1 = log2(max(g_coef[1].xyz, 1e-30)); // log curved
+  float3 L3 = log2(max(g_coef[3].xyz, 1e-30));
+  float3 L5 = log2(max(g_coef[5].xyz, 1e-30));
+  gL1 = L1;
+  gD1 = (L3 - L1) / 8.0;
+  gD2 = ((L5 - L3) / 16.0 - gD1) / 24.0;
+
+  [unroll] for (int y = 0; y <= 5; y++)
+  [unroll] for (int x = 0; x <= 5; x++)
+  {
+    if (x == 0 && y == 0) continue;
+    float3 g = g_coef[6 * y + x].xyz; // weight
+    if (max(g.x, max(g.y, g.z)) < 1e-5) continue; // skip low weights
+    float3 corr = min(g / max(FitW(x * x + y * y), 1e-30), 4.0); // pin fit to table at the cell center
+
+    for (int sy = -1; sy <= 1; sy += 2)
+    for (int sx = -1; sx <= 1; sx += 2)
+    {
+      if ((x == 0 && sx < 0) || (y == 0 && sy < 0)) continue; // skip same sample
+      for (int b = -1; b <= 1; b += 2)
+      for (int a = -1; a <= 1; a += 2)
+      {
+        float2 p = float2(sx * x + a * 0.25, sy * y + b * 0.25);
+        float3 w = FitW(dot(p, p)) * corr * 0.25;
+        SampleSSS(p, v1, r1.xy, w, aC, aW);
+      }
+    }
+  }
+
   aC /= aW; // normalize
   o0.xyz = aC * g_color.xyz; // tint
-#elif 1 // SSS0_NOT_NATIVE_SHADER == 1
+#else
   // accumulators: color and weight
   r0.xyz = r0.xyz * g_coef[0].xyz + float3(9.99999975e-006,9.99999975e-006,9.99999975e-006); // init accumulated color
   r2.xyz = g_coef[0].xyz + float3(9.99999975e-006,9.99999975e-006,9.99999975e-006); // init accumulated weight
+
+  int sLevel = 0;
 
   // tap 1 & 2: horizontal +/-
   r1.z = 0;
   r3.xy = v1.xy + r1.xz;
   r4.xy = v1.xy + -r1.xz;
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r3.xy).xyzw;
   r6.xyz = g_coef[1].xyz * r5.www; // tinted weight * SSS intensity
   r0.xyz = r5.xyz * r6.xyz + r0.xyz; // new color * weight + accumulated color
   r2.xyz = g_coef[1].xyz * r5.www + r2.xyz; // tinted weight * SSS intensity + accumulated weight
 
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r4.xy).xyzw;
   r6.xyz = g_coef[1].xyz * r5.www;
   r0.xyz = r5.xyz * r6.xyz + r0.xyz;
   r2.xyz = g_coef[1].xyz * r5.www + r2.xyz;
@@ -461,12 +470,14 @@ void sss0(
   r3.z = v1.y;
   r3.xy = r3.xz + r1.xz;
   r4.xy = r4.xy + -r1.xz;
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r3.xy).xyzw;
   r6.xyz = g_coef[2].xyz * r5.www;
   r0.xyz = r5.xyz * r6.xyz + r0.xyz;
   r2.xyz = g_coef[2].xyz * r5.www + r2.xyz;
 
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r4.xy).xyzw;
   r6.xyz = g_coef[2].xyz * r5.www;
   r0.xyz = r5.xyz * r6.xyz + r0.xyz;
   r2.xyz = g_coef[2].xyz * r5.www + r2.xyz;
@@ -475,12 +486,14 @@ void sss0(
   r3.z = v1.y;
   r3.xy = r3.xz + r1.xz;
   r4.xy = r4.xy + -r1.xz;
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r3.xy).xyzw;
   r6.xyz = g_coef[3].xyz * r5.www;
   r0.xyz = r5.xyz * r6.xyz + r0.xyz;
   r2.xyz = g_coef[3].xyz * r5.www + r2.xyz;
 
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r4.xy).xyzw;
   r6.xyz = g_coef[3].xyz * r5.www;
   r0.xyz = r5.xyz * r6.xyz + r0.xyz;
   r2.xyz = g_coef[3].xyz * r5.www + r2.xyz;
@@ -489,12 +502,14 @@ void sss0(
   r3.z = v1.y;
   r3.xy = r3.xz + r1.xz;
   r4.xy = r4.xy + -r1.xz;
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r3.xy).xyzw;
   r6.xyz = g_coef[4].xyz * r5.www;
   r0.xyz = r5.xyz * r6.xyz + r0.xyz;
   r2.xyz = g_coef[4].xyz * r5.www + r2.xyz;
 
-  r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, 0).xyzw;
+  // r5.xyzw = g_texture.SampleLevel(g_sampler_s, r4.xy, sLevel).xyzw;
+  r5.xyzw = SampleSSSInternal(r4.xy).xyzw;
   r6.xyz = g_coef[4].xyz * r5.www;
   r0.xyz = r5.xyz * r6.xyz + r0.xyz;
   r2.xyz = g_coef[4].xyz * r5.www + r2.xyz;
@@ -503,12 +518,14 @@ void sss0(
   r3.z = v1.y;
   r3.xy = r3.xz + r1.xz;
   r3.zw = r4.xy + -r1.xz;
-  r4.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, 0).xyzw;
+  // r4.xyzw = g_texture.SampleLevel(g_sampler_s, r3.xy, sLevel).xyzw;
+  r4.xyzw = SampleSSSInternal(r3.xy).xyzw;
   r5.xyz = g_coef[5].xyz * r4.www;
   r0.xyz = r4.xyz * r5.xyz + r0.xyz;
   r2.xyz = g_coef[5].xyz * r4.www + r2.xyz;
 
-  r3.xyzw = g_texture.SampleLevel(g_sampler_s, r3.zw, 0).xyzw;
+  // r3.xyzw = g_texture.SampleLevel(g_sampler_s, r3.zw, sLevel).xyzw;
+  r3.xyzw = SampleSSSInternal(r3.zw).xyzw;
   r4.xyz = g_coef[5].xyz * r3.www;
   r0.xyz = r3.xyz * r4.xyz + r0.xyz;
   r2.xyz = g_coef[5].xyz * r3.www + r2.xyz;
@@ -526,12 +543,14 @@ void sss0(
     r5.xy = r5.xy + r1.zy;
     r5.zw = r5.zw + -r1.zy;
 
-    r6.xyzw = g_texture.SampleLevel(g_sampler_s, r5.xy, 0).xyzw;
+    // r6.xyzw = g_texture.SampleLevel(g_sampler_s, r5.xy, sLevel).xyzw;
+    r6.xyzw = SampleSSSInternal(r5.xy).xyzw;
     r7.xyz = g_coef[r0.w].xyz * r6.www;
     r6.xyz = r6.xyz * r7.xyz + r3.xyz;
     r7.xyz = g_coef[r0.w].xyz * r6.www + r4.xyz;
-    
-    r8.xyzw = g_texture.SampleLevel(g_sampler_s, r5.zw, 0).xyzw;
+
+    // r8.xyzw = g_texture.SampleLevel(g_sampler_s, r5.zw, sLevel).xyzw;
+    r8.xyzw = SampleSSSInternal(r5.zw).xyzw;
     r9.xyz = g_coef[r0.w].xyz * r8.www;
     r6.xyz = r8.xyz * r9.xyz + r6.xyz;
     r7.xyz = g_coef[r0.w].xyz * r8.www + r7.xyz;
@@ -550,22 +569,26 @@ void sss0(
       r9.xy = r9.xy + r1.xz;
       r9.zw = r9.zw + -r1.xz;
 
-      r10.xyzw = g_texture.SampleLevel(g_sampler_s, r8.xy, 0).xyzw;
+      // r10.xyzw = g_texture.SampleLevel(g_sampler_s, r8.xy, sLevel).xyzw;
+      r10.xyzw = SampleSSSInternal(r8.xy).xyzw;
       r11.xyz = g_coef[r0.w].xyz * r10.www;
       r10.xyz = r10.xyz * r11.xyz + r3.xyz;
       r11.xyz = g_coef[r0.w].xyz * r10.www + r4.xyz;
 
-      r12.xyzw = g_texture.SampleLevel(g_sampler_s, r8.zw, 0).xyzw;
+      // r12.xyzw = g_texture.SampleLevel(g_sampler_s, r8.zw, sLevel).xyzw;
+      r12.xyzw = SampleSSSInternal(r8.zw).xyzw;
       r13.xyz = g_coef[r0.w].xyz * r12.www;
       r10.xyz = r12.xyz * r13.xyz + r10.xyz;
       r11.xyz = g_coef[r0.w].xyz * r12.www + r11.xyz;
 
-      r12.xyzw = g_texture.SampleLevel(g_sampler_s, r9.xy, 0).xyzw;
+      // r12.xyzw = g_texture.SampleLevel(g_sampler_s, r9.xy, sLevel).xyzw;
+      r12.xyzw = SampleSSSInternal(r9.xy).xyzw;
       r13.xyz = g_coef[r0.w].xyz * r12.www;
       r10.xyz = r12.xyz * r13.xyz + r10.xyz;
       r11.xyz = g_coef[r0.w].xyz * r12.www + r11.xyz;
 
-      r12.xyzw = g_texture.SampleLevel(g_sampler_s, r9.zw, 0).xyzw;
+      // r12.xyzw = g_texture.SampleLevel(g_sampler_s, r9.zw, sLevel).xyzw;
+      r12.xyzw = SampleSSSInternal(r9.zw).xyzw;
       r13.xyz = g_coef[r0.w].xyz * r12.www;
       r3.xyz = r12.xyz * r13.xyz + r10.xyz;
       r4.xyz = g_coef[r0.w].xyz * r12.www + r11.xyz;
