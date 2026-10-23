@@ -7463,15 +7463,19 @@ public:
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Options for Anti-Aliasing."
                                                                                           "\n"
+                                                                                          "\n[Morphological Anti-Aliasing (MLAA)]"
+                                                                                          "\nThe vanilla option, blurring the least."
+                                                                                          "\nThis algorithm is the OG, where edges to blur are found geometrically."
+                                                                                          "\n"
                                                                                           "\n[Directional Localized Anti-Aliasing (DLAA)]"
-                                                                                          "\nMore lenient, DLAA will result in a more blurred/filmic look."
-                                                                                          "\nDLAA was created to address difficulties implementing MLAA, resulting in an algorithm that blurs along the direction of edges."
-                                                                                          "\nDebuting in Star Wars: The Force Unleashed II, it's one of the last AA methods before temporal solutions took over."
+                                                                                          "\nMore lenient, DLAA will result in a more blurred look."
+                                                                                          "\nDebuting in Star Wars: The Force Unleashed II, DLAA finds and blurs along the direction of edges."
+                                                                                          "\nThis is about the same cost as MLAA."
                                                                                           "\n"
                                                                                           "\n[Subpixel Morphological Anti-Aliasing (SMAA)]"
-                                                                                          "\nSeen in CryTek & Call of Duty, it's another response to MLAA with more finer & reliable edge detection."
-                                                                                          "\nIt'll blur stronger than MLAA, but won't overdo like DLAA."
-                                                                                          "\n(This is the most taxing option for now, also taking in 3D depth to find edges.)");
+                                                                                          "\nMore smart, it'll blur stronger than MLAA, and won't overdo like DLAA."
+                                                                                          "\nInitially seen in CryTek & Call of Duty, it has the most involved edge detection."
+                                                                                          "\nThis is the most taxing option, taking in 3D depth to find edges.");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Requires MLAA selected in graphics settings!");
