@@ -1249,14 +1249,25 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
    // normal Final isn't drawn when SSAA. we must find other ways to check
    bool IsFinalDrawing(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
+      // gatekeep: enabled
       if (!enabled) return false;
 
-      // must be after tonemap (else, it's redundant anyways)
-      if (!TonemapInfo::GetDrawnTonemap(cb_luma_global_settings.GameSettings.TonemapInfo)) return false;
-
-      // must be "sprite_simplest_0x26AF16B8"
+      // gatekeep: always sprite_simplest_0x26AF16B8
       if (ps != 0x26AF16B8) return false;
 
+      // gatekeep: when not drawn tonemap (pause or whatever)
+      if (!TonemapInfo::GetDrawnTonemap(cb_luma_global_settings.GameSettings.TonemapInfo))
+      {
+         // check if RTV0 matches is main UI
+         ComPtr<ID3D11RenderTargetView> rtv0;
+         native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+         ComPtr<ID3D11Resource> rtv0_resource;
+         rtv0->GetResource(rtv0_resource.put());
+         uint64_t rtv0_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+         if (rtv0_handle != RenderTracker::res_main_ui_handle) return false;
+      }
+      
+      // success!
       return true;
    }
 
