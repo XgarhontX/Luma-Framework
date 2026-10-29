@@ -122,11 +122,17 @@ namespace RenderTracker // partial
    uint64_t res_main_depth_handle = 0;
    uint2 res_main_depth_size = {}; // should be same as color
 
+   ComPtr<ID3D11Resource> res_main_ui; // rgba16f (orig rgba8) that ui draws to
+   ComPtr<ID3D11Texture2D> res_main_ui_tex;
+   uint64_t res_main_ui_handle = 0;
+   uint2 res_main_ui_size = {}; // should be same as color
+
    void Reset_Handles()
    {
       res_main_color.reset(); res_main_color_tex.reset(); res_main_color_handle = 0;
       res_main_depth.reset(); res_main_depth_tex.reset(); res_main_depth_handle = 0;
-      res_main_color_size = {0,0}; res_main_depth_size = {0,0};
+      res_main_ui.reset(); res_main_ui_tex.reset(); res_main_ui_handle = 0;
+      res_main_color_size = {0,0}; res_main_depth_size = {0,0}; res_main_ui_size = {0,0};
    }
       
    // State (cleared on present) //
@@ -6188,6 +6194,26 @@ namespace RenderTracker // partial
       }
    }
 
+   void OnDrawToSwapchain(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, const CommandListData& command_list_data, const DeviceData& device_data)
+   {
+      // save main ui
+      [[unlikely]] if (!res_main_ui)
+      {
+         // SRV0 for RES
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
+         ASSERT_MSG(srv != nullptr, "DuplicateWorldReflections: SRV0 null OnDrawToSwapchain");
+         srv->GetResource(res_main_ui.put());
+         res_main_ui_handle = reinterpret_cast<uint64_t>(res_main_ui.get());
+
+         // TEX for size
+         auto hr = res_main_ui->QueryInterface(res_main_ui_tex.put());
+         D3D11_TEXTURE2D_DESC tex_desc;
+         res_main_ui_tex->GetDesc(&tex_desc);
+         res_main_ui_size = {tex_desc.Width, tex_desc.Height};
+      }
+   }
+   
    void OnPresent()
    {
       // reset
@@ -6514,6 +6540,8 @@ public:
       {
          RenderTracker::is_drawn_to_swapchain = true;
 
+         RenderTracker::OnDrawToSwapchain(native_device, native_device_context, cmd_list_data, device_data);
+         
          // //UI Transparency
          // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f && UISeparation::UIOutputTex.get() == nullptr)
          // {
@@ -6803,7 +6831,11 @@ public:
 
          // Render Resolution
 #if DEVELOPMENT
-         ImGui::BulletText("Render Resolution: %dx%d (Color: %s) (Depth: %s)", RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y, RenderTracker::res_main_color ? "Yes" : "No", RenderTracker::res_main_depth ? "Yes" : "No");
+         ImGui::BulletText("Render Resolution: %dx%d (Color: %s) (Depth: %s) (UI: %s)",
+            RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y,
+            RenderTracker::res_main_color ? "Yes" : "No",
+            RenderTracker::res_main_depth ? "Yes" : "No",
+            RenderTracker::res_main_ui ? "Yes" : "No");
 #else
          ImGui::BulletText("Render Resolution: %dx%d", RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y);
 #endif
