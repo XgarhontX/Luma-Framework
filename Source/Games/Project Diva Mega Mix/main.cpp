@@ -7531,7 +7531,7 @@ public:
          
          if (!SSAA::enabled) ImGui::BeginDisabled();
          {
-            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSAA_FILTER, "Filter", { "Point (Vanilla / Top Left Inner Pixel)", "Box (All 4 Inner Pixel Average)", "Mitchell-Netravali (4x4)" }, "The filter used to downsample the SSAA results to the final output.");
+            ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_SSAA_FILTER, "Filter", { "Bilinear (Vanilla)", "Box (Average of 4 Inner Pixels)", "Mitchell-Netravali (4x4)" }, "The filter used to downsample the SSAA results to the final output.");
          }
          if (!SSAA::enabled) ImGui::EndDisabled();
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
