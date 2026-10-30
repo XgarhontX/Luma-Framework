@@ -1,0 +1,2 @@
+#define SSS_SETUP_NO_ALPHA_CHECK
+#include "./sss_setup1_0xCF8047E0.ps_5_0.hlsl"

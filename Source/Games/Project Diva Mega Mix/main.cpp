@@ -1307,7 +1307,7 @@ namespace XeGTAO
    // key: relevant shader that XeGTAO must insert to.
    // value: index to find main color RES. -1 means RTV.
    std::unordered_map<uint32_t, int8_t> relevant_shaders_to_main_color_srv = {
-      {0xF94D4A4A, -1}, // random write before transparency
+      {0xF94D4A4A, -1}, // random write before transparency (sun_no_textured_ps)
       {0x043F4B65, 1}, // DoF uses scene color + prefiltered depth to blur
       {0x68722F15, 0}, // Downsample for bloom & autoexposure
    };
@@ -2032,7 +2032,7 @@ namespace XeGTAO
        * Skin SSS shader final resolve (0x54415551): no info
        * 2 Clear Resources for SSS (i think SSS)
        * Depth Write lighting resolve: RTV 0 main color, DSV depth write
-       * 0xF94D4A4A: some blit before transparency
+       * 0xF94D4A4A: some blit before transparency (sun_no_textured_ps)
        * Depth Read lighting resolve: RTV 0 main color, DSV depth read
        * Depth of Field
        * Downsample for Bloom & Auto Exposure
@@ -6280,6 +6280,7 @@ public:
       
       default_luma_global_game_settings.SSSRadius = cb_luma_global_settings.GameSettings.SSSRadius = 1.f;
       default_luma_global_game_settings.SSSEyeDodge = cb_luma_global_settings.GameSettings.SSSEyeDodge = 0.f;
+      default_luma_global_game_settings.SkinSpecular = cb_luma_global_settings.GameSettings.SkinSpecular = 1.f;
 
       default_luma_global_game_settings.FrameBlendRatio = cb_luma_global_settings.GameSettings.FrameBlendRatio = 0.33f;
 
@@ -6701,6 +6702,7 @@ public:
       
       reshade::get_config_value(runtime, NAME, "SSSRadius", cb_luma_global_settings.GameSettings.SSSRadius);
       reshade::get_config_value(runtime, NAME, "SSSEyeDodge", cb_luma_global_settings.GameSettings.SSSEyeDodge);
+      reshade::get_config_value(runtime, NAME, "SkinSpecular", cb_luma_global_settings.GameSettings.SkinSpecular);
       
       reshade::get_config_value(runtime, NAME, "FrameBlendRatio", cb_luma_global_settings.GameSettings.FrameBlendRatio);
       
@@ -7184,6 +7186,11 @@ public:
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Radius / reach of the effect.");
             DrawResetButton(cb_luma_global_settings.GameSettings.SSSRadius, default_luma_global_game_settings.SSSRadius, "SSSRadius", runtime);
          }
+         
+         if (ImGui::SliderFloat("Skin Specular", &cb_luma_global_settings.GameSettings.SkinSpecular, 0.f, 2.f))
+            reshade::set_config_value(runtime, NAME, "SkinSpecular", cb_luma_global_settings.GameSettings.SkinSpecular);
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Specular intensity.");
+         DrawResetButton(cb_luma_global_settings.GameSettings.SkinSpecular, default_luma_global_game_settings.SkinSpecular, "SkinSpecular", runtime);
 
          ImGui::NewLine();
          DrawColoredSubHeader("MegaMix Contour: Added edges mimicking drawn art.");
@@ -8135,6 +8142,8 @@ public:
       ImGui::BulletText("Bug Hunter: Jorge");
       ImGui::BulletText("Bug Hunter: ch6rlez");
       ImGui::BulletText("Bug Hunter: ChugTheCreativityJuice");
+      ImGui::BulletText("Bug Hunter: gin");
+      ImGui::BulletText("Bug Hunter: NevaArt3");
 
       ImGui::NewLine();
       

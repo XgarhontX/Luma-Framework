@@ -1,0 +1,690 @@
+cbuffer cb0_buf : register(b0)
+{
+    uint4 cb0_m : packoffset(c0);
+};
+
+cbuffer cb1_buf : register(b1)
+{
+    uint4 cb1_m[60] : packoffset(c0);
+};
+
+cbuffer cb2_buf : register(b2)
+{
+    uint4 cb2_m[42] : packoffset(c0);
+};
+
+SamplerState s0 : register(s0); 
+SamplerState s3 : register(s3);
+SamplerState s7 : register(s7);
+SamplerState s9 : register(s9);
+Texture2D<float4> t0 : register(t0); // tex for alpha
+Texture2D<float4> t3 : register(t3);
+TextureCube<float4> t9 : register(t9); // CPU upload
+Texture2D<float4> t19 : register(t19);
+
+static float3 NORMAL;
+static float4 TEXCOORD;
+static float4 TEXCOORD2;
+static float4 COLOR;
+static float4 COLOR1;
+static float4 SV_Target;
+
+struct SPIRV_Cross_Input
+{
+    float4 v0 : SV_Position; // unused
+    float3 NORMAL : NORMAL0;
+    float4 TEXCOORD : TEXCOORD0;
+    float3 TEXCOORD1 : TEXCOORD1; // unused
+    float4 TEXCOORD2 : TEXCOORD2;
+    float4 COLOR : COLOR0;
+    float4 COLOR1 : COLOR1;
+};
+
+struct SPIRV_Cross_Output
+{
+    float4 SV_Target : SV_Target0;
+};
+
+#include "./Includes/Common.hlsl"
+
+uint spvBitfieldUExtract(uint Base, uint Offset, uint Count)
+{
+    uint Mask = Count == 32 ? 0xffffffff : ((1 << Count) - 1);
+    return (Base >> Offset) & Mask;
+}
+
+uint2 spvBitfieldUExtract(uint2 Base, uint Offset, uint Count)
+{
+    uint Mask = Count == 32 ? 0xffffffff : ((1 << Count) - 1);
+    return (Base >> Offset) & Mask;
+}
+
+uint3 spvBitfieldUExtract(uint3 Base, uint Offset, uint Count)
+{
+    uint Mask = Count == 32 ? 0xffffffff : ((1 << Count) - 1);
+    return (Base >> Offset) & Mask;
+}
+
+uint4 spvBitfieldUExtract(uint4 Base, uint Offset, uint Count)
+{
+    uint Mask = Count == 32 ? 0xffffffff : ((1 << Count) - 1);
+    return (Base >> Offset) & Mask;
+}
+
+int spvBitfieldSExtract(int Base, int Offset, int Count)
+{
+    int Mask = Count == 32 ? -1 : ((1 << Count) - 1);
+    int Masked = (Base >> Offset) & Mask;
+    int ExtendShift = (32 - Count) & 31;
+    return (Masked << ExtendShift) >> ExtendShift;
+}
+
+int2 spvBitfieldSExtract(int2 Base, int Offset, int Count)
+{
+    int Mask = Count == 32 ? -1 : ((1 << Count) - 1);
+    int2 Masked = (Base >> Offset) & Mask;
+    int ExtendShift = (32 - Count) & 31;
+    return (Masked << ExtendShift) >> ExtendShift;
+}
+
+int3 spvBitfieldSExtract(int3 Base, int Offset, int Count)
+{
+    int Mask = Count == 32 ? -1 : ((1 << Count) - 1);
+    int3 Masked = (Base >> Offset) & Mask;
+    int ExtendShift = (32 - Count) & 31;
+    return (Masked << ExtendShift) >> ExtendShift;
+}
+
+int4 spvBitfieldSExtract(int4 Base, int Offset, int Count)
+{
+    int Mask = Count == 32 ? -1 : ((1 << Count) - 1);
+    int4 Masked = (Base >> Offset) & Mask;
+    int ExtendShift = (32 - Count) & 31;
+    return (Masked << ExtendShift) >> ExtendShift;
+}
+
+float dp3_f32(float3 a, float3 b)
+{
+    precise float _92 = a.x * b.x;
+    return mad(a.z, b.z, mad(a.y, b.y, _92));
+}
+
+void frag_main()
+{
+    float2 _111 = float2(TEXCOORD.x, TEXCOORD.y);
+#ifndef SSS_SETUP_NO_ALPHA_CHECK
+    if (t0.Sample(s0, _111).w < asfloat(cb2_m[41u].w)) // alpha check
+    {
+        discard;
+    }
+#endif
+    float3 _131 = float3(NORMAL.x, NORMAL.y, NORMAL.z);
+    float _133 = rsqrt(dp3_f32(_131, _131));
+    uint _143 = cb0_m.z & 1u;
+    bool _145 = _143 == 1u;
+    float3 _160 = float3(NORMAL.x * _133, NORMAL.y * _133, NORMAL.z * _133);
+    float _176 = asfloat(cb2_m[30u].w);
+    bool _179 = _145 && ((cb0_m.y >> 31u) == 1u);
+    float _180 = _179 ? (dp3_f32(float3(asfloat(cb1_m[59u].x), asfloat(cb1_m[59u].y), asfloat(cb1_m[59u].z)), _160) + 2.0f) : 0.0f;
+    float _181 = _179 ? ((_176 < 0.1500000059604644775390625f) ? 100.0f : (dp3_f32(float3(asfloat(cb1_m[58u].x), asfloat(cb1_m[58u].y), asfloat(cb1_m[58u].z)), _160) + 2.0f)) : 0.0f;
+    if ((cb0_m.w & 1u) == 0u) 
+    {
+        SV_Target.y = _145 ? _181 : asfloat(cb2_m[41u].y);
+        SV_Target.z = _145 ? _180 : asfloat(cb2_m[41u].z);
+        SV_Target.x = asfloat(cb2_m[41u].x);
+        SV_Target.w = 0.00999999977648258209228515625f;
+        return;
+    }
+    // dot(g_normal_tangent_transform, normals)
+    float _210 = dp3_f32(float3(asfloat(cb1_m[42u].x), asfloat(cb1_m[42u].y), asfloat(cb1_m[42u].z)), _160);
+    float _220 = dp3_f32(float3(asfloat(cb1_m[43u].x), asfloat(cb1_m[43u].y), asfloat(cb1_m[43u].z)), _160);
+    float _230 = dp3_f32(float3(asfloat(cb1_m[44u].x), asfloat(cb1_m[44u].y), asfloat(cb1_m[44u].z)), _160);
+    float _273;
+    if (spvBitfieldUExtract(cb0_m.z, 9u, 1u) != 0u) // esm influence
+    {
+        float _269 = min(dp3_f32(float3(asfloat(cb1_m[26u].x), asfloat(cb1_m[26u].y), asfloat(cb1_m[26u].z)), _160) + 1.0f, 1.0f); // dot g_light_chara_dir
+        float _270 = _269 * _269;
+        _273 = min(min(exp2(_176 * ((t19.Sample(s7, float2(TEXCOORD2.x, TEXCOORD2.y)).x - TEXCOORD2.z) * asfloat(cb1_m[45u].x))), 1.0f), _270 * _270);
+    }
+    else
+    {
+        _273 = 1.0f;
+    }
+    float4 _277 = t3.Sample(s3, _111);
+    float _278 = _277.w;
+    float _283 = mad(_278 * _273, 0.699999988079071044921875f, 0.300000011920928955078125f) * COLOR1.w;
+
+    // irradiance
+    float _342;
+    float _343;
+    float _344;
+    if (_273 == 1.0f) // full lit
+    {
+        float4 _304 = t9.SampleLevel(s9, float3(_210, _220, _230), 0.0f);
+        _342 = _304.z;
+        _343 = _304.y;
+        _344 = _304.x;
+    }
+    else // in shadow
+    {
+        float _339;
+        float _340;
+        float _341;
+        if (_273 == 0.0f)
+        {
+            float4 _316 = t9.SampleLevel(s9, float3(_210, _220, _230), 1.0f);
+            _339 = _316.z;
+            _340 = _316.y;
+            _341 = _316.x;
+        }
+        else
+        {
+            float3 _322 = float3(_210, _220, _230);
+            float4 _324 = t9.SampleLevel(s9, _322, 0.0f);
+            float4 _329 = t9.SampleLevel(s9, _322, 1.0f);
+            float _330 = _329.x;
+            float _331 = _329.y;
+            float _332 = _329.z;
+            _339 = mad(_324.z - _332, _273, _332);
+            _340 = mad(_324.y - _331, _273, _331);
+            _341 = mad(_324.x - _330, _273, _330);
+        }
+        _342 = _339;
+        _343 = _340;
+        _344 = _341;
+    }
+
+    bool _345 = _143 != 1u;
+    float _373 = mad(_283 * asfloat(cb1_m[28u].x), 1.0f, _345 ? mad(asfloat(cb1_m[14u].x), _344, asfloat(cb1_m[15u].x)) : _344) + COLOR.w;
+    float _374 = mad(_283 * asfloat(cb1_m[28u].y), 0.89999997615814208984375f, _345 ? mad(asfloat(cb1_m[14u].y), _343, asfloat(cb1_m[15u].y)) : _343) + COLOR.w;
+    float _375 = mad(_283 * asfloat(cb1_m[28u].z), 1.0f, _345 ? mad(asfloat(cb1_m[14u].z), _342, asfloat(cb1_m[15u].z)) : _342) + COLOR.w;
+    bool _376 = _278 > 0.9900000095367431640625f;
+    bool _377 = spvBitfieldUExtract(cb0_m.y, 12u, 1u) == 1u;
+    float _397 = clamp((mad(dp3_f32(_160, float3(asfloat(cb1_m[33u].x), asfloat(cb1_m[33u].y), asfloat(cb1_m[33u].z))), 0.5f, 0.5f) - asfloat(cb1_m[36u].x)) * asfloat(cb1_m[36u].y), 0.0f, 1.0f);
+    float _403 = asfloat(cb1_m[34u].x);
+    float _404 = asfloat(cb1_m[34u].y);
+    float _405 = asfloat(cb1_m[34u].z);
+    float _422 = asfloat(cb1_m[36u].z);
+    SV_Target.y = _145 ? _181 : (_376 ? ((_377 ? (_422 * mad(_397, asfloat(cb1_m[35u].y) - _404, _404)) : 0.0f) + _374) : _374);
+    SV_Target.z = _145 ? _180 : (_376 ? ((_377 ? (_422 * mad(_397, asfloat(cb1_m[35u].z) - _405, _405)) : 0.0f) + _375) : _375);
+    SV_Target.x = _376 ? (_373 + (_377 ? (mad(_397, asfloat(cb1_m[35u].x) - _403, _403) * _422) : 0.0f)) : _373;
+    SV_Target.w = 1.0f;
+}
+
+SPIRV_Cross_Output main(SPIRV_Cross_Input stage_input)
+{
+    NORMAL = stage_input.NORMAL;
+    TEXCOORD = stage_input.TEXCOORD;
+    TEXCOORD2 = stage_input.TEXCOORD2;
+    COLOR = stage_input.COLOR;
+    COLOR1 = stage_input.COLOR1;
+    frag_main();
+    SPIRV_Cross_Output stage_output;
+    stage_output.SV_Target = SV_Target;
+    return stage_output;
+}
+
+/*
+//
+// Generated by Microsoft (R) HLSL Shader Compiler 10.1
+//
+//
+// Buffer Definitions:
+//
+// cbuffer Shader
+// {
+//
+//   uint4 g_shader_flags;              // Offset:    0 Size:    16
+//
+// }
+//
+// cbuffer Scene
+// {
+//
+//   float4 g_irradiance_r_transforms[4];// Offset:    0 Size:    64 [unused]
+//   float4 g_irradiance_g_transforms[4];// Offset:   64 Size:    64 [unused]
+//   float4 g_irradiance_b_transforms[4];// Offset:  128 Size:    64 [unused]
+//   float4 g_light_env_stage_diffuse;  // Offset:  192 Size:    16 [unused]
+//   float4 g_light_env_stage_specular; // Offset:  208 Size:    16 [unused]
+//   float4 g_light_env_chara_diffuse;  // Offset:  224 Size:    16
+//   float4 g_light_env_chara_ambient;  // Offset:  240 Size:    16
+//   float4 g_light_env_chara_specular; // Offset:  256 Size:    16 [unused]
+//   float4 g_light_env_reflect_diffuse;// Offset:  272 Size:    16 [unused]
+//   float4 g_light_env_reflect_ambient;// Offset:  288 Size:    16 [unused]
+//   float4 g_light_env_reflect_specular;// Offset:  304 Size:    16 [unused]
+//   float4 g_light_env_proj_diffuse;   // Offset:  320 Size:    16 [unused]
+//   float4 g_light_env_proj_specular;  // Offset:  336 Size:    16 [unused]
+//   float4 g_light_env_proj_position;  // Offset:  352 Size:    16 [unused]
+//   float4 g_light_stage_dir;          // Offset:  368 Size:    16 [unused]
+//   float4 g_light_stage_diff;         // Offset:  384 Size:    16 [unused]
+//   float4 g_light_stage_spec;         // Offset:  400 Size:    16 [unused]
+//   float4 g_light_chara_dir;          // Offset:  416 Size:    16
+//   float4 g_light_chara_spec;         // Offset:  432 Size:    16 [unused]
+//   float4 g_light_chara_luce;         // Offset:  448 Size:    16
+//   float4 g_light_chara_back;         // Offset:  464 Size:    16 [unused]
+//   float4 g_light_face_diff;          // Offset:  480 Size:    16 [unused]
+//   float4 g_chara_color0;             // Offset:  496 Size:    16 [unused]
+//   float4 g_chara_color1;             // Offset:  512 Size:    16 [unused]
+//   float4 g_chara_f_dir;              // Offset:  528 Size:    16
+//   float4 g_chara_f_ambient;          // Offset:  544 Size:    16
+//   float4 g_chara_f_diffuse;          // Offset:  560 Size:    16
+//   float4 g_chara_tc_param;           // Offset:  576 Size:    16
+//   float4 g_fog_depth_color;          // Offset:  592 Size:    16 [unused]
+//   float4 g_fog_height_params;        // Offset:  608 Size:    16 [unused]
+//   float4 g_fog_height_color;         // Offset:  624 Size:    16 [unused]
+//   float4 g_fog_bump_params;          // Offset:  640 Size:    16 [unused]
+//   float4 g_fog_state_params;         // Offset:  656 Size:    16 [unused]
+//   float4 g_normal_tangent_transforms[3];// Offset:  672 Size:    48
+//   float4 g_esm_param;                // Offset:  720 Size:    16
+//   float4 g_self_shadow_receivers[6]; // Offset:  736 Size:    96 [unused]
+//   float4 g_shadow_ambient;           // Offset:  832 Size:    16 [unused]
+//   float4 g_shadow_ambient1;          // Offset:  848 Size:    16 [unused]
+//   float4 g_framebuffer_size;         // Offset:  864 Size:    16 [unused]
+//   float4 g_light_reflect_dir;        // Offset:  880 Size:    16 [unused]
+//   float4 g_clip_plane;               // Offset:  896 Size:    16 [unused]
+//   float4 g_npr_cloth_spec_color;     // Offset:  912 Size:    16 [unused]
+//   float4 g_view[3];                  // Offset:  928 Size:    48
+//   float4 g_view_inverse[3];          // Offset:  976 Size:    48 [unused]
+//   float4 g_projection_view[4];       // Offset: 1024 Size:    64 [unused]
+//   float4 g_view_position;            // Offset: 1088 Size:    16 [unused]
+//   float4 g_light_projection[4];      // Offset: 1104 Size:    64 [unused]
+//   float4 g_light_projection_depth[4];// Offset: 1168 Size:    64 [unused]
+//   float4 g_foward_z_projection_row2; // Offset: 1232 Size:    16 [unused]
+//
+// }
+//
+// cbuffer Batch
+// {
+//
+//   float4 g_transforms[4];            // Offset:    0 Size:    64 [unused]
+//   float4 g_worlds[3];                // Offset:   64 Size:    48 [unused]
+//   float4 g_worlds_invtrans[3];       // Offset:  112 Size:    48 [unused]
+//   float4 g_worldview[3];             // Offset:  160 Size:    48 [unused]
+//   float4 g_worldview_inverse[3];     // Offset:  208 Size:    48 [unused]
+//   float4 g_joint[3];                 // Offset:  256 Size:    48 [unused]
+//   float4 g_joint_inverse[3];         // Offset:  304 Size:    48 [unused]
+//   float4 g_texcoord_transforms[4];   // Offset:  352 Size:    64 [unused]
+//   float4 g_blend_color;              // Offset:  416 Size:    16 [unused]
+//   float4 g_offset_color;             // Offset:  432 Size:    16 [unused]
+//   float4 g_material_state_diffuse;   // Offset:  448 Size:    16 [unused]
+//   float4 g_material_state_ambient;   // Offset:  464 Size:    16 [unused]
+//   float4 g_material_state_emission;  // Offset:  480 Size:    16
+//   float4 g_material_state_shininess; // Offset:  496 Size:    16 [unused]
+//   float4 g_material_state_specular;  // Offset:  512 Size:    16 [unused]
+//   float4 g_fresnel_coefficients;     // Offset:  528 Size:    16 [unused]
+//   float4 g_texture_color_coefficients;// Offset:  544 Size:    16 [unused]
+//   float4 g_texture_color_offset;     // Offset:  560 Size:    16 [unused]
+//   float4 g_texture_specular_coefficients;// Offset:  576 Size:    16 [unused]
+//   float4 g_texture_specular_offset;  // Offset:  592 Size:    16 [unused]
+//   float4 g_shininess;                // Offset:  608 Size:    16 [unused]
+//   float4 g_max_alpha;                // Offset:  624 Size:    16 [unused]
+//   float4 g_morph_weight;             // Offset:  640 Size:    16 [unused]
+//   float4 g_sss_param;                // Offset:  656 Size:    16
+//   float4 g_bump_depth;               // Offset:  672 Size:    16 [unused]
+//   float4 g_intensity;                // Offset:  688 Size:    16 [unused]
+//   float4 g_reflect_uv_scale;         // Offset:  704 Size:    16 [unused]
+//   float4 g_shadow_position[2];       // Offset:  720 Size:    32 [unused]
+//   float4 g_shadow_direction[2];      // Offset:  752 Size:    32 [unused]
+//   float4 g_shadow_param;             // Offset:  784 Size:    16 [unused]
+//   uint4 g_skip_flags;                // Offset:  800 Size:    16 [unused]
+//
+// }
+//
+//
+// Resource Bindings:
+//
+// Name                                 Type  Format         Dim      HLSL Bind  Count
+// ------------------------------ ---------- ------- ----------- -------------- ------
+// g_samplers[0]                     sampler      NA          NA             s0      1
+// g_samplers[3]                     sampler      NA          NA             s3      1
+// g_shadow_depth_sampler            sampler      NA          NA             s7      1
+// g_ibl_samplers[0]                 sampler      NA          NA             s9      1
+// g_textures[0]                     texture  float4          2d             t0      1
+// g_textures[3]                     texture  float4          2d             t3      1
+// g_ibl_textures[0]                 texture  float4        cube             t9      1
+// g_shadow_depth_textures[0]        texture  float4          2d            t19      1
+// Shader                            cbuffer      NA          NA            cb0      1
+// Scene                             cbuffer      NA          NA            cb1      1
+// Batch                             cbuffer      NA          NA            cb2      1
+//
+//
+//
+// Input signature:
+//
+// Name                 Index   Mask Register SysValue  Format   Used
+// -------------------- ----- ------ -------- -------- ------- ------
+// SV_POSITION              0   xyzw        0      POS   float
+// NORMAL                   0   xyz         1     NONE   float   xyz
+// TEXCOORD                 0   xyzw        2     NONE   float   xy
+// TEXCOORD                 1   xyz         3     NONE   float
+// TEXCOORD                 2   xyzw        4     NONE   float   xyz
+// COLOR                    0   xyzw        5     NONE   float      w
+// COLOR                    1   xyzw        6     NONE   float      w
+//
+//
+// Output signature:
+//
+// Name                 Index   Mask Register SysValue  Format   Used
+// -------------------- ----- ------ -------- -------- ------- ------
+// SV_Target                0   xyzw        0   TARGET   float   xyzw
+//
+      0x00000000: ps_5_0
+      0x00000008: dcl_globalFlags refactoringAllowed
+      0x0000000C: dcl_constantbuffer CB0[1], immediateIndexed
+      0x0000001C: dcl_constantbuffer CB1[60], immediateIndexed
+      0x0000002C: dcl_constantbuffer CB2[42], immediateIndexed
+      0x0000003C: dcl_sampler s0, mode_default
+      0x00000048: dcl_sampler s3, mode_default
+      0x00000054: dcl_sampler s7, mode_default
+      0x00000060: dcl_sampler s9, mode_default
+      0x0000006C: dcl_resource_texture2d (float,float,float,float) t0
+      0x0000007C: dcl_resource_texture2d (float,float,float,float) t3
+      0x0000008C: dcl_resource_texturecube (float,float,float,float) t9
+      0x0000009C: dcl_resource_texture2d (float,float,float,float) t19
+      0x000000AC: dcl_input_ps linear v1.xyz
+      0x000000B8: dcl_input_ps linear v2.xy
+      0x000000C4: dcl_input_ps linear v4.xyz
+      0x000000D0: dcl_input_ps linear v5.w
+      0x000000DC: dcl_input_ps linear v6.w
+      0x000000E8: dcl_output o0.xyzw
+      0x000000F4: dcl_temps 7
+   0  0x000000FC: sample_indexable(texture2d)(float,float,float,float) r0.x, v2.xyxx, t0.wxyz, s0
+   1  0x00000128: lt r0.x, r0.x, cb2[41].w
+   2  0x00000148: discard_nz r0.x
+   3  0x00000154: dp3 r0.x, v1.xyzx, v1.xyzx
+   4  0x00000170: rsq r0.x, r0.x
+   5  0x00000184: mul r0.xyz, r0.xxxx, v1.xyzx
+   6  0x000001A0: and r1.xy, cb0[0].zwzz, l(1, 1, 0, 0)
+   7  0x000001CC: ieq r0.w, r1.x, l(1)
+   8  0x000001E8: ushr r1.z, cb0[0].y, l(31)
+   9  0x00000208: ieq r1.z, r1.z, l(1)
+  10  0x00000224: dp3 r2.y, cb1[58].xyzx, r0.xyzx
+  11  0x00000244: dp3 r2.z, cb1[59].xyzx, r0.xyzx
+  12  0x00000264: add r2.yz, r2.yyzy, l(0.000000, 2.000000, 2.000000, 0.000000)
+  13  0x0000028C: lt r1.w, cb2[30].w, l(0.150000)
+  14  0x000002AC: movc r2.x, r1.w, l(100.000000), r2.y
+  15  0x000002D0: and r1.zw, r1.zzzz, r2.xxxz
+  16  0x000002EC: and r1.zw, r0.wwww, r1.zzzw
+  17  0x00000308: if_z r1.y
+  18  0x00000314:   movc o0.yz, r0.wwww, r1.zzwz, cb2[41].yyzy
+  19  0x0000033C:   mov o0.x, cb2[41].x
+  20  0x00000354:   mov o0.w, l(0.010000)
+  21  0x00000368:   ret
+  22  0x0000036C: endif
+  23  0x00000370: dp3 r2.x, cb1[42].xyzx, r0.xyzx
+  24  0x00000390: dp3 r2.y, cb1[43].xyzx, r0.xyzx
+  25  0x000003B0: dp3 r2.z, cb1[44].xyzx, r0.xyzx
+  26  0x000003D0: ubfe r3.xy, l(1, 1, 0, 0), l(9, 12, 0, 0), cb0[0].zyzz
+  27  0x00000410: if_nz r3.x
+  28  0x0000041C:   sample_indexable(texture2d)(float,float,float,float) r1.y, v4.xyxx, t19.yxzw, s7
+  29  0x00000448:   add r1.y, r1.y, -v4.z
+  30  0x00000468:   mul r1.y, r1.y, cb1[45].x
+  31  0x00000488:   mul r1.y, r1.y, cb2[30].w
+  32  0x000004A8:   exp r1.y, r1.y
+  33  0x000004BC:   min r1.y, r1.y, l(1.000000)
+  34  0x000004D8:   dp3 r2.w, cb1[26].xyzx, r0.xyzx
+  35  0x000004F8:   add r2.w, r2.w, l(1.000000)
+  36  0x00000514:   min r2.w, r2.w, l(1.000000)
+  37  0x00000530:   mul r2.w, r2.w, r2.w
+  38  0x0000054C:   mul r2.w, r2.w, r2.w
+  39  0x00000568:   min r1.y, r1.y, r2.w
+  40  0x00000584:   mov r2.w, r1.y
+  41  0x00000598: else
+  42  0x0000059C:   mov r2.w, l(1.000000)
+  43  0x000005B0:   mov r1.y, l(1.000000)
+  44  0x000005C4: endif
+  45  0x000005C8: sample_indexable(texture2d)(float,float,float,float) r3.x, v2.xyxx, t3.wxyz, s3
+  46  0x000005F4: mul r1.y, r1.y, r3.x
+  47  0x00000610: mad r1.y, r1.y, l(0.700000), l(0.300000)
+  48  0x00000634: mul r1.y, r1.y, v6.w
+  49  0x00000650: mul r4.xyz, r1.yyyy, cb1[28].xyzx
+  50  0x00000670: eq r1.y, r2.w, l(1.000000)
+  51  0x0000068C: if_nz r1.y
+  52  0x00000698:   sample_l_indexable(texturecube)(float,float,float,float) r5.xyz, r2.xyzx, t9.xyzw, s9, l(0.000000)
+  53  0x000006CC: else
+  54  0x000006D0:   eq r1.y, r2.w, l(0.000000)
+  55  0x000006EC:   if_nz r1.y
+  56  0x000006F8:     sample_l_indexable(texturecube)(float,float,float,float) r5.xyz, r2.xyzx, t9.xyzw, s9, l(1.000000)
+  57  0x0000072C:   else
+  58  0x00000730:     sample_l_indexable(texturecube)(float,float,float,float) r6.xyz, r2.xyzx, t9.xyzw, s9, l(0.000000)
+  59  0x00000764:     sample_l_indexable(texturecube)(float,float,float,float) r2.xyz, r2.xyzx, t9.xyzw, s9, l(1.000000)
+  60  0x00000798:     add r6.xyz, -r2.xyzx, r6.xyzx
+  61  0x000007B8:     mad r5.xyz, r2.wwww, r6.xyzx, r2.xyzx
+  62  0x000007DC:   endif
+  63  0x000007E0: endif
+  64  0x000007E4: ine r1.x, r1.x, l(1)
+  65  0x00000800: mad r2.xyz, r5.xyzx, cb1[14].xyzx, cb1[15].xyzx
+  66  0x0000082C: movc r2.xyz, r1.xxxx, r2.xyzx, r5.xyzx
+  67  0x00000850: mad r2.xyz, r4.xyzx, l(1.000000, 0.900000, 1.000000, 0.000000), r2.xyzx
+  68  0x00000880: add r2.xyz, r2.xyzx, v5.wwww
+  69  0x0000089C: lt r1.x, l(0.990000), r3.x
+  70  0x000008B8: ieq r1.y, r3.y, l(1)
+  71  0x000008D4: dp3 r0.x, r0.xyzx, cb1[33].xyzx
+  72  0x000008F4: mad r0.x, r0.x, l(0.500000), l(0.500000)
+  73  0x00000918: add r0.x, r0.x, -cb1[36].x
+  74  0x0000093C: mul_sat r0.x, r0.x, cb1[36].y
+  75  0x0000095C: add r3.xyz, -cb1[34].xyzx, cb1[35].xyzx
+  76  0x00000984: mad r0.xyz, r0.xxxx, r3.xyzx, cb1[34].xyzx
+  77  0x000009AC: mul r0.xyz, r0.xyzx, cb1[36].zzzz
+  78  0x000009CC: and r0.xyz, r0.xyzx, r1.yyyy
+  79  0x000009E8: add r0.xyz, r0.xyzx, r2.xyzx
+  80  0x00000A04: movc r0.xyz, r1.xxxx, r0.xyzx, r2.xyzx
+  81  0x00000A28: movc o0.yz, r0.wwww, r1.zzwz, r0.yyzy
+  82  0x00000A4C: mov o0.x, r0.x
+  83  0x00000A60: mov o0.w, l(1.000000)
+  84  0x00000A74: ret
+// Approximately 85 instruction slots used
+*/
+
+/*
+// ---- Created with 3Dmigoto v1.3.16 on Tue Sep 02 15:46:11 2025
+
+cbuffer Shader : register(b0)
+{
+  uint4 g_shader_flags : packoffset(c0);
+}
+
+cbuffer Scene : register(b1)
+{
+  float4 g_irradiance_r_transforms[4] : packoffset(c0);
+  float4 g_irradiance_g_transforms[4] : packoffset(c4);
+  float4 g_irradiance_b_transforms[4] : packoffset(c8);
+  float4 g_light_env_stage_diffuse : packoffset(c12);
+  float4 g_light_env_stage_specular : packoffset(c13);
+  float4 g_light_env_chara_diffuse : packoffset(c14);
+  float4 g_light_env_chara_ambient : packoffset(c15);
+  float4 g_light_env_chara_specular : packoffset(c16);
+  float4 g_light_env_reflect_diffuse : packoffset(c17);
+  float4 g_light_env_reflect_ambient : packoffset(c18);
+  float4 g_light_env_reflect_specular : packoffset(c19);
+  float4 g_light_env_proj_diffuse : packoffset(c20);
+  float4 g_light_env_proj_specular : packoffset(c21);
+  float4 g_light_env_proj_position : packoffset(c22);
+  float4 g_light_stage_dir : packoffset(c23);
+  float4 g_light_stage_diff : packoffset(c24);
+  float4 g_light_stage_spec : packoffset(c25);
+  float4 g_light_chara_dir : packoffset(c26);
+  float4 g_light_chara_spec : packoffset(c27);
+  float4 g_light_chara_luce : packoffset(c28);
+  float4 g_light_chara_back : packoffset(c29);
+  float4 g_light_face_diff : packoffset(c30);
+  float4 g_chara_color0 : packoffset(c31);
+  float4 g_chara_color1 : packoffset(c32);
+  float4 g_chara_f_dir : packoffset(c33);
+  float4 g_chara_f_ambient : packoffset(c34);
+  float4 g_chara_f_diffuse : packoffset(c35);
+  float4 g_chara_tc_param : packoffset(c36);
+  float4 g_fog_depth_color : packoffset(c37);
+  float4 g_fog_height_params : packoffset(c38);
+  float4 g_fog_height_color : packoffset(c39);
+  float4 g_fog_bump_params : packoffset(c40);
+  float4 g_fog_state_params : packoffset(c41);
+  float4 g_normal_tangent_transforms[3] : packoffset(c42);
+  float4 g_esm_param : packoffset(c45);
+  float4 g_self_shadow_receivers[6] : packoffset(c46);
+  float4 g_shadow_ambient : packoffset(c52);
+  float4 g_shadow_ambient1 : packoffset(c53);
+  float4 g_framebuffer_size : packoffset(c54);
+  float4 g_light_reflect_dir : packoffset(c55);
+  float4 g_clip_plane : packoffset(c56);
+  float4 g_npr_cloth_spec_color : packoffset(c57);
+  float4 g_view[3] : packoffset(c58);
+  float4 g_view_inverse[3] : packoffset(c61);
+  float4 g_projection_view[4] : packoffset(c64);
+  float4 g_view_position : packoffset(c68);
+  float4 g_light_projection[4] : packoffset(c69);
+  float4 g_light_projection_depth[4] : packoffset(c73);
+  float4 g_foward_z_projection_row2 : packoffset(c77);
+}
+
+cbuffer Batch : register(b2)
+{
+  float4 g_transforms[4] : packoffset(c0);
+  float4 g_worlds[3] : packoffset(c4);
+  float4 g_worlds_invtrans[3] : packoffset(c7);
+  float4 g_worldview[3] : packoffset(c10);
+  float4 g_worldview_inverse[3] : packoffset(c13);
+  float4 g_joint[3] : packoffset(c16);
+  float4 g_joint_inverse[3] : packoffset(c19);
+  float4 g_texcoord_transforms[4] : packoffset(c22);
+  float4 g_blend_color : packoffset(c26);
+  float4 g_offset_color : packoffset(c27);
+  float4 g_material_state_diffuse : packoffset(c28);
+  float4 g_material_state_ambient : packoffset(c29);
+  float4 g_material_state_emission : packoffset(c30);
+  float4 g_material_state_shininess : packoffset(c31);
+  float4 g_material_state_specular : packoffset(c32);
+  float4 g_fresnel_coefficients : packoffset(c33);
+  float4 g_texture_color_coefficients : packoffset(c34);
+  float4 g_texture_color_offset : packoffset(c35);
+  float4 g_texture_specular_coefficients : packoffset(c36);
+  float4 g_texture_specular_offset : packoffset(c37);
+  float4 g_shininess : packoffset(c38);
+  float4 g_max_alpha : packoffset(c39);
+  float4 g_morph_weight : packoffset(c40);
+  float4 g_sss_param : packoffset(c41);
+  float4 g_bump_depth : packoffset(c42);
+  float4 g_intensity : packoffset(c43);
+  float4 g_reflect_uv_scale : packoffset(c44);
+  float4 g_shadow_position[2] : packoffset(c45);
+  float4 g_shadow_direction[2] : packoffset(c47);
+  float4 g_shadow_param : packoffset(c49);
+  uint4 g_skip_flags : packoffset(c50);
+}
+
+SamplerState g_samplers_0__s : register(s0);
+SamplerState g_samplers_3__s : register(s3);
+SamplerState g_shadow_depth_sampler_s : register(s7);
+SamplerState g_ibl_samplers_0__s : register(s9);
+Texture2D<float4> g_textures_0_ : register(t0);
+Texture2D<float4> g_textures_3_ : register(t3);
+TextureCube<float4> g_ibl_textures_0_ : register(t9);
+Texture2D<float4> g_shadow_depth_textures_0_ : register(t19);
+
+
+// 3Dmigoto declarations
+#define cmp -
+
+
+void main(
+  float4 v0 : SV_POSITION0,
+  float3 v1 : NORMAL0,
+  float4 v2 : TEXCOORD0,
+  float4 v3 : TEXCOORD1,
+  float4 v4 : TEXCOORD2,
+  float4 v5 : COLOR0,
+  float4 v6 : COLOR1,
+  out float4 o0 : SV_Target0)
+{
+  float4 r0,r1,r2,r3,r4,r5,r6;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  r0.x = g_textures_0_.Sample(g_samplers_0__s, v2.xy).w;
+  r0.x = cmp(r0.x < g_sss_param.w);
+  if (r0.x != 0) discard;
+  r0.x = dot(v1.xyz, v1.xyz);
+  r0.x = rsqrt(r0.x);
+  r0.xyz = v1.xyz * r0.xxx;
+  r1.xy = (int2)g_shader_flags.zw & int2(1,1);
+  r0.w = cmp((int)r1.x == 1);
+  r1.z = (uint)g_shader_flags.y >> 31;
+  r1.z = cmp((int)r1.z == 1);
+  r2.y = dot(g_view[0].xyz, r0.xyz);
+  r2.z = dot(g_view[1].xyz, r0.xyz);
+  r2.yz = float2(2,2) + r2.yz;
+  r1.w = cmp(g_material_state_emission.w < 0.150000006);
+  r2.x = r1.w ? 100 : r2.y;
+  r1.zw = r1.zz ? r2.xz : 0;
+  r1.zw = r0.ww ? r1.zw : 0;
+  if (r1.y == 0) {
+    o0.yz = r0.ww ? r1.zw : g_sss_param.yz;
+    o0.x = g_sss_param.x;
+    o0.w = 0.00999999978;
+    return;
+  }
+  r2.x = dot(g_normal_tangent_transforms[0].xyz, r0.xyz);
+  r2.y = dot(g_normal_tangent_transforms[1].xyz, r0.xyz);
+  r2.z = dot(g_normal_tangent_transforms[2].xyz, r0.xyz);
+  if (1 == 0) r3.x = 0; else if (1+9 < 32) {   r3.x = (uint)g_shader_flags.z << (32-(1 + 9)); r3.x = (uint)r3.x >> (32-1);  } else r3.x = (uint)g_shader_flags.z >> 9;
+  if (1 == 0) r3.y = 0; else if (1+12 < 32) {   r3.y = (uint)g_shader_flags.y << (32-(1 + 12)); r3.y = (uint)r3.y >> (32-1);  } else r3.y = (uint)g_shader_flags.y >> 12;
+  if (r3.x != 0) {
+    r1.y = g_shadow_depth_textures_0_.Sample(g_shadow_depth_sampler_s, v4.xy).x;
+    r1.y = -v4.z + r1.y;
+    r1.y = g_esm_param.x * r1.y;
+    r1.y = g_material_state_emission.w * r1.y;
+    r1.y = exp2(r1.y);
+    r1.y = min(1, r1.y);
+    r2.w = dot(g_light_chara_dir.xyz, r0.xyz);
+    r2.w = 1 + r2.w;
+    r2.w = min(1, r2.w);
+    r2.w = r2.w * r2.w;
+    r2.w = r2.w * r2.w;
+    r1.y = min(r2.w, r1.y);
+    r2.w = r1.y;
+  } else {
+    r2.w = 1;
+    r1.y = 1;
+  }
+  r3.x = g_textures_3_.Sample(g_samplers_3__s, v2.xy).w;
+  r1.y = r3.x * r1.y;
+  r1.y = r1.y * 0.699999988 + 0.300000012;
+  r1.y = v6.w * r1.y;
+  r4.xyz = g_light_chara_luce.xyz * r1.yyy;
+  r1.y = cmp(r2.w == 1.000000);
+  if (r1.y != 0) {
+    r5.xyz = g_ibl_textures_0_.SampleLevel(g_ibl_samplers_0__s, r2.xyz, 0).xyz;
+  } else {
+    r1.y = cmp(r2.w == 0.000000);
+    if (r1.y != 0) {
+      r5.xyz = g_ibl_textures_0_.SampleLevel(g_ibl_samplers_0__s, r2.xyz, 1).xyz;
+    } else {
+      r6.xyz = g_ibl_textures_0_.SampleLevel(g_ibl_samplers_0__s, r2.xyz, 0).xyz;
+      r2.xyz = g_ibl_textures_0_.SampleLevel(g_ibl_samplers_0__s, r2.xyz, 1).xyz;
+      r6.xyz = r6.xyz + -r2.xyz;
+      r5.xyz = r2.www * r6.xyz + r2.xyz;
+    }
+  }
+  r1.x = cmp((int)r1.x != 1);
+  r2.xyz = r5.xyz * g_light_env_chara_diffuse.xyz + g_light_env_chara_ambient.xyz;
+  r2.xyz = r1.xxx ? r2.xyz : r5.xyz;
+  r2.xyz = r4.xyz * float3(1,0.899999976,1) + r2.xyz;
+  r2.xyz = v5.www + r2.xyz;
+  r1.x = cmp(0.99000001 < r3.x);
+  r1.y = cmp((int)r3.y == 1);
+  r0.x = dot(r0.xyz, g_chara_f_dir.xyz);
+  r0.x = r0.x * 0.5 + 0.5;
+  r0.x = -g_chara_tc_param.x + r0.x;
+  r0.x = saturate(g_chara_tc_param.y * r0.x);
+  r3.xyz = g_chara_f_diffuse.xyz + -g_chara_f_ambient.xyz;
+  r0.xyz = r0.xxx * r3.xyz + g_chara_f_ambient.xyz;
+  r0.xyz = g_chara_tc_param.zzz * r0.xyz;
+  r0.xyz = r1.yyy ? r0.xyz : 0;
+  r0.xyz = r2.xyz + r0.xyz;
+  r0.xyz = r1.xxx ? r0.xyz : r2.xyz;
+  o0.yz = r0.ww ? r1.zw : r0.yz;
+  o0.x = r0.x;
+  o0.w = 1;
+  return;
+}
+*/

@@ -96,7 +96,7 @@ namespace CB
       float NPRContourStrength;
       float NPRContourRadius;
       float SSSEyeDodge;
-      float p0;
+      float SkinSpecular;
    };
    
    struct LumaGameData
