@@ -8866,6 +8866,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       texture_format_upgrades_2d_custom_aspect_ratios = { 16.f / 9.f }; 
       texture_format_upgrades_2d_aspect_ratio_pixel_threshold = 32; //leeway
+
+      // // samplers
+      // enable_samplers_upgrade = true; // even main forward lit breaks for neg lod bias (e.g. sky)
       
       // game
       game = new ProjectDivaMegaMix();

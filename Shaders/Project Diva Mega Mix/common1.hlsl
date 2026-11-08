@@ -757,6 +757,12 @@ float3 Tonemap_Do(in float3 colorU, in float3 colorT, in float2 uv, in Texture2D
       float3 color_scaled = colorT * ratio;
       float color_scaled_y = y_tonemapped_graded * ratio;
 
+      // debug to see if we can cram into LUT
+      // #if TEST
+      //   float3 color_scaled_test = /* Linear_to_PQ */(color_scaled / 20000.f);
+      //   if (any(color_scaled_test > 1)) color_scaled = float3(1,0,1);
+      // #endif
+
       //backup
       float3 color_scaled_bak = color_scaled;
 
