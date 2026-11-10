@@ -121,8 +121,8 @@ void main(
   float maxBlur = 0; // blur factor
 
   // samples top left -> bottom right
-  for (int i = 0; i < (int)g_dof_param.x; i++) {
-    for (int j = 0; j < (int)g_dof_param.x; j++) {
+  for (uint i = 0; i < (uint)g_dof_param.x / 10u; i++) {
+    for (uint j = 0; j < (uint)g_dof_param.x  / 10u; j++) {
       // tap
       float depth = g_depth.SampleLevel(g_sampler_s, float2(i, j) * pixSize + texCoord, 0);
       maxDepth = max(maxDepth, depth);
@@ -139,6 +139,7 @@ void main(
 
   // linearize max depth
   float linearMaxDepth = 1 / (maxDepth * g_depth_params.x + g_depth_params.y);
+  // AHHHHH!!!!! This is not even used in any later ps!
 
   o0.xy = float2(linearMaxDepth, maxBlur);
   return;

@@ -42,7 +42,6 @@ void main(
   r1.xy = g_tile.SampleLevel(g_sampler_s, r1.xy, 0).xy;
   r1.zw = g_tile.SampleLevel(g_sampler_s, r1.zw, 0).xy;
 
-  // 
   r1.x = min(r2.x, r1.x); // take min linear depth
   r1.y = max(r2.y, r1.y); // take max blur factor
 
@@ -77,6 +76,6 @@ void main(
   r0.y = max(r0.y, r2.y);
 
   o0.y = max(r0.y, r2.w);
-  o0.x = min(r0.x, r2.z);
+  o0.x = min(r0.x, r2.z); // not used by any later ps!!!
   return;
 }

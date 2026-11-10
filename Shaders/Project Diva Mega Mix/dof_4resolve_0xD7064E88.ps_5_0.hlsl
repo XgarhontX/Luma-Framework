@@ -8,6 +8,12 @@ cbuffer PsCommon : register(b0)
   float4 g_depth_params2 : packoffset(c2);
   float4 g_texcoord_offset_for_upsample : packoffset(c3);
   int4 g_dof_param : packoffset(c4);
+
+// g_depth_params 19.99983, 0.00017, 0.00, 0.00 (0 float4)
+// g_spread_scale 27193.05664, 9064.35254, 0.33333, 3.00 (16 float4)
+// g_depth_params2 3.76145, 1.59632, -0.01329, 2.26034 (32 float4)
+// g_texcoord_offset_for_upsample 0.00078, 0.00139, 0.00078, 0.00139 (48 float4)
+// g_dof_param 20, 8, 7, 8 (64 int4)
 }
 
 SamplerState g_filtered_rgb_sampler_s : register(s0);
@@ -15,16 +21,30 @@ SamplerState g_filtered_a_sampler_s : register(s1);
 SamplerState g_tile_sampler_s : register(s2);
 SamplerState g_full_res_color_sampler_s : register(s3);
 SamplerState g_full_res_depth_sampler_s : register(s4);
-Texture2D<float4> g_filtered_rgb : register(t0);
-Texture2D<float4> g_filtered_a : register(t1);
-Texture2D<float4> g_tile : register(t2);
+Texture2D<float3> g_filtered_rgb : register(t0);
+Texture2D<float>  g_filtered_a : register(t1);
+Texture2D<float2> g_tile : register(t2);
 Texture2D<float4> g_full_res_color : register(t3);
-Texture2D<float4> g_full_res_depth : register(t4);
+Texture2D<float>  g_full_res_depth : register(t4);
 
 
 // 3Dmigoto declarations
 #define cmp -
 
+// https://www.desmos.com/calculator/eudc3yupeo
+float CalculateBlurFactor(float linearDepth, float4 params)
+{
+  float blur = params.x - linearDepth;
+  blur = -params.y + abs(blur);
+  blur = max(0, blur);
+  blur = blur * blur;
+  blur = params.z * blur;
+  blur = 1.44269502 * blur;
+  blur = exp2(blur);
+  blur = 1 - blur;
+  blur = params.w * blur;
+  return blur;
+}
 
 void main(
   float4 v0 : SV_POSITION0,
@@ -35,11 +55,11 @@ void main(
   uint4 bitmask, uiDest;
   float4 fDest;
 
+  // original color
   r0.xyzw = g_full_res_color.SampleLevel(g_full_res_color_sampler_s, v1.xy, 0).xyzw;
-  r0.xyz = log2(abs(r0.xyz));
-  r0.xyz = float3(2.20000005,2.20000005,2.20000005) * r0.xyz;
-  r0.xyz = exp2(r0.xyz);
-  r1.x = cmp(3 >= (int)g_dof_param.w);
+  r0.xyz = pow(abs(r0.xyz), 2.2); // gamma decode (linearize)
+
+  r1.x = cmp(3 >= (int)g_dof_param.w); // BRUUH. Not quality levels again
   if (r1.x != 0) {
     r1.xy = -g_texcoord_offset_for_upsample.xy + v1.xy;
     r1.xyz = g_filtered_rgb.SampleLevel(g_filtered_rgb_sampler_s, r1.xy, 0).xyz;
@@ -175,16 +195,17 @@ void main(
   r2.x = g_full_res_depth.SampleLevel(g_full_res_depth_sampler_s, v1.xy, 0).x;
   r2.x = r2.x * g_depth_params.x + g_depth_params.y;
   r2.x = 1 / r2.x;
-  r2.x = g_depth_params2.x + -r2.x;
-  r2.x = -g_depth_params2.y + abs(r2.x);
-  r2.x = max(0, r2.x);
-  r2.x = r2.x * r2.x;
-  r2.x = g_depth_params2.z * r2.x;
-  r2.x = 1.44269502 * r2.x;
-  r2.x = exp2(r2.x);
-  r2.x = 1 + -r2.x;
-  r2.x = g_depth_params2.w * r2.x;
-  r2.y = g_tile.SampleLevel(g_tile_sampler_s, v1.zw, 0).y;
+  // r2.x = g_depth_params2.x + -r2.x;
+  // r2.x = -g_depth_params2.y + abs(r2.x);
+  // r2.x = max(0, r2.x);
+  // r2.x = r2.x * r2.x;
+  // r2.x = g_depth_params2.z * r2.x;
+  // r2.x = 1.44269502 * r2.x;
+  // r2.x = exp2(r2.x);
+  // r2.x = 1 + -r2.x;
+  // r2.x = g_depth_params2.w * r2.x;
+  r2.x = CalculateBlurFactor(r2.x, g_depth_params2);
+  r2.y = 100 /* g_tile.SampleLevel(g_tile_sampler_s, v1.zw, 0).y */; // TODO: if forced to 100, this is much better
   r2.xy = r2.xy * r2.xy;
   r2.xy = max(float2(0.5,0.5), r2.xy);
   r2.xy = float2(3.14159274,3.14159274) * r2.xy;
