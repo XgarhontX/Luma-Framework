@@ -1,0 +1,145 @@
+// dof_f2_render_tile0
+// ---- Created with 3Dmigoto v1.3.16 on Tue Sep 02 15:46:09 2025
+
+cbuffer PsCommon : register(b0)
+{
+  float4 g_depth_params : packoffset(c0); // depth linearize (because FOV ahh)
+  float4 g_spread_scale : packoffset(c1); // unused
+  float4 g_depth_params2 : packoffset(c2); // x: focal plane, y: aperture width, z: aperture shape, w: strength
+  float4 g_texcoord_offset_for_upsample : packoffset(c3); // unused
+  int4 g_dof_param : packoffset(c4); // x^2 = step count
+
+// g_depth_params 19.99983, 0.00017, 0.00, 0.00 (0 float4)
+// g_spread_scale 27193.05664, 9064.35254, 0.33333, 3.00 (16 float4)
+// g_depth_params2 3.76145, 1.59632, -0.01329, 2.26034 (32 float4)
+// g_texcoord_offset_for_upsample 0.00078, 0.00139, 0.00078, 0.00139 (48 float4)
+// g_dof_param 20, 8, 7, 8 (64 int4)
+}
+
+SamplerState g_sampler_s : register(s0); // point
+Texture2D<float> g_depth : register(t0); // full res
+
+// 3Dmigoto declarations
+#define cmp -
+
+// https://www.desmos.com/calculator/eudc3yupeo
+float CalculateBlurFactor(float linearDepth, float4 params) 
+{
+  float blur = params.x - linearDepth;
+  blur = -params.y + abs(blur);
+  blur = max(0, blur);
+  blur = blur * blur;
+  blur = params.z * blur;
+  blur = 1.44269502 * blur;
+  blur = exp2(blur);
+  blur = 1 - blur;
+  blur = params.w * blur;
+  return blur;
+}
+
+// creates tiled mask for depth of field, for subsequent blur calculations to kill/discard
+void main(
+  float4 v0 : SV_POSITION0,
+  float4 v1 : TEXCOORD0,
+  out float2 o0 : SV_Target0 // 192x108 (so 0.1 * 1920x1080) (always, regardless full res)
+)
+{
+  float4 r0,r1,r2,r3;
+  uint4 bitmask, uiDest;
+  float4 fDest;
+
+  // texel size
+  g_depth.GetDimensions(0, uiDest.x, uiDest.y, uiDest.z);
+  r0.xy = uiDest.xy;
+  r0.xy = (uint2)r0.xy;
+  r0.xy = float2(1,1) / r0.xy;
+
+  // center -> top left of search area
+  r0.z = (int)-g_dof_param.x;
+  r0.z = r0.z * 0.5 + 0.5;
+  r0.zw = r0.zz * r0.xy + v1.xy;
+
+//   // for loop: y dir
+//   r2.y = r0.w;
+//   r1.yzw = 0;
+//   while (true) {
+//     if (cmp((int)r1.w >= (int)g_dof_param.x) != 0) break; // e.g. 20 steps
+// 
+//     // for loop: x dir
+//     r2.zw = r1.yz;
+//     r2.x = r0.z;
+//     r3.x = 0;
+//     while (true) {
+//       if (cmp((int)r3.x >= (int)g_dof_param.x) != 0) break; // e.g. 20 steps
+// 
+//       // tap
+//       r3.y = g_depth.SampleLevel(g_sampler_s, r2.xy, 0).x;
+// 
+//       // max unlinearized depth (get linearized at o0 set)
+//       r2.z = max(r3.y, r2.z); 
+// 
+//       // linearize depth
+//       r3.y = r3.y * g_depth_params.x + g_depth_params.y;
+//       r3.y = 1 / r3.y;
+// 
+//       // blur factor/amount 
+//       r3.y = g_depth_params2.x + -r3.y;
+//       r3.y = -g_depth_params2.y + abs(r3.y);
+//       r3.y = max(0, r3.y);
+//       r3.y = r3.y * r3.y; // sqr
+//       r3.y = g_depth_params2.z * r3.y;
+//       r3.y = 1.44269502 * r3.y;
+//       r3.y = exp2(r3.y);
+//       r3.y = 1 + -r3.y;
+//       r3.y = g_depth_params2.w * r3.y;
+// 
+//       // max blur factor
+//       r2.w = max(r2.w, r3.y);
+// 
+//       // x++
+//       r2.x = r2.x + r0.x; // step
+//       r3.x = (int)r3.x + 1; // counter
+//     }
+//     r1.yz = r2.zw;
+// 
+//     // y++
+//     r2.y = r2.y + r0.y; // step
+//     r1.w = (int)r1.w + 1; // counter
+//   }
+// 
+//   // linearize max depth
+//   r0.x = r1.y * g_depth_params.x + g_depth_params.y;
+//   r1.x = 1 / r0.x;
+// 
+//   // out: x = linearized max depth, y = max blur factor
+//   o0.xy = r1.xz;
+
+  float2 pixSize = r0.xy;
+  float2 texCoord = r0.zw;
+
+  float maxDepth = 0; // unlinearized until after loop
+  float maxBlur = 0; // blur factor
+
+  // samples top left -> bottom right
+  for (int i = 0; i < (int)g_dof_param.x; i++) {
+    for (int j = 0; j < (int)g_dof_param.x; j++) {
+      // tap
+      float depth = g_depth.SampleLevel(g_sampler_s, float2(i, j) * pixSize + texCoord, 0);
+      maxDepth = max(maxDepth, depth);
+
+      // linearize depth
+      float linearDepth = 1 / (depth * g_depth_params.x + g_depth_params.y);
+
+      // blur factor
+      float blur = CalculateBlurFactor(linearDepth, g_depth_params2);
+
+      maxBlur = max(maxBlur, blur);
+    }
+  }
+
+  // linearize max depth
+  float linearMaxDepth = 1 / (maxDepth * g_depth_params.x + g_depth_params.y);
+
+  o0.xy = float2(linearMaxDepth, maxBlur);
+  return;
+}

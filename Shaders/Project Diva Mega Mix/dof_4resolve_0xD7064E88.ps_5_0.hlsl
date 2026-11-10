@@ -1,3 +1,4 @@
+// dof_f2_upsample
 // ---- Created with 3Dmigoto v1.3.16 on Tue Sep 02 15:46:11 2025
 
 cbuffer PsCommon : register(b0)
@@ -197,9 +198,7 @@ void main(
   r1.w = saturate(r1.w * 4 + -0.200000003);
   r0.xyz = -r1.xyz + r0.xyz;
   r0.xyz = r1.www * r0.xyz + r1.xyz;
-  r0.xyz = log2(abs(r0.xyz));
-  r0.xyz = float3(0.454545468,0.454545468,0.454545468) * r0.xyz;
-  o0.xyz = exp2(r0.xyz);
+  o0.xyz = pow(abs(r0.xyz), 1/2.2); // gamma encode
   o0.w = r0.w;
   return;
 }

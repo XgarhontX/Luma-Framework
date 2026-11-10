@@ -1,71 +1,88 @@
+// dof_f2_downsample
 // ---- Created with 3Dmigoto v1.3.16 on Tue Sep 02 15:46:05 2025
 
 cbuffer PsCommon : register(b0)
 {
   float4 g_depth_params : packoffset(c0);
   float4 g_spread_scale : packoffset(c1);
-  float4 g_depth_params2 : packoffset(c2);
+  float4 g_depth_params2 : packoffset(c2); // x: focal plane, yzw: aperture stuff
   float4 g_texcoord_offset_for_upsample : packoffset(c3);
   int4 g_dof_param : packoffset(c4);
 }
 
 SamplerState g_depth_sampler_s : register(s0);
 SamplerState g_color_sampler_s : register(s1);
-Texture2D<float4> g_depth : register(t0);
-Texture2D<float4> g_color : register(t1);
+Texture2D<float> g_depth : register(t0); // full res
+Texture2D<float4> g_color : register(t1); // full res
 
 
 // 3Dmigoto declarations
 #define cmp -
 
+// https://www.desmos.com/calculator/eudc3yupeo
+float CalculateBlurFactor(float linearDepth, float4 params)
+{
+  float blur = params.x - linearDepth;
+  blur = -params.y + abs(blur);
+  blur = max(0, blur);
+  blur = blur * blur;
+  blur = params.z * blur;
+  blur = 1.44269502 * blur;
+  blur = exp2(blur);
+  blur = 1 - blur;
+  blur = params.w * blur;
+  return blur;
+}
 
+// 0.5x downsample color
+// and spread scale calcuation (CoC stuff?)
 void main(
   float4 v0 : SV_POSITION0,
   float4 v1 : TEXCOORD0,
-  out float3 o0 : SV_Target0,
-  out float3 o1 : SV_Target1)
+  // r11g11b10f (bruh, they use this here but not anywhere else?)
+  out float3 o0 : SV_Target0, // downsample 0.5x color
+  out float3 o1 : SV_Target1 // x: 
+)
 {
+    // kernel texcoord offsets (Image Convolution Buffer?)
   const float4 icb[] = { { 0.000781, 0, 0.000781, 0},
-                              { 0.000241, -0.001321, 0, -0.001389},
-                              { 0.000241, 0.001321, -0.000781, 0},
-                              { -0.000632, -0.000816, 0, 0.001389},
-                              { -0.000632, 0.000816, 0.000781, 0},
-                              { -0.000552, -0.000982, -0.000241, -0.001203},
-                              { 0, -0.001389, -0.000241, 0.001203},
-                              { 0.000552, -0.000982, 0, 0},
-                              { -0.000781, 0, 0, 0},
-                              { 0.000781, 0, 0, 0},
-                              { -0.000552, 0.000982, 0, 0},
-                              { 0, 0.001389, 0, 0},
-                              { 0.000552, 0.000982, 0, 0} };
+                         { 0.000241, -0.001321, 0, -0.001389},
+                         { 0.000241, 0.001321, -0.000781, 0},
+                         { -0.000632, -0.000816, 0, 0.001389},
+                         { -0.000632, 0.000816, 0.000781, 0},
+                         { -0.000552, -0.000982, -0.000241, -0.001203},
+                         { 0, -0.001389, -0.000241, 0.001203},
+                         { 0.000552, -0.000982, 0, 0},
+                         { -0.000781, 0, 0, 0},
+                         { 0.000781, 0, 0, 0},
+                         { -0.000552, 0.000982, 0, 0},
+                         { 0, 0.001389, 0, 0},
+                         { 0.000552, 0.000982, 0, 0} };
   float4 r0,r1,r2,r3,r4;
   uint4 bitmask, uiDest;
   float4 fDest;
 
+  // depth center
   r0.xyzw = g_depth.Gather(g_depth_sampler_s, v1.xy).xyzw;
   r0.xy = min(r0.xz, r0.yw);
   r0.x = min(r0.x, r0.y);
+
+  // linearize depth center
   r0.x = r0.x * g_depth_params.x + g_depth_params.y;
   r0.x = 1 / r0.x;
-  r0.y = g_depth_params2.x + -r0.x;
-  r0.y = -g_depth_params2.y + abs(r0.y);
-  r0.y = max(0, r0.y);
-  r0.y = r0.y * r0.y;
-  r0.y = g_depth_params2.z * r0.y;
-  r0.y = 1.44269502 * r0.y;
-  r0.y = exp2(r0.y);
-  r0.y = 1 + -r0.y;
-  r0.y = g_depth_params2.w * r0.y;
-  r0.z = 0.333333343 * r0.y;
+
+  // blur factor https://www.desmos.com/calculator/eudc3yupeo
+  r0.y = CalculateBlurFactor(r0.x, g_depth_params2);
+
+  r0.z = 0.333333343 * r0.y; // TODO: tile does not have this, why? just some fudge?
+
   r1.xyz = g_color.SampleLevel(g_color_sampler_s, v1.xy, 0).xyz;
-  r0.w = cmp((int)g_dof_param.y == 5);
-  if (r0.w != 0) {
+  if (cmp((int)g_dof_param.y == 5) != 0) {
     r2.xyz = r1.xyz;
     r0.w = 1;
     r1.w = 0;
     while (true) {
-      r2.w = cmp((int)r1.w >= 5);
-      if (r2.w != 0) break;
+      if (cmp((int)r1.w >= 5) != 0) break;
       r3.xy = icb[r1.w+0].xy * r0.zz + v1.xy;
       r4.xyzw = g_depth.Gather(g_depth_sampler_s, r3.xy).xyzw;
       r4.xyzw = r4.xyzw * g_depth_params.xxxx + g_depth_params.yyyy;
@@ -81,8 +98,7 @@ void main(
       r1.w = (int)r1.w + 1;
     }
   } else {
-    r1.w = cmp((int)g_dof_param.y == 4);
-    if (r1.w != 0) {
+    if (cmp((int)g_dof_param.y == 4) != 0) {
       r2.xyz = r1.xyz;
       r0.w = 1;
       r1.w = 0;
@@ -104,8 +120,7 @@ void main(
         r1.w = (int)r1.w + 1;
       }
     } else {
-      r1.w = cmp((int)g_dof_param.y == 3);
-      if (r1.w != 0) {
+      if (cmp((int)g_dof_param.y == 3) != 0) {
         r2.xyz = r1.xyz;
         r0.w = 1;
         r1.w = 0;
@@ -131,8 +146,7 @@ void main(
         r0.w = 1;
         r1.w = 0;
         while (true) {
-          r2.w = cmp((int)r1.w >= 8);
-          if (r2.w != 0) break;
+          if (cmp((int)r1.w >= 8) != 0) break;
           r3.xy = icb[r1.w+5].xy * r0.zz + v1.xy;
           r4.xyzw = g_depth.Gather(g_depth_sampler_s, r3.xy).xyzw;
           r4.xyzw = r4.xyzw * g_depth_params.xxxx + g_depth_params.yyyy;
@@ -152,14 +166,15 @@ void main(
   }
   r0.x = 1 / r0.w;
   r0.xzw = r2.xyz * r0.xxx;
-  r0.xzw = log2(abs(r0.xzw));
-  r0.xzw = float3(2.20000005,2.20000005,2.20000005) * r0.xzw;
-  o0.xyz = exp2(r0.xzw);
+  o0.xyz = pow(abs(r0.xzw), 2.2); // gamma decode (linearize)
+
   r0.x = r0.y * r0.y;
   r0.x = max(0.5, r0.x);
   r0.x = 3.14159274 * r0.x;
   o1.z = 1 / r0.x;
+
   o1.x = g_spread_scale.z * r0.y;
-  o1.y = 0;
+
+  o1.y = 0; // bruh
   return;
 }
