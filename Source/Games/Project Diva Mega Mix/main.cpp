@@ -404,7 +404,7 @@ namespace OutputHandling
    bool IsHDR10() { return swapchain_upgrade_type == SwapchainUpgradeType::HDR10; }
    bool IsSDR8bit() { return swapchain_upgrade_type == SwapchainUpgradeType::None; }
 
-   void OnDLL()
+   void OnDLLAttach()
    {
       // scRGB rgba16f
       swapchain_upgrade_type         = SwapchainUpgradeType::scRGB;
@@ -432,9 +432,10 @@ namespace OutputHandling
       else if (IsSDR8bit()) def_val = "2";
       native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_ToSwapchain), ShaderDefinition{ Luma_MegaMix_ToSwapchain, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "main", {{ "CUSTOM_TOSWAPCHAIN", def_val}}});
 
-      // Native Shaders: Display Composition replacement (will break DEVELOPMENT debug draw, but whatever)
+      // Native Shaders: Display Composition replacement (for PUBLISHING, breaks DEVELOPMENT debug draw)
       if (!IsSCRGB())
       {
+         ASSERT_ONCE_MSG(!DEVELOPMENT && !TEST, "Display Composition replaced in DEVELOPMENT. Debug will not work.");
          native_shaders_definitions.erase(CompileTimeStringHash("Display Composition"));
          native_shaders_definitions.emplace(CompileTimeStringHash("Display Composition"), ShaderDefinition{"Luma_MegaMix_DisplayComposition", reshade::api::pipeline_subobject_type::pixel_shader});
       }
@@ -629,7 +630,6 @@ namespace ShaderDefineInfo
    constexpr uint32_t XEGTAO_NORMALSMOOTH_QUALITY       = char_ptr_crc32("XEGTAO_NORMALSMOOTH_QUALITY");
    constexpr uint32_t XEGTAO_CHECKBOARD                 = char_ptr_crc32("XEGTAO_CHECKBOARD");
    constexpr uint32_t XEGTAO_UPSAMPLE                   = char_ptr_crc32("XEGTAO_UPSAMPLE");
-   constexpr uint32_t XEGTAO_MANUALSIZE                 = char_ptr_crc32("XEGTAO_MANUALSIZE");
    constexpr uint32_t XEGTAO_THREADS_AO                 = char_ptr_crc32("XEGTAO_THREADS_AO");
    constexpr uint32_t CUSTOM_PS4BLUR_1                  = char_ptr_crc32("CUSTOM_PS4BLUR_1");
    constexpr uint32_t CUSTOM_HDRTONEMAPONSDR            = char_ptr_crc32("CUSTOM_HDRTONEMAPONSDR");
@@ -681,7 +681,6 @@ namespace ShaderDefineInfo
          {"XEGTAO_HALFRES", '1', true, false, "XeGTAO half resolution.", 1},
          {"XEGTAO_NOISE", '4', true, false, "XeGTAO moving noise.", 9},
          {"XEGTAO_NORMALSMOOTH_QUALITY", '1', true, false, "XeGTAO smooth normals quality.", 2},
-         {"XEGTAO_MANUALSIZE", '0', true, false, "XeGTAO compute viewport size in shader.", 1},
          {"XEGTAO_CHECKBOARD", '0', true, false, "XeGTAO checkerboard rendering.", 2},
          {"XEGTAO_UPSAMPLE", '1', true, false, "XeGTAO Joint Bilateral Upsample.", 1},
          {"XEGTAO_THREADS_AO", '1', true, false, "XeGTAO compute shader thread groups.", 1},
@@ -6535,6 +6534,10 @@ namespace RenderTracker // partial
          res_main_color_tex->GetDesc(&tex_desc);
          res_main_color_size = {tex_desc.Width, tex_desc.Height};
 
+         // also set cb_luma_global_settings
+         cb_luma_global_settings.RenderSize = float2(res_main_color_size.x, res_main_color_size.y);
+         cb_luma_global_settings.RenderInvSize = float2(1.0f / cb_luma_global_settings.RenderSize.x, 1.0f / cb_luma_global_settings.RenderSize.y);
+
          // compare with depth
          if (res_main_depth_size.x > 0 && res_main_depth_size.y > 0
             && (res_main_depth_size.x != tex_desc.Width || res_main_depth_size .y != tex_desc.Height))
@@ -7642,9 +7645,6 @@ public:
       }
 
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
-      
-      // XEGTAO_MANUALSIZE auto toggle
-      ShaderDefineInfo::Set(ShaderDefineInfo::XEGTAO_MANUALSIZE, !RenderTracker::IsResolutionRenderEqualsOutput());
 
       ImGui::PushID("###XeGTAO");
       if (DrawCollapsingHeaderEnabledColored("Ambient Occlusion", XeGTAO::enabled))
@@ -7736,9 +7736,7 @@ public:
                XeGTAO::HardReset();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                ImGui::SetTooltip("Reset XeGTAO resources to then recreate.\nShould not be needed unless you change the game's resolution or something.");
-
-            if (UserSettingsMisc::imgui_show_advanced) {ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Size same as swapchain: %s", ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_MANUALSIZE) ? "No" : "Yes");}
-         
+            
             int _debug_out = XeGTAO::debug_out;
             ImGui::Combo("Debug View", &_debug_out, "None\0AO\0Normals\0Depth");
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Draw various debug views that is used by AO.");
@@ -8856,7 +8854,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       Installation::OnDLLMainEarly(hModule);
       
       // swapchain upgrade
-      OutputHandling::OnDLL();
+      OutputHandling::OnDLLAttach();
 
       // texture upgrade
       texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;

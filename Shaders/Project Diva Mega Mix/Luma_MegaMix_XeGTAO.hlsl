@@ -214,20 +214,26 @@ bool IsEvenFrame() { return LumaSettings.FrameIndex % 2 == 0; }
 
 void GetViewport(Texture2D viewportTexture, out float2 viewportSize, out float2 viewportSizeInv, bool isHalf = true) 
 {
-#if XEGTAO_MANUALSIZE == 1
-    uint w, h;
-    viewportTexture.GetDimensions(w, h);
-    viewportSize = float2(w, h);
-    viewportSizeInv = 1.0 / viewportSize;
-#else
-    if (!isHalf) {
-        viewportSize = LumaSettings.SwapchainSize;
-        viewportSizeInv = LumaSettings.SwapchainInvSize;
-    } else {
-        viewportSize = LumaSettings.SwapchainSize * 2.f;
-        viewportSizeInv = LumaSettings.SwapchainInvSize * 2.f;
+// #if XEGTAO_MANUALSIZE == 1
+//     uint w, h;
+//     viewportTexture.GetDimensions(w, h);
+//     viewportSize = float2(w, h);
+//     viewportSizeInv = 1.0 / viewportSize;
+// #else
+//     if (!isHalf) {
+//         viewportSize = LumaSettings.SwapchainSize;
+//         viewportSizeInv = LumaSettings.SwapchainInvSize;
+//     } else {
+//         viewportSize = LumaSettings.SwapchainSize * 2.f;
+//         viewportSizeInv = LumaSettings.SwapchainInvSize * 2.f;
+//     }
+// #endif
+    viewportSize = LumaSettings.RenderSize;
+    viewportSizeInv = LumaSettings.RenderInvSize;
+    if (isHalf) {
+        viewportSize *= 2.f;
+        viewportSizeInv *= 2.f;
     }
-#endif
 }
 
 GTAOConstants GetNDCToView(GTAOConstants c)
