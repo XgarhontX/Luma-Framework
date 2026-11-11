@@ -4031,6 +4031,7 @@ namespace DepthOfField
       Vanilla,
       Disable,
       Enhanced,
+      
    };
    Enabled enabled = Vanilla;
    constexpr const char* reshadesave_enabled = "DepthOfFieldEnabled";
@@ -7101,11 +7102,7 @@ public:
             vp0.MaxDepth = 1.f;
             vp0.TopLeftX = 0.f;
             vp0.TopLeftY = 0.f;
-            D3D11_VIEWPORT vp1 = vp0;
-            D3D11_VIEWPORT vp2 = vp0;
-
-            std::array<D3D11_VIEWPORT, 3> vps = { vp0, vp1, vp2 };
-            native_device_context->RSSetViewports(vps.size(), vps.data());
+            native_device_context->RSSetViewports(1, &vp0);
          }
 
          return DrawOrDispatchOverrideType::None;
