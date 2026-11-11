@@ -113,6 +113,7 @@ namespace CB
 
     #define GS_MovPeakRatio LumaSettings.GameSettings.MovPeakRatio
     #define GS_MovShoulderPow LumaSettings.GameSettings.MovShoulderPow
+
 #else
     struct LumaGameSettings
     {
@@ -191,6 +192,7 @@ namespace CB
 
     #define GS_MovPeakRatio 1
     #define GS_MovShoulderPow 0
+
 
     #ifndef __cplusplus
         // #if ((__SHADER_TARGET_MAJOR == 5 && __SHADER_TARGET_MINOR >= 1) || __SHADER_TARGET_MAJOR >= 6)

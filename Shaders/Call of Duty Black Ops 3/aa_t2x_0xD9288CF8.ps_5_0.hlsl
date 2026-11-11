@@ -245,6 +245,42 @@ void main(
   o1 = 1; //for AA temporal, so dont care.
   return;
 }
+#elif CUSTOM_TAA == 1
+#include "./Includes/Common.hlsl"
+#include "./Includes/TAAResolve.hlsl"
+
+cbuffer PostFxCBuffer : register(b8)
+{
+  float2 jitterCurrent : packoffset(c0);
+  float2 jitterHistory : packoffset(c0.z);
+}
+
+cbuffer PerSceneConsts : register(b1)
+{
+  float4 renderTargetSize : packoffset(c44);
+}
+
+SamplerState bilinearSampler : register(s0);
+Texture2D<float4> colorTex : register(t0);
+Texture2D<float4> historyTex : register(t6);
+Texture2D<float4> lumaHistoryTex1 : register(t7);
+Texture2D<float4> lumaHistoryTex2 : register(t9);
+Texture2D<float4> lumaHistoryTex3 : register(t10);
+Texture2D<float4> velocityTex0 : register(t11);
+Texture2D<float4> velocityTex1 : register(t12);
+Texture2D<float4> depthTex : register(t14);
+
+void main(
+  float4 v0 : SV_POSITION0,
+  float2 v1 : TEXCOORD0,
+  out float3 o0 : SV_TARGET0,
+  out float o1 : SV_TARGET1)
+{
+  TAAResult r = TAA_Resolve(colorTex, historyTex, lumaHistoryTex1, lumaHistoryTex2, lumaHistoryTex3, velocityTex0, velocityTex1, depthTex, bilinearSampler,
+    v1.xy, jitterCurrent, jitterHistory, renderTargetSize.xy, renderTargetSize.zw, true);
+  o0 = r.color;
+  o1 = r.lumaCurrent;
+}
 #else
 cbuffer cb8_buf : register(b8)
 {

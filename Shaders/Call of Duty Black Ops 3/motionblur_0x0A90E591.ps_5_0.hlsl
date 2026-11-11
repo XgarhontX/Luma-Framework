@@ -198,7 +198,13 @@ void main(
   //color
   r0.xyzw = colorMapSampler.Sample(pointClamp_s, v1.xy).xyzw;
 
-  //threshold discard
+#if CUSTOM_MB == 1
+  {
+    float2 pixelPos = floor(renderTargetSize.xy * v1.xy);
+    float ign = frac(52.9829189 * frac(dot(pixelPos, float2(0.06711056, 0.00583715))));
+    r1.x = (ign - 0.5) * 0.5;
+  }
+#else
   r1.xy = renderTargetSize.xy * v1.xy;
   r1.xy = (uint2)r1.xy;
   r1.xy = (int2)r1.xy & int2(1,1);
@@ -206,6 +212,7 @@ void main(
   r1.x = r1.x * 0.5 + -0.25;
   r1.y = r1.y * 2 + -1;
   r1.x = r1.x * r1.y;
+#endif
   r1.yz = renderTargetSize.zw * r1.xx;
   r1.yz = r1.yz * float2(20,20) + v1.xy;
   r1.yzw = sceneVelocityTile1Sampler.Sample(pointClamp_s, r1.yz).xyz;

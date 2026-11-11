@@ -13,7 +13,18 @@
 // if DLSS, do DLSS right before final shader.
 #define CUSTOM_DLSS_KMS_1
 
+#define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
+
+#define LUMA_PATCH_BYTECODE_SYNC 1
+#define LUMA_PATCH_SYNC_MODE_CLONE 1
+
 #include "..\..\Core\core.hpp"
+#include "ShadowPatch.hpp"
+#include "AOCompute.hpp"
+#include "DepthCopySkip.hpp"
+#include "SMAAReference.hpp"
+#include "BloomCompute.hpp"
+#include "EnginePrepass.hpp"
 
 namespace Globals
 {
@@ -68,6 +79,7 @@ namespace OutputHandler // partial
    
    static PUBLISHING_CONSTEXPR bool force_hdr10_false = false;
    static bool IsHDR10() { return state == HDR10 && !force_hdr10_false; }
+   static bool SupportsWCG() { return state != sRGB; }
 
    static bool is_use16f = false;
    static const char* GetResourceQualityName()
@@ -113,7 +125,6 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_RCAS                      = char_ptr_crc32("CUSTOM_RCAS");
    constexpr uint32_t CUSTOM_LUTBUILDER_COLORSPACE     = char_ptr_crc32("CUSTOM_LUTBUILDER_COLORSPACE");
    constexpr uint32_t CUSTOM_LUTBUILDER_VANILLA        = char_ptr_crc32("CUSTOM_LUTBUILDER_VANILLA");
-   constexpr uint32_t CUSTOM_LUTBUILDER_SATBOOST       = char_ptr_crc32("CUSTOM_LUTBUILDER_SATBOOST");
    constexpr uint32_t CUSTOM_LUTBUILDER_NEUTRAL        = char_ptr_crc32("CUSTOM_LUTBUILDER_NEUTRAL");
    constexpr uint32_t CUSTOM_LUTBUILDER_NEUTRAL_LUMA   = char_ptr_crc32("CUSTOM_LUTBUILDER_NEUTRAL_LUMA");
    constexpr uint32_t CUSTOM_PCC                       = char_ptr_crc32("CUSTOM_PCC");
@@ -129,6 +140,11 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_GAMMA_CORRECTION_MODE     = char_ptr_crc32("CUSTOM_GAMMA_CORRECTION_MODE");
    constexpr uint32_t CUSTOM_BLACKFLOOR_LUT            = char_ptr_crc32("CUSTOM_BLACKFLOOR_LUT");
    constexpr uint32_t CUSTOM_PERCHANNELLUMAEMULATE     = char_ptr_crc32("CUSTOM_PERCHANNELLUMAEMULATE");
+   constexpr uint32_t CUSTOM_TAA                       = char_ptr_crc32("CUSTOM_TAA");
+   constexpr uint32_t CUSTOM_MB                        = char_ptr_crc32("CUSTOM_MB");
+   constexpr uint32_t CUSTOM_DOF                       = char_ptr_crc32("CUSTOM_DOF");
+   constexpr uint32_t CUSTOM_DOF_QUALITY               = char_ptr_crc32("CUSTOM_DOF_QUALITY");
+   constexpr uint32_t CUSTOM_SMAA_REFERENCE            = char_ptr_crc32("CUSTOM_SMAA_REFERENCE");
    
    static char InvertCharBool(char b)
    {
@@ -370,6 +386,40 @@ struct CallOfDutyBlackOps3GameDeviceData final : public GameDeviceData
    {
       return *static_cast<CallOfDutyBlackOps3GameDeviceData*>(device_data.game);
    }
+
+   struct MotionBlurScratch
+   {
+      D3D11_TEXTURE2D_DESC desc = {};
+      ComPtr<ID3D11Texture2D> tex;
+      ComPtr<ID3D11ShaderResourceView> srv;
+      void Reset() { desc = {}; tex.reset(); srv.reset(); }
+   } mb_scratch;
+   bool drawn_motionblur = false;
+   bool drawn_motionblur_prev = false;
+   bool drawn_motionblur_smoothed = false;
+   bool drawn_motionblur_smoothed_prev = false;
+   bool drawn_dof = false;
+   bool drawn_dof_prev = false;
+   bool drawn_taa_filmic = false;
+   bool drawn_taa_filmic_prev = false;
+   AOCompute::State ao_compute;
+   SMAAReference::Resources smaa_reference;
+   BloomCompute::DeviceState bloom_cs;
+   void OnPresentRenderingFixes()
+   {
+      bloom_cs.OnPresent();
+      smaa_reference.ResetFrame();
+      ao_compute.OnPresent();
+      DepthCopySkip::OnPresent();
+      drawn_taa_filmic_prev = drawn_taa_filmic;
+      drawn_taa_filmic = false;
+      drawn_motionblur_prev = drawn_motionblur;
+      drawn_motionblur = false;
+      drawn_motionblur_smoothed_prev = drawn_motionblur_smoothed;
+      drawn_motionblur_smoothed = false;
+      drawn_dof_prev = drawn_dof;
+      drawn_dof = false;
+   }
    
 #if ENABLE_SR == 1
    //jitter
@@ -534,6 +584,139 @@ struct CallOfDutyBlackOps3GameDeviceData final : public GameDeviceData
 #endif
 };
 
+namespace RenderingFixes
+{
+   constexpr uint32_t PS_HASH_MOTION_BLUR = 0x0A90E591;
+   constexpr uint32_t PS_HASH_DOF_GATHER = 0x337E4919;
+   constexpr uint32_t PS_HASH_DOF_GATHER_2 = 0xD21236FD;
+   constexpr uint32_t PS_HASH_TAA_FILMIC = 0x15FF4E6D;
+   constexpr uint32_t PS_HASH_TAA_FILMIC_2 = 0x8DABD8A0;
+
+   static bool IsMotionBlurSmoothEnabled()
+   {
+      return ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_MB);
+   }
+
+   static bool DrawMotionBlurWithSmoothing(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, CallOfDutyBlackOps3GameDeviceData& game_device_data, std::function<void()>& original_draw)
+   {
+      auto vs = device_data.native_vertex_shaders.find(Math::CompileTimeStringHash("Copy VS"));
+      auto ps = device_data.native_pixel_shaders.find(CompileTimeStringHash("CoDBO3 MotionBlurSmooth"));
+      if (vs == device_data.native_vertex_shaders.end() || !vs->second.get() || ps == device_data.native_pixel_shaders.end() || !ps->second.get()) return false;
+
+      ComPtr<ID3D11RenderTargetView> rtv;
+      ComPtr<ID3D11DepthStencilView> dsv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
+      if (!rtv.get()) return false;
+
+      ComPtr<ID3D11ShaderResourceView> velocity_srv;
+      ComPtr<ID3D11ShaderResourceView> tile_srv;
+      {
+         std::array<ID3D11ShaderResourceView*, 2> tmp = {};
+         native_device_context->PSGetShaderResources(6, static_cast<UINT>(tmp.size()), tmp.data());
+         velocity_srv.attach(tmp[0]);
+         tile_srv.attach(tmp[1]);
+      }
+      if (!velocity_srv.get() || !tile_srv.get()) return false;
+
+      ComPtr<ID3D11Resource> rt_res;
+      rtv->GetResource(rt_res.put());
+      ComPtr<ID3D11Texture2D> rt_tex;
+      if (!rt_res.get() || FAILED(rt_res->QueryInterface(rt_tex.put()))) return false;
+      D3D11_TEXTURE2D_DESC rt_desc;
+      rt_tex->GetDesc(&rt_desc);
+      D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
+      rtv->GetDesc(&rtv_desc);
+      if (rt_desc.SampleDesc.Count != 1 || rtv_desc.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D || rtv_desc.Texture2D.MipSlice != 0) return false;
+
+      auto& scratch = game_device_data.mb_scratch;
+      if (!scratch.tex.get() || scratch.desc.Width != rt_desc.Width || scratch.desc.Height != rt_desc.Height || scratch.desc.Format != rt_desc.Format)
+      {
+         scratch.Reset();
+         scratch.desc = rt_desc;
+         scratch.desc.MipLevels = 1;
+         scratch.desc.ArraySize = 1;
+         scratch.desc.Usage = D3D11_USAGE_DEFAULT;
+         scratch.desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+         scratch.desc.CPUAccessFlags = 0;
+         scratch.desc.MiscFlags = 0;
+         if (FAILED(native_device->CreateTexture2D(&scratch.desc, nullptr, scratch.tex.put())))
+         {
+            scratch.Reset();
+            return false;
+         }
+         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+         srv_desc.Format = rtv_desc.Format;
+         srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+         srv_desc.Texture2D.MostDetailedMip = 0;
+         srv_desc.Texture2D.MipLevels = 1;
+         if (FAILED(native_device->CreateShaderResourceView(scratch.tex.get(), &srv_desc, scratch.srv.put())))
+         {
+            scratch.Reset();
+            return false;
+         }
+         message(reshade::log::level::info, std::format("RenderingFixes: motion blur scratch texture created ({}x{}, format {})", rt_desc.Width, rt_desc.Height, static_cast<uint>(rt_desc.Format)).c_str());
+      }
+
+      original_draw();
+
+      native_device_context->CopySubresourceRegion(scratch.tex.get(), 0, 0, 0, 0, rt_res.get(), 0, nullptr);
+
+      DrawStateStack<DrawStateStackType::SimpleGraphics> draw_state_stack;
+      draw_state_stack.Cache(native_device_context, 0);
+      {
+         ID3D11ShaderResourceView* const extra_srvs[2] = { velocity_srv.get(), tile_srv.get() };
+         native_device_context->PSSetShaderResources(1, 2, extra_srvs);
+         DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), device_data.sampler_state_linear.get(), vs->second.get(), ps->second.get(),
+            scratch.srv.get(), rtv.get(), rt_desc.Width, rt_desc.Height, true);
+      }
+      draw_state_stack.Restore(native_device_context, true, true);
+
+      game_device_data.drawn_motionblur_smoothed = true;
+      return true;
+   }
+
+   static bool OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, CallOfDutyBlackOps3GameDeviceData& game_device_data, uint32_t ps, uint32_t cs, std::function<void()>* original_draw_dispatch_func)
+   {
+      DepthCopySkip::OnDrawOrDispatch(native_device_context, cs != 0);
+
+      if (cs != 0 && SMAAReference::IsSMAA1xHash(cs) && ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_SMAA_REFERENCE))
+      {
+         bool sr_active = false;
+#if ENABLE_SR == 1
+         sr_active = device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
+#endif
+         if (!sr_active && SMAAReference::OnDispatch(native_device, native_device_context, device_data, game_device_data.smaa_reference, cs))
+         {
+#if ENABLE_SR == 1
+            game_device_data.drawn_smaat2xprep = true;
+#endif
+            return true;
+         }
+      }
+
+      if (cs == 0 && BloomCompute::OnDraw(native_device, native_device_context, device_data, game_device_data.bloom_cs, ps, true))
+         return true;
+
+      if (cs == 0 && (AOCompute::IsGTAO(ps) || AOCompute::IsDenoise(ps)))
+      {
+         if (AOCompute::OnDraw(native_device, native_device_context, device_data, game_device_data.ao_compute, ps))
+         {
+#if ENABLE_SR == 1
+            if (AOCompute::IsGTAO(ps)) game_device_data.drawn_ao0 = true; else game_device_data.drawn_ao1 = true;
+#endif
+            return true;
+         }
+      }
+
+      if (ps == PS_HASH_DOF_GATHER || ps == PS_HASH_DOF_GATHER_2) game_device_data.drawn_dof = true;
+      if (ps == PS_HASH_TAA_FILMIC || ps == PS_HASH_TAA_FILMIC_2) game_device_data.drawn_taa_filmic = true;
+      if (ps != PS_HASH_MOTION_BLUR) return false;
+      game_device_data.drawn_motionblur = true;
+      if (!IsMotionBlurSmoothEnabled() || !original_draw_dispatch_func) return false;
+      return DrawMotionBlurWithSmoothing(native_device, native_device_context, device_data, game_device_data, *original_draw_dispatch_func);
+   }
+}
+
 namespace OutputHandler // partial //TODO: this is mega goofy. Luma needs a RenoDX-like auto swap back buffer to rgba16f but DisplayComposition to rgb10a2.
 {
    constexpr const char* const Flag_SDR = "Luma_8bitSDR";
@@ -562,7 +745,7 @@ namespace OutputHandler // partial //TODO: this is mega goofy. Luma needs a Reno
          desc.Height = device_data.display_resolution.y;
          desc.MipLevels = 1;
          desc.ArraySize = 1;
-         desc.Format = OutputHandler::is_use16f ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R11G11B10_FLOAT;
+         desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
          desc.SampleDesc.Count = 1;
          desc.Usage = D3D11_USAGE_DEFAULT;
          desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -1260,10 +1443,6 @@ namespace ForcedLODBias //TODO: other executables besides BO3Enhanced
       reshade::get_config_value(runtime, NAME, "r_modelLodBias", r_modelLodBias);
       if (r_modelLodBias != 1.f) SetModelLodBias(runtime, r_modelLodBias);
       
-#if DEVELOPMENT
-      reshade::get_config_value(runtime, NAME, "r_lightingShadowFilter", r_lightingShadowFilter);
-      if (r_lightingShadowFilter != -1) SetLightingShadowFilter(runtime, r_lightingShadowFilter);
-#endif
    }
 
    static void OnUI(reshade::api::effect_runtime* runtime)
@@ -1286,11 +1465,7 @@ namespace ForcedLODBias //TODO: other executables besides BO3Enhanced
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("(Unverified, can't tell difference.)\nBias multiplier for model LOD. Higher values increase LOD of models at a distance.");
       DrawResetButton(r_modelLodBias, 1.f, "r_modelLodBias", runtime);
 
-#if DEVELOPMENT
-      if (ImGui::SliderInt("r_lightingShadowFilter", &r_lightingShadowFilter, -1, 1)) SetLightingShadowFilter(runtime, r_lightingShadowFilter);
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Shadow Dither/Filtering. (The game heavily relies on this!)");
-      DrawResetButton(r_lightingShadowFilter, -1, "r_lightingShadowFilter", runtime);
-#endif
+      ImGui::Separator();
    }
 }
 #endif
@@ -1707,6 +1882,40 @@ namespace SectionedImGui
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_CHROMABER, "Chromatic Aberration",
             "Toggle chromatic aberration.\nSeldom usage, only in main menu and campaign cutscenes.");
 
+         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_TAA, "Improved Temporal AA",
+            "Toggle improved temporal AA.");
+         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_MB, "Improved Motion Blur",
+            "Toggle improved motion blur.");
+         bool dof_on = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_DOF, "Improved Depth of Field",
+            "Toggle improved DoF");
+         if (!dof_on) ImGui::BeginDisabled();
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DOF_QUALITY, "DoF Quality",
+            {"4 Rings (Original)", "6 Rings", "8 Rings"},
+            "Number of sample rings. Decreases ringing at a performance cost.");
+         if (!dof_on) ImGui::EndDisabled();
+         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_SMAA_REFERENCE, "Improved SMAA 1x",
+            "Toggle improved SMAA 1x");
+
+         ImGui::PushID("Shadows: Enabled");
+         if (ImGui::Checkbox("Soft Shadows", &ShadowPatch::enabled))
+            reshade::set_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
+         ImGui::PopID();
+         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Shadow Dither/Filtering. (The game heavily relies on this!)");
+         if (!ShadowPatch::enabled) ImGui::BeginDisabled();
+         {
+            int taps_index = ShadowPatch::taps == 32 ? 2 : ShadowPatch::taps == 16 ? 1 : 0;
+            ImGui::PushID("Shadows: Quality");
+            if (ImGui::Combo("Soft Shadow Quality", &taps_index, "8 Samples (Original)\0" "16 Samples\0" "32 Samples\0"))
+            {
+               ShadowPatch::taps = taps_index == 2 ? 32 : taps_index == 1 ? 16 : 8;
+               reshade::set_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
+            }
+            ImGui::PopID();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Soft shadow quality; The amount of samples for its filtering. Increase to try and reduce dithering at a performance cost.");
+            DrawResetButton(ShadowPatch::taps, 16, "ShadowKernelTaps", runtime);
+         }
+         if (!ShadowPatch::enabled) ImGui::EndDisabled();
+
 #if ENABLE_SR == 1
          ImGui::Separator();
 
@@ -1892,6 +2101,7 @@ namespace SectionedImGui
       }
 #endif
 
+      static void WCGApplyDefines();
       static void SimpleAdvancedSettings(DeviceData& device_data, reshade::api::effect_runtime* runtime)
       {
          if (IsSDRMode())
@@ -1902,60 +2112,33 @@ namespace SectionedImGui
          
          bool is_clicked;
 
-         if (OutputHandler::is_use16f)
+         if (OutputHandler::SupportsWCG())
          {
             // CUSTOM_LUTBUILDER_COLORSPACE
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 1.f, 1.f, 1.f));
-            ImGui::TextWrapped("[Fake Wide Color Gamut]");
+            ImGui::TextWrapped("[Wide Color Gamut]");
             ImGui::PopStyleColor();
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Helps perceptually bring back mid-high orange, but may make everything too \"10000%% Digital Vibrance\" looking.");
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(This is purely tomfoolery, as the original is non-wide BT.709 primaries. For real WCG, you need deep changes and regrading, e.g. Black Ops 4.)");
-            
+
             ImGui::PushID("Preset BT2020 Off");
             is_clicked = ImGui::Button("Off");
             ImGui::PopID();
             if (is_clicked)
             {
                ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, 0);
+               WCGApplyDefines();
             }
-            
+
             ImGui::SameLine();
-            ImGui::PushID("Preset BT2020 On 0");
-            is_clicked = ImGui::Button("Low");
+            ImGui::PushID("Preset BT2020 On");
+            is_clicked = ImGui::Button("On");
             ImGui::PopID();
             if (is_clicked)
             {
                ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, 1);
-               ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_LUTBUILDER_SATBOOST, 1);
-               cb_luma_global_settings.GameSettings.LUTBuilderExpansionChrominance = default_luma_global_game_settings.LUTBuilderExpansionChrominance;
-               cb_luma_global_settings.GameSettings.LUTBuilderExpansionLuminance = default_luma_global_game_settings.LUTBuilderExpansionLuminance;
-               cb_luma_global_settings.GameSettings.LUTBuilderHighlightSat = default_luma_global_game_settings.LUTBuilderHighlightSat;
-               cb_luma_global_settings.GameSettings.LUTBuilderHighlightSatHighlightsOnly = default_luma_global_game_settings.LUTBuilderHighlightSatHighlightsOnly;
-               reshade::set_config_value(runtime, NAME, "LUTBuilderExpansionChrominance", cb_luma_global_settings.GameSettings.LUTBuilderExpansionChrominance);
-               reshade::set_config_value(runtime, NAME, "LUTBuilderExpansionLuminance", cb_luma_global_settings.GameSettings.LUTBuilderExpansionLuminance);
-               reshade::set_config_value(runtime, NAME, "LUTBuilderHighlightSat", cb_luma_global_settings.GameSettings.LUTBuilderHighlightSat);
-               reshade::set_config_value(runtime, NAME, "LUTBuilderHighlightSatHighlightsOnly", cb_luma_global_settings.GameSettings.LUTBuilderHighlightSatHighlightsOnly);
-            }
-            
-            ImGui::SameLine();
-            ImGui::PushID("Preset BT2020 On 1");
-            is_clicked = ImGui::Button("High");
-            ImGui::PopID();
-            if (is_clicked)
-            {
-               ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, 1);
-               ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_LUTBUILDER_SATBOOST, 1);
-               cb_luma_global_settings.GameSettings.LUTBuilderExpansionChrominance = 0.85f;
-               cb_luma_global_settings.GameSettings.LUTBuilderExpansionLuminance = 0.25f;
-               cb_luma_global_settings.GameSettings.LUTBuilderHighlightSat = 0.2f;
-               cb_luma_global_settings.GameSettings.LUTBuilderHighlightSatHighlightsOnly = default_luma_global_game_settings.LUTBuilderHighlightSatHighlightsOnly;
-               reshade::set_config_value(runtime, NAME, "LUTBuilderExpansionChrominance", cb_luma_global_settings.GameSettings.LUTBuilderExpansionChrominance);
-               reshade::set_config_value(runtime, NAME, "LUTBuilderExpansionLuminance", cb_luma_global_settings.GameSettings.LUTBuilderExpansionLuminance);
-               reshade::set_config_value(runtime, NAME, "LUTBuilderHighlightSat", cb_luma_global_settings.GameSettings.LUTBuilderHighlightSat);
-               reshade::set_config_value(runtime, NAME, "LUTBuilderHighlightSatHighlightsOnly", cb_luma_global_settings.GameSettings.LUTBuilderHighlightSatHighlightsOnly);
+               WCGApplyDefines();
             }
          }
-         
+
          ImGui::Separator();
 
          //CUSTOM_LUTBUILDER_NEUTRAL
@@ -2302,58 +2485,27 @@ namespace SectionedImGui
          if (is_disabled) ImGui::EndDisabled();
       }
 
+      static void WCGApplyDefines()
+      {
+         const bool on = OutputHandler::SupportsWCG() && ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE);
+         if (!OutputHandler::SupportsWCG()) ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, 0);
+      }
+
       static void FakeWCG(DeviceData& device_data, reshade::api::effect_runtime* runtime)
       {
-         if (!OutputHandler::is_use16f)
-         {
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Fake WCG is disabled because the color buffers format is not high quality 16-bit float.");
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Create a flag file next to the executable named \"%s\" and restart.", OutputHandler::Flag_16fResources);
-            return;
-         }
-         
-         if (IsSDRMode())
+         if (!OutputHandler::SupportsWCG())
          {
             DrawCompletelyUselessButton();
             return;
          }
-         
+
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 1.f, 1.f, 1.f));
-         ImGui::TextWrapped("[Do some fake boost tomfoolery to push colors out wide.]");
+         ImGui::TextWrapped("[Wide Color Gamut]");
          ImGui::PopStyleColor();
 
-         bool is_on = ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, "LUT Builder BT2020",
+         ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, "LUT Builder BT2020",
             "Make the LUT Builder (and other stuff after) work in wider BT2020 to allow for wider colors from chrominance boosts.");
-
-         bool is_on1 = is_on;
-         if (!is_on1) ImGui::BeginDisabled(); 
-         is_on &= ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_LUTBUILDER_SATBOOST, "LUT Builder FakeBT2020 Gamut Expansion",
-            "A gamma utilizing gamut expansion.");
-         if (!is_on1) ImGui::EndDisabled();
-         
-         is_disabled = !is_on;
-         if (is_disabled) ImGui::BeginDisabled();
-         {
-            if (ImGui::SliderFloat("Expansion Chrominance", &cb_luma_global_settings.GameSettings.LUTBuilderExpansionChrominance, 0.f, 1.f))
-               reshade::set_config_value(runtime, NAME, "LUTBuilderExpansionChrominance", cb_luma_global_settings.GameSettings.LUTBuilderExpansionChrominance);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Already saturated colors will be boosted more.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTBuilderExpansionChrominance, default_luma_global_game_settings.LUTBuilderExpansionChrominance, "LUTBuilderExpansionChrominance", runtime);
-
-            if (ImGui::SliderFloat("Expansion Luminance", &cb_luma_global_settings.GameSettings.LUTBuilderExpansionLuminance, 0.f, 1.f))
-               reshade::set_config_value(runtime, NAME, "LUTBuilderExpansionLuminance", cb_luma_global_settings.GameSettings.LUTBuilderExpansionLuminance);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Gamut expansion will deepen colors.\nDecrease if too metallic feeling.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTBuilderExpansionLuminance, default_luma_global_game_settings.LUTBuilderExpansionLuminance, "LUTBuilderExpansionLuminance", runtime);
-         
-            if (ImGui::SliderFloat("Expansion Highlight Saturation", &cb_luma_global_settings.GameSettings.LUTBuilderHighlightSat, 0.f, 0.5f, "%.4f"))
-               reshade::set_config_value(runtime, NAME, "LUTBuilderHighlightSat", cb_luma_global_settings.GameSettings.LUTBuilderHighlightSat);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Boost saturation for LUT highlights.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTBuilderHighlightSat, default_luma_global_game_settings.LUTBuilderHighlightSat, "LUTBuilderHighlightSat", runtime);
-
-            if (ImGui::SliderFloat("Expansion Highlight Saturation High Pass", &cb_luma_global_settings.GameSettings.LUTBuilderHighlightSatHighlightsOnly, 1.f, 5.f))
-               reshade::set_config_value(runtime, NAME, "LUTBuilderHighlightSatHighlightsOnly", cb_luma_global_settings.GameSettings.LUTBuilderHighlightSatHighlightsOnly);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Increase to target highlights only.");
-            DrawResetButton(cb_luma_global_settings.GameSettings.LUTBuilderHighlightSatHighlightsOnly, default_luma_global_game_settings.LUTBuilderHighlightSatHighlightsOnly, "LUTBuilderHighlightSatHighlightsOnly", runtime);
-         }
-         if (is_disabled) ImGui::EndDisabled();
+         WCGApplyDefines();
       }
 
       static void PerChannelCorrection(DeviceData& device_data, reshade::api::effect_runtime* runtime)
@@ -2431,7 +2583,7 @@ namespace SectionedImGui
       {"(Advanced) RenoDX Color Grading",           [](DeviceData& d, reshade::api::effect_runtime* r){Templates::RenoDXColorGrade(d, r); }},
       {"(Advanced) Force Neutral LUT",              [](DeviceData& d, reshade::api::effect_runtime* r){Templates::NeutralLUT(d, r); }},
       {"(Advanced) Bypass Color Grade",             [](DeviceData& d, reshade::api::effect_runtime* r){Templates::BypassVanillaColorGrade(d, r); }},
-      {"(Advanced) Fake Wide Color Gamut",          [](DeviceData& d, reshade::api::effect_runtime* r){Templates::FakeWCG(d, r); }},
+      {"(Advanced) Wide Color Gamut",               [](DeviceData& d, reshade::api::effect_runtime* r){Templates::FakeWCG(d, r); }},
       {"(Advanced) Chrominance Extension",          [](DeviceData& d, reshade::api::effect_runtime* r){Templates::PerChannelCorrection(d, r); }},
    };
    static int sections_adv_start = 0;
@@ -2504,7 +2656,7 @@ namespace SectionedImGui
          }
 
          // CUSTOM_LUTBUILDER_COLORSPACE
-         if (!OutputHandler::is_use16f) ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_LUTBUILDER_COLORSPACE, 0);
+         SectionedImGui::Templates::WCGApplyDefines();
 
          //force no gamma correct in SDR
          if (cb_luma_global_settings.DisplayMode == DisplayModeType::SDR && ShaderDefineInfo::Get(GAMMA_CORRECTION_TYPE_HASH) == 1)
@@ -2622,9 +2774,8 @@ public:
          {"CUSTOM_RCAS", '0', true, false, "Enable Robust (4 instead of 8 samples) Contrast Adaptive Sharpening.", 1},
          {"RCAS_DENOISE", '0', true, false, "Denoising sharpening.\nMore smooth, but helps against dither pattern of shadows and AO.", 1},
          {"RCAS_LUMINANCE_BASED", '0', true, false, "Luma based sharpening. Apparently meh.", 1},
-         {"CUSTOM_LUTBUILDER_COLORSPACE", '0', true, false, "Change the LUT output (and other things after) to BT.2020 primaries for wider color from upgraded post processing reach final.", 1},
+         {"CUSTOM_LUTBUILDER_COLORSPACE", '1', true, false, "Change the LUT output (and other things after) to BT.2020 primaries for wider color from upgraded post processing reach final.", 1},
          {"CUSTOM_LUTBUILDER_VANILLA", '0', true, false, "Allow changing the strength of vanilla grading effects.", 1},
-         {"CUSTOM_LUTBUILDER_SATBOOST", '1', true, false, "Boost LUT chrominance by doing some goofy perceptual color space hacks.", 1},
          {"CUSTOM_LUTBUILDER_NEUTRAL", '0', true, false, "If LUT texture color is desaturated, blend to neutral color.\n0 - Off.\n1 - If desaturated.\n2 - Forcefully.", 2 },
          {"CUSTOM_LUTBUILDER_NEUTRAL_LUMA", '0', true, false, "Neutral blend type.\n0 - High passed.\n1 - Forcefully.", 2 },
          {"CUSTOM_PCC", '1', true, false, "Do per channel correction on SDR tonemapped colors to reduce blowout.", 1},
@@ -2638,6 +2789,11 @@ public:
          {"CUSTOM_BLACKFLOOR_LUT", '0', true, false, "Fix raised floor from LUT?", 2},
          {"CUSTOM_PERCHANNELLUMAEMULATE", '0', true, false, "Emulate how a per-channel tonemapper lowers luminance on bright single channel colors?", 2},
          {"CUSTOM_BLOOM_TONEMAP", '0', true, false, "Bloom final tonemapper after downsample aggregate.", 1},
+         {"CUSTOM_TAA", '1', true, false, "Better SMAA T2x temporal resolve", 1},
+         {"CUSTOM_MB", '1', true, false, "Better motion blur", 1},
+         {"CUSTOM_DOF", '1', true, false, "Less noisy DoF", 1},
+         {"CUSTOM_DOF_QUALITY", '1', true, false, "Number of sample rings. Decreases ringing at a performance cost.\n0 - 4 rings (80 samples, vanilla)\n1 - 6 rings (168 samples)\n2 - 8 rings (288 samples)", 2},
+         {"CUSTOM_SMAA_REFERENCE", '1', true, false, "Modern SMAA", 1},
          {"CUSTOM_SR", ENABLE_SR == 1 ? '1' : '0', true, false, "(AUTOMATICALLY HANDLED) Recompiles SMAA T2X (not filmic) according to SR type.", 1},
          {"CUSTOM_SDR", '0', true, false, "(AUTOMATICALLY HANDLED) Turn off FSFX HDR tradeoff encoding stuff.", 1},
          {"CUSTOM_LUMA", '1', true, true, "Denotes shaders to compile for Luma.", 1},
@@ -2665,6 +2821,12 @@ public:
       native_shaders_definitions.emplace(CompileTimeStringHash("CoDBO3 PreSR"), ShaderDefinition{"Luma_CoDBO3_PreSR", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("CoDBO3 LinearizeVelocity"), ShaderDefinition{"Luma_CoDBO3_LinearizeVelocity", reshade::api::pipeline_subobject_type::pixel_shader});
 #endif
+      native_shaders_definitions.emplace(CompileTimeStringHash("CoDBO3 MotionBlurSmooth"), ShaderDefinition{"Luma_CoDBO3_MotionBlurSmooth", reshade::api::pipeline_subobject_type::pixel_shader});
+      AOCompute::RegisterNativeShaders();
+      SMAAReference::AddNativeShaderDefinitions(native_shaders_definitions);
+      BloomCompute::RegisterNativeShaders(native_shaders_definitions);
+      EnginePrepass::Scan();
+      reshade::register_event<reshade::addon_event::clear_depth_stencil_view>(OnClearDepthStencilViewEvent);
       
       //cb
       luma_settings_cbuffer_index = 13;
@@ -2799,50 +2961,35 @@ public:
       // defines_need_recompilation = true;
    }
 
-   // std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
-   // {
-   //    //gatekeep: not ps & not 0x1B4B234D
-   //    if (type != reshade::api::pipeline_subobject_type::pixel_shader || shader_hash != static_cast<uint64_t>(0x1B4B234D))
-   //       return nullptr;
-   //    message(reshade::log::level::info, "PatchShaderBytecodeSync(): In!");
-   //
-   //    std::unique_ptr<std::byte[]> new_code = nullptr;
-   //
-   //    /*
-   //       2585  0x00012000: mul r0.xyz, r1.xyzx, cb1[85].yyyy
-   //       2586  0x00012020: ge r1.xyz, r0.xyzx, l(0.000061, 0.000061, 0.000061, 0.000000)
-   //       2587  0x00012048: and r0.xyz, r0.xyzx, r1.xyzx
-   //       2588  0x00012064: min o0.xyz, r0.xyzx, l(65024.000000, 65024.000000, 64512.000000, 0.000000)
-   //       2589  0x0001208C: ret 
-   //     */
-   //    //append max o0.xyz o0.xyz l(0.0, 0.0, 0.0, 0.0) before the return
-   //    std::vector<uint8_t> patch = {
-   //       0x34, 0x00, 0x00, 0x0A,  // max, length=10
-   //       0x72, 0x20, 0x10, 0x00,  // dest: o0.xyz (output, mask xyz)
-   //       0x00, 0x00, 0x00, 0x00,  // register index 0
-   //       0x46, 0x22, 0x10, 0x00,  // src1: o0.xyzx (output, swizzle xyzx)
-   //       0x00, 0x00, 0x00, 0x00,  // register index 0
-   //       0x46, 0x4E, 0x00, 0x00,  // src2: l() immediate32, swizzle xyzw
-   //       0x00, 0x00, 0x00, 0x00,  // 0.0f
-   //       0x00, 0x00, 0x00, 0x00,  // 0.0f
-   //       0x00, 0x00, 0x00, 0x00,  // 0.0f
-   //       0x00, 0x00, 0x00, 0x00,  // 0.0f
-   //    };
-   //    
-   //    size_t insert_byte_pos = size - sizeof(uint32_t); //ret is always last, always 1 dword
-   //    size_t new_size = size + patch.size();
-   //
-   //    new_code = std::make_unique<std::byte[]>(new_size);
-   //
-   //    std::memcpy(new_code.get(), code, insert_byte_pos);
-   //    std::memcpy(new_code.get() + insert_byte_pos, patch.data(), patch.size());
-   //    std::memcpy(new_code.get() + insert_byte_pos + patch.size(), code + insert_byte_pos, sizeof(uint32_t));
-   //
-   //    size = new_size;
-   //    message(reshade::log::level::info, "PatchShaderBytecodeSync(): Success!");
-   //
-   //    return new_code;
-   // }
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   {
+      BloomCompute::IdentifyShader(code, size, type, uint32_t(shader_hash));
+      return ShadowPatch::PatchLumaBytecode(code, size, type, shader_hash);
+   }
+
+   bool OnBindPatchedShader(DeviceData& device_data, uint32_t shader_hash, reshade::api::pipeline_subobject_type type) override
+   {
+      return ShadowPatch::enabled;
+   }
+
+   bool OverrideCopyResource(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource) override
+   {
+      return DepthCopySkip::OnCopy(reinterpret_cast<ID3D11Resource*>(dst_resource), reinterpret_cast<ID3D11Resource*>(src_resource), true);
+   }
+   bool OverrideCopyTextureRegion(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint32_t dst_subresource, const D3D11_BOX* dst_box, uint64_t& src_resource, uint32_t src_subresource, const D3D11_BOX* src_box) override
+   {
+      const bool full_copy = dst_subresource == 0 && src_subresource == 0 && dst_box == nullptr && src_box == nullptr;
+      return DepthCopySkip::OnCopy(reinterpret_cast<ID3D11Resource*>(dst_resource), reinterpret_cast<ID3D11Resource*>(src_resource), full_copy);
+   }
+   static bool OnClearDepthStencilViewEvent(reshade::api::command_list* cmd_list, reshade::api::resource_view dsv, const float* depth, const uint8_t* stencil, uint32_t rect_count, const reshade::api::rect* rects)
+   {
+      if (dsv.handle != 0)
+      {
+         reshade::api::resource res = cmd_list->get_device()->get_resource_from_view(dsv);
+         DepthCopySkip::OnClearDepthStencil(reinterpret_cast<ID3D11Resource*>(res.handle));
+      }
+      return false;
+   }
 
 #if ENABLE_SR == 1
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>&  original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
@@ -2863,6 +3010,11 @@ public:
       // HDR10
       OutputHandler::OnDrawOrDispatchOverrideBegin(native_device, native_device_context, cmd_list_data, device_data, game_device_data, ps);
       
+      ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+      if (RenderingFixes::OnDrawOrDispatch(native_device, native_device_context, device_data, game_device_data, ps, cs, original_draw_dispatch_func))
+         return DrawOrDispatchOverrideType::Skip;
+
       ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
       //case: Light/Reflection Probe Culling
@@ -3422,12 +3574,31 @@ public:
 
       //reset
       game_device_data.OnPresent(device_data.force_reset_sr);
+      game_device_data.OnPresentRenderingFixes();
    }
 
    void CleanExtraSRResources(DeviceData& device_data) override
    {
       auto& game_device_data = CallOfDutyBlackOps3GameDeviceData::GetGameDeviceData(device_data);
       game_device_data.ClearAllResourcesSR();
+   }
+#else
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>&  original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   {
+      auto ps = original_shader_hashes.pixel_shaders[0];
+      auto cs = original_shader_hashes.compute_shaders[0];
+      auto& game_device_data = CallOfDutyBlackOps3GameDeviceData::GetGameDeviceData(device_data);
+
+      if (RenderingFixes::OnDrawOrDispatch(native_device, native_device_context, device_data, game_device_data, ps, cs, original_draw_dispatch_func))
+         return DrawOrDispatchOverrideType::Skip;
+
+      return DrawOrDispatchOverrideType::None;
+   }
+
+   void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      auto& game_device_data = CallOfDutyBlackOps3GameDeviceData::GetGameDeviceData(device_data);
+      game_device_data.OnPresentRenderingFixes();
    }
 #endif
 
@@ -3481,6 +3652,12 @@ public:
       reshade::get_config_value(runtime, NAME, "GammaPerceptualChrominanceCorrect", cb_luma_global_settings.GameSettings.GammaPerceptualChrominanceCorrect);
       reshade::get_config_value(runtime, NAME, "MovPeakRatio", cb_luma_global_settings.GameSettings.MovPeakRatio);
       reshade::get_config_value(runtime, NAME, "MovShoulderPow", cb_luma_global_settings.GameSettings.MovShoulderPow);
+      ShadowPatch::enabled = true;
+      reshade::get_config_value(runtime, NAME, "ShadowFixEnabled", ShadowPatch::enabled);
+      reshade::get_config_value(runtime, NAME, "ShadowKernelTaps", ShadowPatch::taps);
+      if (ShadowPatch::taps != 8 && ShadowPatch::taps != 16 && ShadowPatch::taps != 32) ShadowPatch::taps = 16;
+      EnginePrepass::Apply();
+      SectionedImGui::Templates::WCGApplyDefines();
 
       reshade::get_config_value(runtime, NAME, "UIIsAdvanced", Globals::UIIsAdvanced);
 #if ENABLE_SR == 1
