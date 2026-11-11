@@ -1,3 +1,6 @@
+// This is for the sake of reference.
+// See Luma_MegaMix_DepthOfField.hlsl for implementation.
+
 // dof_f2_upsample
 // ---- Created with 3Dmigoto v1.3.16 on Tue Sep 02 15:46:11 2025
 
@@ -26,6 +29,7 @@ Texture2D<float>  g_filtered_a : register(t1);
 Texture2D<float2> g_tile : register(t2);
 Texture2D<float4> g_full_res_color : register(t3);
 Texture2D<float>  g_full_res_depth : register(t4);
+Texture2D<float3> g_presort : register(t5);
 
 
 // 3Dmigoto declarations
@@ -55,10 +59,11 @@ void main(
   uint4 bitmask, uiDest;
   float4 fDest;
 
-  // original color
+  // original color center
   r0.xyzw = g_full_res_color.SampleLevel(g_full_res_color_sampler_s, v1.xy, 0).xyzw;
   r0.xyz = pow(abs(r0.xyz), 2.2); // gamma decode (linearize)
 
+  // upsample
   r1.x = cmp(3 >= (int)g_dof_param.w); // BRUUH. Not quality levels again
   if (r1.x != 0) {
     r1.xy = -g_texcoord_offset_for_upsample.xy + v1.xy;
@@ -191,21 +196,19 @@ void main(
       r1.xyz = min(r3.xyz, r2.xyz);
     }
   }
+
+  // alpha for blending
   r1.w = g_filtered_a.SampleLevel(g_filtered_a_sampler_s, v1.xy, 0).x;
+
+  // linear center depth
   r2.x = g_full_res_depth.SampleLevel(g_full_res_depth_sampler_s, v1.xy, 0).x;
-  r2.x = r2.x * g_depth_params.x + g_depth_params.y;
-  r2.x = 1 / r2.x;
-  // r2.x = g_depth_params2.x + -r2.x;
-  // r2.x = -g_depth_params2.y + abs(r2.x);
-  // r2.x = max(0, r2.x);
-  // r2.x = r2.x * r2.x;
-  // r2.x = g_depth_params2.z * r2.x;
-  // r2.x = 1.44269502 * r2.x;
-  // r2.x = exp2(r2.x);
-  // r2.x = 1 + -r2.x;
-  // r2.x = g_depth_params2.w * r2.x;
+  r2.x = rcp(r2.x * g_depth_params.x + g_depth_params.y);
+
+  // blur factor center
   r2.x = CalculateBlurFactor(r2.x, g_depth_params2);
-  r2.y = 100 /* g_tile.SampleLevel(g_tile_sampler_s, v1.zw, 0).y */; // TODO: if forced to 100, this is much better
+
+  // blend from tile blur weights diff // TODO: wth is happening?
+  r2.y = g_tile.SampleLevel(g_tile_sampler_s, v1.zw, 0).y; 
   r2.xy = r2.xy * r2.xy;
   r2.xy = max(float2(0.5,0.5), r2.xy);
   r2.xy = float2(3.14159274,3.14159274) * r2.xy;
@@ -219,7 +222,9 @@ void main(
   r1.w = saturate(r1.w * 4 + -0.200000003);
   r0.xyz = -r1.xyz + r0.xyz;
   r0.xyz = r1.www * r0.xyz + r1.xyz;
+
   o0.xyz = pow(abs(r0.xyz), 1/2.2); // gamma encode
-  o0.w = r0.w;
+
+  o0.w = r0.w; // alpha channel
   return;
 }

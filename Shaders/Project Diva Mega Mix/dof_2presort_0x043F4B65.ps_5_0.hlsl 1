@@ -1,3 +1,7 @@
+// This is for the sake of reference.
+// See Luma_MegaMix_DepthOfField.hlsl for implementation.
+
+
 // dof_f2_downsample
 // ---- Created with 3Dmigoto v1.3.16 on Tue Sep 02 15:46:05 2025
 
@@ -112,7 +116,6 @@ void main(
 
   // o0: weighted avg color
   float3 finalColor = aColor / aWeight;
-  finalColor = pow(abs(finalColor), 2.2); // gamma decode (linearize)
   o0.xyz = finalColor;
 
   // o1: blur factor encoded incomplete radius precompute

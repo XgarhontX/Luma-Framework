@@ -253,12 +253,12 @@ namespace RenderTracker // partial
    // Handles //
    ComPtr<ID3D11Resource> res_main_color; // rgba16f that forward lighting draws to
    ComPtr<ID3D11Texture2D> res_main_color_tex;
-   uint64_t res_main_color_handle = 0;
+   uint64_t res_main_color_handle = 0; // TODO: if DoF, this false pos. be aware of DoF & take SRV3 of DoF Resolve for correct handle.
    uint2 res_main_color_size = {};
    bool IsResolutionRenderEqualsOutput() {return res_main_color_size.x == static_cast<uint>(cb_luma_global_settings.SwapchainSize.x) && res_main_color_size.y == static_cast<uint>(cb_luma_global_settings.SwapchainSize.y);}
 
    ComPtr<ID3D11Resource> res_main_depth; // depth buffer that forward lighting draws to
-   ComPtr<ID3D11Texture2D> res_main_depth_tex;
+   ComPtr<ID3D11Texture2D> res_main_depth_tex; // TODO: can be null after changing resolution while not on main menu. show warning to user?
    uint64_t res_main_depth_handle = 0;
    uint2 res_main_depth_size = {}; // should be same as color
 
@@ -3974,7 +3974,7 @@ namespace AntiAliasing
                native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
 
                // Depth SRV
-               [[unlikely]] if (!Resources::depth_srv)
+               [[unlikely]] if (!Resources::depth_srv && RenderTracker::res_main_depth_tex) 
                {
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_depth_desc = {};
                   srv_depth_desc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -3982,7 +3982,6 @@ namespace AntiAliasing
                   srv_depth_desc.Texture2D.MipLevels = 1;
                   srv_depth_desc.Texture2D.MostDetailedMip = 0;
                   auto hr = native_device->CreateShaderResourceView(RenderTracker::res_main_depth_tex.get(), &srv_depth_desc, Resources::depth_srv.put());
-                  ASSERT_MSG(SUCCEEDED(hr), "AntiAliasing: hr");
                }
 
                // TODO: currently wasteful backing up draw state
@@ -4031,7 +4030,7 @@ namespace DepthOfField
    {
       Vanilla,
       Disable,
-      // Enhanced, //TODO: implement
+      Enhanced,
    };
    Enabled enabled = Vanilla;
    constexpr const char* reshadesave_enabled = "DepthOfFieldEnabled";
@@ -4040,53 +4039,138 @@ namespace DepthOfField
    {
       TileCreate, // 0x83AE9A79
       TileExpand, // 0x8814AF0D
-      PreSort, // 0x043F4B65
+      Presort, // 0x043F4B65
       Blur, // 0x7D2DE42C
       Resolve, // 0xD7064E88
       Done,
    };
    State state; // denotes next shader to be drawn
 
+   namespace Shaders
+   {
+      // file name
+      constexpr const char* Luma_MegaMix_DepthOfField = "Luma_MegaMix_DepthOfField";
+
+      // shader names
+      constexpr const char* Luma_MegaMix_DepthOfField_Presort = "Luma_MegaMix_DepthOfField_Presort";
+      constexpr const char* Luma_MegaMix_DepthOfField_Blur = "Luma_MegaMix_DepthOfField_Blur";
+      constexpr const char* Luma_MegaMix_DepthOfField_Resolve = "Luma_MegaMix_DepthOfField_Resolve";
+
+      void OnInit()
+      {
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Presort), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "presort", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Blur), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "blur", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Resolve), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "resolve", {{}}});
+      }
+   }
+
+   namespace Resources
+   {
+      ComPtr<ID3D11ShaderResourceView> g_presort_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> g_presort_rtv = nullptr;
+      
+      void Reset()
+      {
+         g_presort_srv.reset(); g_presort_rtv.reset();
+      }
+   }
+
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
    {
-      if (enabled == Vanilla) return DrawOrDispatchOverrideType::None;
-      if (DEVELOPMENT && !IsModEnabled()) return DrawOrDispatchOverrideType::None;
+      DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
+      if (enabled == Vanilla) return result;
+      if (DEVELOPMENT && !IsModEnabled()) return result;
 
       switch (state)
       {
          case TileCreate:
          {
-            if (ps == 0x83AE9A79)
-            {
-               state = TileExpand;
-               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
-            }
+            if (ps != 0x83AE9A79) break; // wait
+            state = TileExpand; // next
+            
+            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip; // skip even in enhanced, since tiling is so wack
             break;
          }
          case TileExpand:
          {
-            if (ps == 0x8814AF0D)
-            {
-               state = PreSort;            
-               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
-            }
+            ASSERT_MSG(ps == 0x8814AF0D, "DepthOfField: TileExpand shader not detected next!");
+            state = Presort; // next
+            
+            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip; // skip even in enhanced, since tiling is so wack
             break;
          }
-         case PreSort:
+         case Presort:
          {
-            if (ps == 0x043F4B65)
+            ASSERT_MSG (ps == 0x043F4B65, "DepthOfField: Presort shader not detected next!");
+            state = Blur; // next
+            
+            if (enabled == Disable)
             {
-               state = Blur;
-               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
+               result = DrawOrDispatchOverrideType::Skip;
+            }
+            else if (enabled == Enhanced)
+            {
+               // create our own g_presort
+               [[unlikely]] if (!Resources::g_presort_srv && RenderTracker::res_main_color_size.x > 0)
+               {
+                  // rgba16f, 0.5x of render res
+                  D3D11_TEXTURE2D_DESC tex_desc;
+                  tex_desc.Width = RenderTracker::res_main_color_size.x / 2;
+                  tex_desc.Height = RenderTracker::res_main_color_size.y / 2;
+                  tex_desc.MipLevels = 1;
+                  tex_desc.ArraySize = 1;
+                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // restore both min and max biased blurFactor (replacement for tiling). surprisingly no observable performance cost, prob because 2 tiling ps skip makes up for it.
+                  tex_desc.SampleDesc.Count = 1;
+                  tex_desc.SampleDesc.Quality = 0;
+                  tex_desc.Usage = D3D11_USAGE_DEFAULT;
+                  tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                  tex_desc.CPUAccessFlags = 0;
+                  tex_desc.MiscFlags = 0;
+
+                  ComPtr<ID3D11Texture2D> tex;
+                  auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr0), "DepthOfField: g_presort hr0");
+                  auto hr1 = native_device->CreateRenderTargetView(tex.get(), nullptr, Resources::g_presort_rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr1), "DepthOfField: g_presort hr1");
+                  auto hr2 = native_device->CreateShaderResourceView(tex.get(), nullptr, Resources::g_presort_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr2), "DepthOfField: g_presort hr2");
+               }
+               
+               // bind Luma cb
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+
+               // bind RTV1 as our g_presort_rtv
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               std::array<ID3D11RenderTargetView*, 2> rtvs = { rtv0.get(), Resources::g_presort_rtv.get() };
+               native_device_context->OMSetRenderTargets(rtvs.size(), rtvs.data(), nullptr);
+               
+               // enhanced ps 
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Presort)).get(), nullptr, 0);
+
+               // TODO: draw()
+               // TODO: bind blur 2nd/inner
+               // TODO: draw()
+               // TODO: result = Replaced;
             }
             break;
          }
          case Blur:
          {
-            if (ps == 0x7D2DE42C)
+            ASSERT_MSG(ps == 0x7D2DE42C, "DepthOfField: Blur shader not detected next!");
+            state = Resolve; // next
+            
+            if (enabled == Disable)
             {
-               state = Resolve;
-               return enabled == Disable ? DrawOrDispatchOverrideType::Skip : DrawOrDispatchOverrideType::None;
+               result = DrawOrDispatchOverrideType::Skip;
+            }
+            else if (enabled == Enhanced)
+            {
+               // enhanced ps 
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Blur)).get(), nullptr, 0);
+
+               // SRV0 as our g_presort_srv
+               native_device_context->PSSetShaderResources(0, 1, &Resources::g_presort_srv);
             }
             break;
          }
@@ -4099,7 +4183,7 @@ namespace DepthOfField
                if (enabled == Disable)
                {
                   // CopyResource SRV3 to RTV0
-                  ComPtr<ID3D11ShaderResourceView> srv3;
+                  ComPtr<ID3D11ShaderResourceView> srv3; 
                   native_device_context->PSGetShaderResources(3, 1, srv3.put());
                   ComPtr<ID3D11Resource> srv3_resource;
                   srv3->GetResource(srv3_resource.put());
@@ -4111,7 +4195,15 @@ namespace DepthOfField
 
                   native_device_context->CopyResource(rtv0_resource.get(), srv3_resource.get());
 
-                  return DrawOrDispatchOverrideType::Replaced;
+                  result = DrawOrDispatchOverrideType::Replaced;
+               }
+               else if (enabled == Enhanced)
+               {
+                  // enhanced ps 
+                  native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Resolve)).get(), nullptr, 0);
+
+                  // SRV5 as our g_presort_srv
+                  native_device_context->PSSetShaderResources(5, 1, &Resources::g_presort_srv);
                }
             }
             break;
@@ -4121,7 +4213,12 @@ namespace DepthOfField
             break;
       }
 
-      return DrawOrDispatchOverrideType::None;
+      return result;
+   }
+
+   void OnInit()
+   {
+      Shaders::OnInit();
    }
 
    void OnTonemapAndFinalDraw()
@@ -4142,7 +4239,7 @@ namespace DepthOfField
 
    void HardReset()
    {
-      
+      Resources::Reset();
    }
 }
 
@@ -6707,9 +6804,6 @@ public:
 
       // OutputHandling
       OutputHandling::OnInit();
-
-      // SSAA
-      SSAA::OnInit();
       
       // ShaderDefines
       ShaderDefineInfo::OnInit();
@@ -6720,6 +6814,7 @@ public:
       luma_data_cbuffer_index = 12;
 
       // event
+      SSAA::OnInit();
       XeGTAO::OnInit();
       SSS::OnInit();
       Bloom::OnInit();
@@ -6727,6 +6822,7 @@ public:
       LUTBiasCached::OnInit();
       ShadowMap::OnInit();
       DuplicateWorldReflections::OnInit();
+      DepthOfField::OnInit();
       
       // GameSettings default
       // default_luma_global_game_settings.TonemapperRolloffStart = cb_luma_global_settings.GameSettings.TonemapperRolloffStart = 36.f;
@@ -7297,7 +7393,7 @@ public:
 #endif
 
          // Render Resolution
-         ASSERT_MSG(RenderTracker::res_main_color_size.x == RenderTracker::res_main_depth_size.x && RenderTracker::res_main_color_size.y == RenderTracker::res_main_depth_size.y, "Color and Depth resolution mismatch!");
+         ASSERT_ONCE_MSG(RenderTracker::res_main_color_size.x == RenderTracker::res_main_depth_size.x && RenderTracker::res_main_color_size.y == RenderTracker::res_main_depth_size.y, "Color and Depth resolution mismatch!");
          ImGui::BulletText("Resolution: (Scene: %dx%d) -> (UI: %dx%d) -> (Output: %dx%d)",
             RenderTracker::res_main_color_size.x, RenderTracker::res_main_color_size.y,
             RenderTracker::res_main_ui_size.x, RenderTracker::res_main_ui_size.y,
@@ -7989,7 +8085,7 @@ public:
             "The high pass filter for bloom. How should it operate?"
             "\n"
             "\nThe original is a crude per-channel subtraction, horribly shifting hues and boosting saturation."
-            "\nOne can say it's mimicking camera halation, but an example failure is \"When First Love Ends\", where red blobs of bloom ruins close ups of skin."
+            "\nAn example failure is \"When First Love Ends\", where red blobs of bloom ruins close ups of skin."
             "\n"
             "\nWe can do better by using luminance to blend towards neutral."
             "\n(Deliberate tinting still applies afterwards.)", false);
@@ -8121,7 +8217,7 @@ public:
 
          // dropdown Vanilla, Disable, DLAA
          auto curr = static_cast<int>(DepthOfField::enabled);
-         if (ImGui::Combo("Mode", &curr, "Vanilla\0Disallow\0"))
+         if (ImGui::Combo("Mode", &curr, "Vanilla\0Disallow\0Enhanced\0"))
          {
             reshade::set_config_value(runtime, NAME, DepthOfField::reshadesave_enabled, curr);
             DepthOfField::enabled = static_cast<DepthOfField::Enabled>(curr);
@@ -8129,10 +8225,6 @@ public:
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Options for Depth of Field."
                                                                                           "\n"
                                                                                           "\nTODO");
-
-         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HQ DoF is WIP.)");
-         ImGui::PopStyleColor();
       }
       ImGui::PopID();
 
