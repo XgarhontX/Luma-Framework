@@ -4052,27 +4052,25 @@ namespace DepthOfField
       // file name
       constexpr const char* Luma_MegaMix_DepthOfField = "Luma_MegaMix_DepthOfField";
 
-      // shader names
-      constexpr const char* Luma_MegaMix_DepthOfField_Presort = "Luma_MegaMix_DepthOfField_Presort";
-      constexpr const char* Luma_MegaMix_DepthOfField_Blur = "Luma_MegaMix_DepthOfField_Blur";
-      constexpr const char* Luma_MegaMix_DepthOfField_Resolve = "Luma_MegaMix_DepthOfField_Resolve";
+      // shader names      
+      constexpr const char* Luma_MegaMix_DepthOfField_CalcCoC = "Luma_MegaMix_DepthOfField_CalcCoC";
+      constexpr const char* Luma_MegaMix_DepthOfField_BlurEffect = "Luma_MegaMix_DepthOfField_BlurEffect";
 
       void OnInit()
       {
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Presort), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "presort", {{}}});
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Blur), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "blur", {{}}});
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Resolve), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "resolve", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_CalcCoC), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "CalcCoC", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_BlurEffect), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "BlurEffect", {{}}});
       }
    }
 
    namespace Resources
    {
-      ComPtr<ID3D11ShaderResourceView> g_presort_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> g_presort_rtv = nullptr;
+      ComPtr<ID3D11ShaderResourceView> coc_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> coc_rtv = nullptr;
       
       void Reset()
       {
-         g_presort_srv.reset(); g_presort_rtv.reset();
+         coc_srv.reset(); coc_rtv.reset();
       }
    }
 
@@ -4089,7 +4087,7 @@ namespace DepthOfField
             if (ps != 0x83AE9A79) break; // wait
             state = TileExpand; // next
             
-            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip; // skip even in enhanced, since tiling is so wack
+            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip;
             break;
          }
          case TileExpand:
@@ -4097,7 +4095,7 @@ namespace DepthOfField
             ASSERT_MSG(ps == 0x8814AF0D, "DepthOfField: TileExpand shader not detected next!");
             state = Presort; // next
             
-            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip; // skip even in enhanced, since tiling is so wack
+            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip;
             break;
          }
          case Presort:
@@ -4105,22 +4103,50 @@ namespace DepthOfField
             ASSERT_MSG (ps == 0x043F4B65, "DepthOfField: Presort shader not detected next!");
             state = Blur; // next
             
+            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip;
+            break;
+         }
+         case Blur:
+         {
+            ASSERT_MSG(ps == 0x7D2DE42C, "DepthOfField: Blur shader not detected next!");
+            state = Resolve; // next
+            
+            if (enabled >= Disable) result = DrawOrDispatchOverrideType::Skip;
+            break;
+         }
+         case Resolve:
+         {
+            ASSERT_MSG(ps == 0xD7064E88, "DepthOfField: Resolve shader not detected next!");
+            state = TileCreate; // restart for 2nd pass if exists, will disarm on Tonemap/Final
+            
             if (enabled == Disable)
             {
-               result = DrawOrDispatchOverrideType::Skip;
+               // CopyResource SRV3 to RTV0
+               ComPtr<ID3D11ShaderResourceView> srv3; 
+               native_device_context->PSGetShaderResources(3, 1, srv3.put());
+               ComPtr<ID3D11Resource> srv3_resource;
+               srv3->GetResource(srv3_resource.put());
+
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+               ComPtr<ID3D11Resource> rtv0_resource;
+               rtv0->GetResource(rtv0_resource.put());
+
+               native_device_context->CopyResource(rtv0_resource.get(), srv3_resource.get());
+
+               result = DrawOrDispatchOverrideType::Replaced;
             }
             else if (enabled == Enhanced)
             {
-               // create our own g_presort
-               [[unlikely]] if (!Resources::g_presort_srv && RenderTracker::res_main_color_size.x > 0)
+               // create resources
+               [[unlikely]] if (!Resources::coc_srv)
                {
-                  // rgba16f, 0.5x of render res
                   D3D11_TEXTURE2D_DESC tex_desc;
-                  tex_desc.Width = RenderTracker::res_main_color_size.x / 2;
-                  tex_desc.Height = RenderTracker::res_main_color_size.y / 2;
+                  tex_desc.Width = RenderTracker::res_main_color_size.x;
+                  tex_desc.Height = RenderTracker::res_main_color_size.y;
                   tex_desc.MipLevels = 1;
                   tex_desc.ArraySize = 1;
-                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // restore both min and max biased blurFactor (replacement for tiling). surprisingly no observable performance cost, prob because 2 tiling ps skip makes up for it.
+                  tex_desc.Format = DXGI_FORMAT_R16_FLOAT;
                   tex_desc.SampleDesc.Count = 1;
                   tex_desc.SampleDesc.Quality = 0;
                   tex_desc.Usage = D3D11_USAGE_DEFAULT;
@@ -4130,82 +4156,46 @@ namespace DepthOfField
 
                   ComPtr<ID3D11Texture2D> tex;
                   auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
-                  ASSERT_MSG(SUCCEEDED(hr0), "DepthOfField: g_presort hr0");
-                  auto hr1 = native_device->CreateRenderTargetView(tex.get(), nullptr, Resources::g_presort_rtv.put());
-                  ASSERT_MSG(SUCCEEDED(hr1), "DepthOfField: g_presort hr1");
-                  auto hr2 = native_device->CreateShaderResourceView(tex.get(), nullptr, Resources::g_presort_srv.put());
-                  ASSERT_MSG(SUCCEEDED(hr2), "DepthOfField: g_presort hr2");
+                  ASSERT_MSG(SUCCEEDED(hr0), "DepthOfField: Create hr0");
+                  auto hr1 = native_device->CreateShaderResourceView(tex.get(), nullptr, Resources::coc_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr1), "DepthOfField: Create hr1");
+                  auto hr2 = native_device->CreateRenderTargetView(tex.get(), nullptr, Resources::coc_rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr2), "DepthOfField: Create hr2");
+                  
+                  reshade::log::message(reshade::log::level::info, std::format("DepthOfField: Created Resources for size {}x{}", tex_desc.Width, tex_desc.Height).c_str());
                }
-               
+
                // bind Luma cb
                SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
 
-               // bind RTV1 as our g_presort_rtv
+               // // get fullscreen color & depth SRV3-4
+               // std::array<ID3D11ShaderResourceView*, 2> srvs;
+               // native_device_context->PSGetShaderResources(3, 2, srvs.data());
+
+               // get RTV0 (final output)
                ComPtr<ID3D11RenderTargetView> rtv0;
                native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-               std::array<ID3D11RenderTargetView*, 2> rtvs = { rtv0.get(), Resources::g_presort_rtv.get() };
-               native_device_context->OMSetRenderTargets(rtvs.size(), rtvs.data(), nullptr);
-               
-               // enhanced ps 
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Presort)).get(), nullptr, 0);
 
-               // TODO: draw()
-               // TODO: bind blur 2nd/inner
-               // TODO: draw()
-               // TODO: result = Replaced;
-            }
-            break;
-         }
-         case Blur:
-         {
-            ASSERT_MSG(ps == 0x7D2DE42C, "DepthOfField: Blur shader not detected next!");
-            state = Resolve; // next
-            
-            if (enabled == Disable)
-            {
-               result = DrawOrDispatchOverrideType::Skip;
-            }
-            else if (enabled == Enhanced)
-            {
-               // enhanced ps 
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Blur)).get(), nullptr, 0);
+               // set samplers
+               std::array<ID3D11SamplerState*, 2> samplers = { device_data.sampler_state_point.get(), device_data.sampler_state_linear.get() };
+               native_device_context->PSSetSamplers(0, samplers.size(), samplers.data());
 
-               // SRV0 as our g_presort_srv
-               native_device_context->PSSetShaderResources(0, 1, &Resources::g_presort_srv);
-            }
-            break;
-         }
-         case Resolve:
-         {
-            if (ps == 0xD7064E88)
-            {
-               state = TileCreate; // restart for 2nd pass if exists
+               // PASS: Calculate CoC
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_CalcCoC)).get(), nullptr, 0);
+               native_device_context->OMSetRenderTargets(1, &Resources::coc_rtv, nullptr);
+               native_device_context->Draw(4, 0);
 
-               if (enabled == Disable)
-               {
-                  // CopyResource SRV3 to RTV0
-                  ComPtr<ID3D11ShaderResourceView> srv3; 
-                  native_device_context->PSGetShaderResources(3, 1, srv3.put());
-                  ComPtr<ID3D11Resource> srv3_resource;
-                  srv3->GetResource(srv3_resource.put());
+               // PASS: Blur Effect
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_BlurEffect)).get(), nullptr, 0);
+               native_device_context->OMSetRenderTargets(1, &rtv0, nullptr);
+               native_device_context->PSSetShaderResources(5, 1, &Resources::coc_srv);
+               native_device_context->Draw(4, 0);
 
-                  ComPtr<ID3D11RenderTargetView> rtv0;
-                  native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
-                  ComPtr<ID3D11Resource> rtv0_resource;
-                  rtv0->GetResource(rtv0_resource.put());
+               // // clean
+               // srvs[0] = nullptr;
+               // srvs[1] = nullptr;
 
-                  native_device_context->CopyResource(rtv0_resource.get(), srv3_resource.get());
-
-                  result = DrawOrDispatchOverrideType::Replaced;
-               }
-               else if (enabled == Enhanced)
-               {
-                  // enhanced ps 
-                  native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Resolve)).get(), nullptr, 0);
-
-                  // SRV5 as our g_presort_srv
-                  native_device_context->PSSetShaderResources(5, 1, &Resources::g_presort_srv);
-               }
+               result = DrawOrDispatchOverrideType::Replaced;
             }
             break;
          }
