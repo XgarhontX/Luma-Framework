@@ -4031,7 +4031,6 @@ namespace DepthOfField
       Vanilla,
       Disable,
       Enhanced,
-      
    };
    Enabled enabled = Vanilla;
    constexpr const char* reshadesave_enabled = "DepthOfFieldEnabled";
@@ -6724,6 +6723,7 @@ namespace UserPresets
          bool  reflections_enabled = true;
          float reflections_ratio = 0.5f;
          bool  spotlights_enabled = true;
+         DepthOfField::Enabled dof_enabled = DepthOfField::Enhanced;
 
          void Apply()
          {
@@ -6758,6 +6758,9 @@ namespace UserPresets
 
             SpotLightShadows::enabled = spotlights_enabled;
             reshade::set_config_value(nullptr, NAME, SpotLightShadows::reshadesave_enabled, SpotLightShadows::enabled);
+
+            DepthOfField::enabled = dof_enabled;
+            reshade::set_config_value(nullptr, NAME, DepthOfField::reshadesave_enabled, DepthOfField::enabled);
          }
       };
 
@@ -6782,6 +6785,7 @@ namespace UserPresets
          preset.reflections_enabled = false;
          // preset.reflections_ratio = 0.5f;
          preset.spotlights_enabled = false;
+         preset.dof_enabled = DepthOfField::Vanilla;
          preset.Apply();
       }
 
