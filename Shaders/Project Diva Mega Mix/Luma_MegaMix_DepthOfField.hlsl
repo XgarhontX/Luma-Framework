@@ -169,13 +169,13 @@ void Prefilter( // aka Downsample
   float wBL = saturate(cocBLAbs * 1/COC_MAX);
   float wBR = saturate(cocBRAbs * 1/COC_MAX);
 
-  // #if BLUR_IN_LINEAR // TODO: idk, it still flickers. we need that TAA action
-  //   // Apply luma weights to reduce flickering. Inspired by goo.gl/j1fhLe goo.gl/mfuZ4h
-  //   wTL *= 1 / (GetLuminance(cTL) + 1);
-  //   wTR *= 1 / (GetLuminance(cTR) + 1);
-  //   wBL *= 1 / (GetLuminance(cBL) + 1);
-  //   wBR *= 1 / (GetLuminance(cBR) + 1);
-  // #endif
+  #if BLUR_IN_LINEAR // TODO: idk, it still flickers. we need that TAA action
+    // Apply luma weights to reduce flickering. Inspired by goo.gl/j1fhLe goo.gl/mfuZ4h
+    wTL *= 1 / (GetLuminance(cTL) + 1);
+    wTR *= 1 / (GetLuminance(cTR) + 1);
+    wBL *= 1 / (GetLuminance(cBL) + 1);
+    wBR *= 1 / (GetLuminance(cBR) + 1);
+  #endif
   
   // color weighted
   cTL *= wTL;
@@ -303,6 +303,9 @@ void BokehSim1(
   // o0 = t_halfprev.Load(int3(v0.xy, 0));
   // BokehSim(v0, v1, o0, true);
   o0 = Sample9Tent(v1.xy, pixSizeHalf); // expand blur, so reconstruct is easier
+  // #if BLUR_IN_LINEAR
+  //   o0.xyz = pow(o0.xyz, 1/2.2);
+  // #endif
 }
 
 // https://github.com/keijiro/KinoBokeh/blob/master/Assets/Kino/Bokeh/Shader/Composition.cginc
