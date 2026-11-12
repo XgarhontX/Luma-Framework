@@ -4068,6 +4068,8 @@ namespace DepthOfField
 
    namespace Resources
    {
+      uint2 size = { 0, 0 };
+      
       ComPtr<ID3D11ShaderResourceView> half0_srv = nullptr;
       ComPtr<ID3D11RenderTargetView> half0_rtv = nullptr;
 
@@ -4076,6 +4078,7 @@ namespace DepthOfField
       
       void Reset()
       {
+         size = { 0, 0 };
          half0_srv.reset(); half0_rtv.reset();
          half1_srv.reset(); half1_rtv.reset();
       }
@@ -4146,7 +4149,7 @@ namespace DepthOfField
             else if (enabled == Enhanced)
             {
                // create resources
-               [[unlikely]] if (!Resources::half0_srv)
+               [[unlikely]] if (Resources::size.x == 0)
                {
                   ComPtr<ID3D11Texture2D> tex;
 
@@ -4162,6 +4165,9 @@ namespace DepthOfField
                   tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
                   tex_desc.CPUAccessFlags = 0;
                   tex_desc.MiscFlags = 0;
+
+                  Resources::size.x = tex_desc.Width;
+                  Resources::size.y = tex_desc.Height;
 
                   auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
                   ASSERT_MSG(SUCCEEDED(hr3), "DepthOfField: Create hr3");
@@ -8244,8 +8250,7 @@ public:
       if (DrawCollapsingHeaderEnabledColored("Depth of Field", DepthOfField::enabled > DepthOfField::Vanilla))
       {
          DrawColoredSubHeader("Simulate focus of a lens, blurring objects out of the focal plane to a bokeh.");
-
-         // dropdown Vanilla, Disable, DLAA
+         
          auto curr = static_cast<int>(DepthOfField::enabled);
          if (ImGui::Combo("Mode", &curr, "Vanilla\0Disallow\0Enhanced\0"))
          {
@@ -8257,6 +8262,13 @@ public:
                                                                                           "\n[Enhanced]"
                                                                                           "\nRemoved unnecessary ugly tiling optimization, anti-bleed downsample,"
                                                                                           "\nmodern non-temporal high quality bokeh blurring, upsample masking without unrealistic alpha blending.");
+
+         if (UserSettingsMisc::imgui_show_advanced)
+         {
+            ImGui::NewLine();
+            DrawColoredSubHeader("Auxiliary Resources");
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Downsample Resolution: %dx%d", DepthOfField::Resources::size.x, DepthOfField::Resources::size.y);
+         }
       }
       ImGui::PopID();
 
