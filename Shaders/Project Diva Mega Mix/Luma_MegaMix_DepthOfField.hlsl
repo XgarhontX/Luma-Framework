@@ -1,3 +1,7 @@
+// main reference, for disc: https://github.com/keijiro/KinoBokeh
+// straight forward full res DoF hype: https://github.com/ninjamica/Painted-DOF/blob/main/DOF_Paint.fx
+// for hexgonal (not implemented): https://github.com/zigguratvertigo/HexBokehBlur/blob/master/HexagonalBokehBlur.rfx
+
 cbuffer PsCommon : register(b0)
 {
   float4 g_depth_params : packoffset(c0);
@@ -15,216 +19,415 @@ cbuffer PsCommon : register(b0)
 
 #include "./Includes/Common.hlsl"
 
+#define COC_MAX 0.600 // vanilla faithful fudge
+#define COC_FUDGE 4.000 * 0.005 // vanilla faithful fudge
+
+#define BLUR_IN_LINEAR 1 // trade flickering for really good bokeh
+
+#define KERNEL_LENGTH 43
+#define KERNEL_LENGTH_1ST_RING 8
+static const float2 KERNEL[KERNEL_LENGTH] = { // "KERNEL_LARGE" 4 rings, 7 points per ring
+  {          0,           0},
+  { 0.36363637,           0},
+  { 0.22672357,  0.28430238},
+  {-0.08091671,  0.35451925},
+  {-0.32762504,  0.15777594},
+  {-0.32762504, -0.15777591},
+  {-0.08091656, -0.35451928},
+  { 0.22672352,  -0.2843024},
+  {  0.6818182,           0},
+  {   0.614297,  0.29582983},
+  { 0.42510667,   0.5330669},
+  { 0.15171885,   0.6647236},
+  {-0.15171883,   0.6647236},
+  { -0.4251068,  0.53306687},
+  {  -0.614297,  0.29582986},
+  { -0.6818182,           0},
+  {  -0.614297, -0.29582983},
+  {-0.42510656, -0.53306705},
+  {-0.15171856, -0.66472363},
+  {  0.1517192,  -0.6647235},
+  {  0.4251066, -0.53306705},
+  {   0.614297, -0.29582983},
+  {        1.0,           0},
+  {  0.9555728,   0.2947552},
+  { 0.82623875,   0.5633201},
+  {  0.6234898,   0.7818315},
+  { 0.36534098,  0.93087375},
+  {    0.07473,   0.9972038},
+  {-0.22252095,   0.9749279},
+  {-0.50000006,   0.8660254},
+  {-0.73305196,   0.6801727},
+  {-0.90096885,  0.43388382},
+  {-0.98883086,  0.14904208},
+  { -0.9888308, -0.14904249},
+  {-0.90096885, -0.43388376},
+  {-0.73305184,  -0.6801728},
+  { -0.4999999, -0.86602545},
+  {  -0.222521,  -0.9749279},
+  { 0.07473029, -0.99720377},
+  { 0.36534148,  -0.9308736},
+  {  0.6234897,  -0.7818316},
+  {  0.8262388,    -0.56332},
+  {  0.9555729, -0.29475483},
+};
+
 // https://www.desmos.com/calculator/eudc3yupeo
-float CalculateBlurFactor(float linearDepth, bool isFarOnly = false, bool isParamW = true, bool isNearNegative = false)
+float CalculateBlurFactor(float linearDepth, bool isFarOnly = false, bool isParamW = true, bool isNearNegative = false, bool isCustom = false)
 {
   float4 params = g_depth_params2;
-  float blur = params.x - linearDepth;
-  if (!isFarOnly) blur = abs(blur);
-  else blur = -blur;
-  blur -= params.y;
-  blur = max(0, blur);
-  blur *= blur;
-  blur *= params.z;
-  blur *= 1.44269502;
-  blur = exp2(blur);
-  blur = 1 - blur;
-  if (isParamW) blur *= params.w; // final multiplier, gets clamped later
-  if (isNearNegative && linearDepth < params.x) blur = -blur;
-  return blur;
+  float x = params.x - linearDepth;
+
+  if (!isFarOnly) x = abs(x);
+  else x = -x;
+
+  x -= params.y;
+  x = max(0, x);
+  x *= x;
+  x *= params.z;
+  x *= 1.44269502;
+  x = exp2(x);
+  x = 1 - x;
+
+  if (isParamW) x *= params.w; // final multiplier, gets clamped later
+
+  if (isCustom) // vanilla faithful fudge
+  {
+    x *= 0.3; 
+    x = x * x * x * x;
+    x = clamp(x, 0, COC_MAX);
+  }
+
+  if (isNearNegative && linearDepth < params.x) x = -x;
+
+  return x;
 }
 
 float LinearizeDepth(float depth) { return rcp(depth * g_depth_params.x + g_depth_params.y); }
 
-float QuadraticThreshold(float x, float knee, float thres)
-{
-    const float epsilon = 1e-6;
-
-    float br = x;
-    br = max(epsilon, br);
-
-    const float k = max(epsilon, knee);
-    const float3 curve = float3(thres - k, k * 2.0, 0.25 / k);
-    float rq = clamp(br - curve.x, 0.0, curve.y);
-    rq = curve.z * rq * rq;
-
-    return x * max(rq, br - thres) * rcp(br);
-}
-
 //////////////////////////////////////////////////////////////////////////////////////////////
 
-// https://github.com/ninjamica/Painted-DOF/blob/main/DOF_Paint.fx
-// straight forward full res DoF hype
 SamplerState s_point  : register(s0);
 SamplerState s_linear : register(s1);
-Texture2D<float4> t_color : register(t3);
-Texture2D<float>  t_depth : register(t4);
-Texture2D<float>  t_coc   : register(t5);
+Texture2D<float4> t_color    : register(t3);
+Texture2D<float>  t_depth    : register(t4);
+Texture2D<float>  t_coc      : register(t5);
+Texture2D<float4> t_halfprev : register(t5);
 
-// that one disc pattern
-// #define kernel_length 48
-// static const float2 kernel[kernel_length] = {
-//   {-6.36396, -6.36396},
-//   {-4.50, -7.79423},
-//   {-2.32937, -8.69333},
-//   {1.57361E-06, -9.00},
-//   {2.32938, -8.69333},
-//   {4.50, -7.79423},
-//   {6.36396, -6.36396},
-//   {-7.79423, -4.50},
-//   {-4.24264, -4.24264},
-//   {-2.2961, -5.54328},
-//   {1.04907E-06, -6.00},
-//   {2.2961, -5.54328},
-//   {4.24264, -4.24264},
-//   {7.79423, -4.50},
-//   {-8.69333, -2.32937},
-//   {-5.54328, -2.2961},
-//   {-2.12132, -2.12132},
-//   {5.24537E-07, -3.00},
-//   {2.12132, -2.12132},
-//   {5.54328, -2.2961},
-//   {8.69333, -2.32937},
-//   {-9.00, -7.86805E-07},
-//   {-6.00, -5.24537E-07},
-//   {-3.00, -2.62268E-07},
-//   {3.00, 0.00},
-//   {6.00, 0.00},
-//   {9.00, 0.00},
-//   {-8.69333, 2.32937},
-//   {-5.54328, 2.2961},
-//   {-2.12132, 2.12132},
-//   {-2.62268E-07, 3.00},
-//   {2.12132, 2.12132},
-//   {5.54328, 2.2961},
-//   {8.69333, 2.32937},
-//   {-7.79423, 4.50},
-//   {-4.24264, 4.24264},
-//   {-2.2961, 5.54328},
-//   {-5.24537E-07, 6.00},
-//   {2.2961, 5.54328},
-//   {4.24264, 4.24264},
-//   {7.79423, 4.50},
-//   {-6.36396, 6.36396},
-//   {-4.50, 7.79423},
-//   {-2.32937, 8.69333},
-//   {-7.86805E-07, 9.00},
-//   {2.32937, 8.69333},
-//   {4.50, 7.79423},
-//   {6.36396, 6.36396},
-// };
-
-#define kernel_length 42
-#define kernel_fudge 12 // same as multiplying final coc for CalcCoC
-static const float2 kernel[kernel_length] = {
-  { 0.36363637 * kernel_fudge,           0 * kernel_fudge},
-  { 0.22672357 * kernel_fudge,  0.28430238 * kernel_fudge},
-  {-0.08091671 * kernel_fudge,  0.35451925 * kernel_fudge},
-  {-0.32762504 * kernel_fudge,  0.15777594 * kernel_fudge},
-  {-0.32762504 * kernel_fudge, -0.15777591 * kernel_fudge},
-  {-0.08091656 * kernel_fudge, -0.35451928 * kernel_fudge},
-  { 0.22672352 * kernel_fudge,  -0.2843024 * kernel_fudge},
-  {  0.6818182 * kernel_fudge,           0 * kernel_fudge},
-  {   0.614297 * kernel_fudge,  0.29582983 * kernel_fudge},
-  { 0.42510667 * kernel_fudge,   0.5330669 * kernel_fudge},
-  { 0.15171885 * kernel_fudge,   0.6647236 * kernel_fudge},
-  {-0.15171883 * kernel_fudge,   0.6647236 * kernel_fudge},
-  { -0.4251068 * kernel_fudge,  0.53306687 * kernel_fudge},
-  {  -0.614297 * kernel_fudge,  0.29582986 * kernel_fudge},
-  { -0.6818182 * kernel_fudge,           0 * kernel_fudge},
-  {  -0.614297 * kernel_fudge, -0.29582983 * kernel_fudge},
-  {-0.42510656 * kernel_fudge, -0.53306705 * kernel_fudge},
-  {-0.15171856 * kernel_fudge, -0.66472363 * kernel_fudge},
-  {  0.1517192 * kernel_fudge,  -0.6647235 * kernel_fudge},
-  {  0.4251066 * kernel_fudge, -0.53306705 * kernel_fudge},
-  {   0.614297 * kernel_fudge, -0.29582983 * kernel_fudge},
-  {        1.0 * kernel_fudge,           0 * kernel_fudge},
-  {  0.9555728 * kernel_fudge,   0.2947552 * kernel_fudge},
-  { 0.82623875 * kernel_fudge,   0.5633201 * kernel_fudge},
-  {  0.6234898 * kernel_fudge,   0.7818315 * kernel_fudge},
-  { 0.36534098 * kernel_fudge,  0.93087375 * kernel_fudge},
-  {    0.07473 * kernel_fudge,   0.9972038 * kernel_fudge},
-  {-0.22252095 * kernel_fudge,   0.9749279 * kernel_fudge},
-  {-0.50000006 * kernel_fudge,   0.8660254 * kernel_fudge},
-  {-0.73305196 * kernel_fudge,   0.6801727 * kernel_fudge},
-  {-0.90096885 * kernel_fudge,  0.43388382 * kernel_fudge},
-  {-0.98883086 * kernel_fudge,  0.14904208 * kernel_fudge},
-  { -0.9888308 * kernel_fudge, -0.14904249 * kernel_fudge},
-  {-0.90096885 * kernel_fudge, -0.43388376 * kernel_fudge},
-  {-0.73305184 * kernel_fudge,  -0.6801728 * kernel_fudge},
-  { -0.4999999 * kernel_fudge, -0.86602545 * kernel_fudge},
-  {  -0.222521 * kernel_fudge,  -0.9749279 * kernel_fudge},
-  { 0.07473029 * kernel_fudge, -0.99720377 * kernel_fudge},
-  { 0.36534148 * kernel_fudge,  -0.9308736 * kernel_fudge},
-  {  0.6234897 * kernel_fudge,  -0.7818316 * kernel_fudge},
-  {  0.8262388 * kernel_fudge,    -0.56332 * kernel_fudge},
-  {  0.9555729 * kernel_fudge, -0.29475483 * kernel_fudge},
-};
-
-// TODO: downsample & upsample for cheaper & bigger (currently doesnt go as wide as vanilla)
-// TODO: 2nd blur pass, fills in gaps
-
-void CalcCoC(
+// https://github.com/keijiro/KinoBokeh/blob/master/Assets/Kino/Bokeh/Shader/Prefilter.cginc
+void Prefilter( // aka Downsample
   float4 v0 : SV_POSITION0, // pix pos
   float4 v1 : TEXCOORD0, // center: xy
-  out float o0 : SV_Target0 // t_coc
+  out float4 o0 : SV_Target0 // half res rgba16f
 )
 {
-  float2 texSize = LumaSettings.RenderSize;
-  float2 pixSize = LumaSettings.RenderInvSize;
+  float2 texSizeMain = LumaSettings.RenderSize;
+  float2 pixSizeMain = LumaSettings.RenderInvSize;
+  float2 texSizeHalf = LumaSettings.RenderSize / 2;
+  float2 pixSizeHalf = LumaSettings.RenderInvSize * 2;
+  uint2  pixPosHalf  = (uint2)v0.xy;
+  uint2  pixPosMain  = pixPosHalf * 2;
 
-  float depth = LinearizeDepth(t_depth.Load(int3(v0.xy, 0)));
-  float coc = CalculateBlurFactor(depth, false, true); // TODO: will prob need fudge
-  coc *= 0.3;
-  // coc = lerp(coc * coc * coc * coc, coc, saturate(coc));
-  coc = coc * coc * coc * coc;
-  coc = clamp(coc, 0, 1); // clamp (to not expose sparse kernel) (to not wreck VRAM locality)
-  o0 = coc;
+  // sample scene quad
+  float3 cTL = max(0, t_color.Load(uint3(pixPosMain, 0)).xyz);
+  float3 cTR = max(0, t_color.Load(uint3(pixPosMain + uint2(1, 0), 0)).xyz);
+  float3 cBL = max(0, t_color.Load(uint3(pixPosMain + uint2(0, 1), 0)).xyz);
+  float3 cBR = max(0, t_color.Load(uint3(pixPosMain + uint2(1, 1), 0)).xyz);
+
+  // gamma decode (can be flickery, but more proper PBR)
+  #if BLUR_IN_LINEAR
+    cTL = pow(cTL, 2.2);
+    cTR = pow(cTR, 2.2);
+    cBL = pow(cBL, 2.2);
+    cBR = pow(cBR, 2.2);
+  #endif
+
+  // gather depth quad
+  float4 dGather = t_depth.Gather(s_point, v1.xy);
+  float dTL = LinearizeDepth(dGather.x);
+  float dTR = LinearizeDepth(dGather.y);
+  float dBL = LinearizeDepth(dGather.z);
+  float dBR = LinearizeDepth(dGather.w);
+
+  // coc
+  float cocTL = CalculateBlurFactor(dTL, false, true, true, true) * COC_FUDGE;
+  float cocTR = CalculateBlurFactor(dTR, false, true, true, true) * COC_FUDGE;
+  float cocBL = CalculateBlurFactor(dBL, false, true, true, true) * COC_FUDGE;
+  float cocBR = CalculateBlurFactor(dBR, false, true, true, true) * COC_FUDGE;
+  // float coc = dot(float4(cocTL, cocTR, cocBL, cocBR), 0.25f); //(cocTL + cocTR + cocBL + cocBR) / 4; // THIS SUCKS! bleeds emissives everywhere!!!
+  float coc = min(min(cocTL, cocTR), min(cocBL, cocBR)); // favor no bleeding, reconstruct/fill later
+
+  float cocTLAbs = abs(cocTL);
+  float cocTRAbs = abs(cocTR);
+  float cocBLAbs = abs(cocBL);
+  float cocBRAbs = abs(cocBR);
+  // float coc = min(min(cocTLAbs, cocTRAbs), min(cocBLAbs, cocBRAbs)); // favor no bleeding
+
+  // weights premultiply
+  float wTL = saturate(cocTLAbs * 1/COC_MAX);
+  float wTR = saturate(cocTRAbs * 1/COC_MAX);
+  float wBL = saturate(cocBLAbs * 1/COC_MAX);
+  float wBR = saturate(cocBRAbs * 1/COC_MAX);
+
+  // #if BLUR_IN_LINEAR // TODO: idk, it still flickers. we need that TAA action
+  //   // Apply luma weights to reduce flickering. Inspired by goo.gl/j1fhLe goo.gl/mfuZ4h
+  //   wTL *= 1 / (GetLuminance(cTL) + 1);
+  //   wTR *= 1 / (GetLuminance(cTR) + 1);
+  //   wBL *= 1 / (GetLuminance(cBL) + 1);
+  //   wBR *= 1 / (GetLuminance(cBR) + 1);
+  // #endif
+  
+  // color weighted
+  cTL *= wTL;
+  cTR *= wTR;
+  cBL *= wBL;
+  cBR *= wBR;
+  float3 colorTotal = safeDivision((cTL + cTR + cBL + cBR), dot(float4(wTL, wTR, wBL, wBR), 1), 0); /* (wTL + wTR + wBL + wBR) */;
+
+  // premultiply coc again (VERY NEEDED to reduce bleeding)
+  colorTotal *= smoothstep(0, pixSizeHalf.y * 2, abs(coc));
+
+  // out
+  o0 = float4(colorTotal, coc);
 }
 
-void BlurEffect(
-  float4 v0 : SV_POSITION0,
-  float4 v1 : TEXCOORD0,
+// https://github.com/keijiro/KinoBokeh/blob/master/Assets/Kino/Bokeh/Shader/DiskKernel.cginc
+void BokehSim(float4 v0, float4 v1, out float4 o0, bool is2ndPass)
+{
+  float2 texSizeMain = LumaSettings.RenderSize;
+  float2 pixSizeMain = LumaSettings.RenderInvSize;
+  float2 texSizeHalf = LumaSettings.RenderSize / 2;
+  float2 pixSizeHalf = LumaSettings.RenderInvSize * 2;
+  uint2  pixPosHalf  = (uint2)v0.xy;
+  uint2  pixPosMain  = pixPosHalf * 2;
+  float  aspectRatioInv = texSizeMain.y / texSizeMain.x;
+
+  // center
+  float4 samp0 = t_halfprev.SampleLevel(s_point, v1.xy, 0); // TODO: point or linear?
+
+  float4 bgAcc = 0; // far field bokeh
+  float4 fgAcc = 0; // near field bokeh
+
+  const uint sampleCount = KERNEL_LENGTH;
+  [unroll] for (uint si = 0; si < sampleCount; si++)
+  {
+    float2 disp = KERNEL[si] * samp0.a * COC_MAX;
+    float dist = length(disp);
+
+    float2 duv = float2(disp.x * aspectRatioInv, disp.y);
+    float4 samp = t_halfprev.SampleLevel(s_linear, v1.xy + duv, 0);
+
+    // BG: Compare CoC of the current sample and the center sample and select smaller one.
+    float bgCoC = max(min(samp0.a, samp.a), 0);
+
+    // Compare the CoC to the sample distance. Add a small margin to smooth out.
+    const float margin = pixSizeHalf.y * 2;
+    float bgWeight = saturate((bgCoC   - dist + margin) / margin);
+    float fgWeight = saturate((-samp.a - dist + margin) / margin);
+
+    // Cut influence from focused areas because they're darkened by CoC premultiplying. This is only needed for near field.
+    fgWeight *= step(pixSizeHalf.y, -samp.a);
+
+    // Accumulation
+    bgAcc += float4(samp.rgb, 1) * bgWeight;
+    fgAcc += float4(samp.rgb, 1) * fgWeight;
+  }
+
+  // Get the weighted average.
+  bgAcc.rgb = safeDivision(bgAcc.rgb, bgAcc.a, 1);
+  fgAcc.rgb = safeDivision(fgAcc.rgb, fgAcc.a, 1);
+
+  // BG: Calculate the alpha value only based on the center CoC. This is a rather aggressive approximation but provides stable results.
+  bgAcc.a = smoothstep(pixSizeHalf.y, pixSizeHalf.y * 2, samp0.a);
+
+  // FG: Normalize the total of the weights.
+  fgAcc.a *= PI / sampleCount;
+
+  // Alpha premultiplying
+  float3 rgb = 0;
+  rgb = lerp(rgb, bgAcc.rgb, saturate(bgAcc.a));
+  rgb = lerp(rgb, fgAcc.rgb, saturate(fgAcc.a));
+
+  // Combined alpha value
+  float alpha = (1 - saturate(bgAcc.a)) * (1 - saturate(fgAcc.a));
+
+  o0 = float4(rgb, alpha);
+}
+
+void BokehSim0(
+  float4 v0 : SV_POSITION0, // pix pos
+  float4 v1 : TEXCOORD0, // center: xy
   out float4 o0 : SV_Target0
 )
 {
-  // center
-  float4 col = t_color.Load(int3(v0.xy, 0));
-  o0 = col;
+  float2 texSizeMain = LumaSettings.RenderSize;
+  float2 pixSizeMain = LumaSettings.RenderInvSize;
+  float2 texSizeHalf = LumaSettings.RenderSize / 2;
+  float2 pixSizeHalf = LumaSettings.RenderInvSize * 2;
 
-  float coc = t_coc.Load(int3(v0.xy, 0));
-  // o0.xyz = coc; return; // debug 
-  if (/* abs */ (coc) <= 0.0001)
-  {
-    // o0.xyz = float3(1,0,0);
-    return;
-  }
+  // o0 = t_halfprev.Load(int3(v0.xy, 0)); // debug passthrough
+  BokehSim(v0, v1, o0, false); // do BOKEH!
+}
+
+// https://github.com/keijiro/KinoBokeh/blob/master/Assets/Kino/Bokeh/Shader/Composition.cginc
+float4 Sample9Tent(float2 uv, float2 pixelSize)
+{
+  // 9-tap tent filter
+  float4 duv = pixelSize.xyxy * float4(1, 1, -1, 0);
+  float4 acc;
+
+  acc =  t_halfprev.SampleLevel(s_linear, uv - duv.xy, 0)    ;
+  acc += t_halfprev.SampleLevel(s_linear, uv - duv.wy, 0) * 2;
+  acc += t_halfprev.SampleLevel(s_linear, uv - duv.zy, 0)    ;
+  acc += t_halfprev.SampleLevel(s_linear, uv + duv.zw, 0) * 2;
+  acc += t_halfprev.SampleLevel(s_linear, uv, 0)          * 4;
+  acc += t_halfprev.SampleLevel(s_linear, uv + duv.xw, 0) * 2;
+  acc += t_halfprev.SampleLevel(s_linear, uv + duv.zy, 0)    ;
+  acc += t_halfprev.SampleLevel(s_linear, uv + duv.wy, 0) * 2;
+  acc += t_halfprev.SampleLevel(s_linear, uv + duv.xy, 0)    ;
+
+  return acc / 16;
+}
+
+void BokehSim1(
+  float4 v0 : SV_POSITION0, // pix pos
+  float4 v1 : TEXCOORD0, // center: xy
+  out float4 o0 : SV_Target0
+)
+{
+  float2 texSizeMain = LumaSettings.RenderSize;
+  float2 pixSizeMain = LumaSettings.RenderInvSize;
+  float2 texSizeHalf = LumaSettings.RenderSize / 2;
+  float2 pixSizeHalf = LumaSettings.RenderInvSize * 2;
+
+  // o0 = t_halfprev.Load(int3(v0.xy, 0));
+  // BokehSim(v0, v1, o0, true);
+  o0 = Sample9Tent(v1.xy, pixSizeHalf); // expand blur, so reconstruct is easier
+}
+
+// https://github.com/keijiro/KinoBokeh/blob/master/Assets/Kino/Bokeh/Shader/Composition.cginc
+void Upsample(
+  float4 v0 : SV_POSITION0, // pix pos
+  float4 v1 : TEXCOORD0, // center: xy
+  out float4 o0 : SV_Target0
+) 
+{
+  float2 texSizeMain = LumaSettings.RenderSize;
+  float2 pixSizeMain = LumaSettings.RenderInvSize;
+  float2 texSizeHalf = LumaSettings.RenderSize / 2;
+  float2 pixSizeHalf = LumaSettings.RenderInvSize * 2;
+  uint2  pixPosMain  = (uint2)v0.xy;
+  uint2  pixPosHalf  = pixPosMain * 2;
+
+  // center
+  float4 cs = t_color.Load(int3(v0.xy, 0));
+  #if BLUR_IN_LINEAR
+    cs.xyz = pow(cs.xyz, 2.2);
+  #endif
+  o0 = cs;
 
   float depth = LinearizeDepth(t_depth.Load(int3(v0.xy, 0)));
 
-  // spread
-  float2 texSize = LumaSettings.RenderSize;
-  float2 pixSize = LumaSettings.RenderInvSize;
-  float2 spread = pixSize * coc;
+  // upsample
+  float4 cb = t_halfprev.SampleLevel(s_linear, v1.xy, 0);
+  // float4 cb = Sample9Tent(v1.xy, pixSizeHalf);
 
-  // loop
-  float3 aCol = col.xyz * coc;
-  float aCoc = coc;
-	[unroll] for (int i = 0; i < kernel_length; i++) 
-  {
-    float2 texcoordCurr = kernel[i] * spread + v1.xy;
+//   // combine
+//   float3 rgb = cb.xyz;
+//   rgb += cs.xyz * cb.w;
+// 
+//   // reconstruction (only fixes half the cases for edge pixels, needs better spatial aware)
+//   float coc = CalculateBlurFactor(depth, false, false, false, false) /* * COC_FUDGE */;
+//   if (cb.a < 1 && abs(coc) <= 0.00001) rgb = cs.xyz; // edge (literally) case
 
-    float3 colCurr = t_color.Sample(s_point, texcoordCurr).rgb; // MUST BE POINT! else, linear will leak
-    float cocCurr = t_coc.Sample(s_point, texcoordCurr).r;
+  // reconstruction cheese (AI helped)
+  float A = saturate(1.0 - cb.a); // blurred coverage
+  float3 B = cb.rgb / max(A, 1e-5); // unpremultiply
+  // float3 rgb = B; // debug
 
-    aCol += colCurr * cocCurr;
-    aCoc += cocCurr;
-  }
-  aCol /= aCoc;
-  // g_spread_scale.z controls final alpha blend i think. it sucks! not how dof works.
+  // mimic Prefilter coc as best as possible (AI helped)
+  float coc = CalculateBlurFactor(depth, false, true, true, true) * COC_FUDGE;
+  float radiusPixels = abs(coc) * COC_MAX * texSizeMain.y;
 
-  o0.xyz = aCol;
+  // mask feather (AI helped)
+  const float radiusStart = 0.0; // fudge
+  const float radiusEnd = 16.0 * texSizeMain.y / 2160.0; // fudge, based on 4k
+  const float coverageConfidence = 0.2; // fudge
+  float mask = smoothstep(radiusStart, radiusEnd, radiusPixels);
+  mask *= smoothstep(1e-5, coverageConfidence, A);
+  float3 rgb = lerp(cs.rgb, B, mask);
+  
+  // out
+  #if BLUR_IN_LINEAR
+    rgb = pow(rgb, 1/2.2);
+  #endif
+  o0 = half4(rgb, cs.a);
 }
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// void CalcCoC(
+//   float4 v0 : SV_POSITION0, // pix pos
+//   float4 v1 : TEXCOORD0, // center: xy
+//   out float o0 : SV_Target0 // t_coc
+// )
+// {
+//   float2 texSize = LumaSettings.RenderSize;
+//   float2 pixSize = LumaSettings.RenderInvSize;
+// 
+//   float depth = LinearizeDepth(t_depth.Load(int3(v0.xy, 0)));
+//   float coc = CalculateBlurFactor(depth, false, true, true); // TODO: will prob need fudge
+//   coc = clamp(coc, 0, 1.26); // clamp (to not expose sparse KERNEL) (to not wreck VRAM locality)
+//   coc *= 12;
+//   o0 = coc;
+// }
+// 
+// void BlurEffect(
+//   float4 v0 : SV_POSITION0,
+//   float4 v1 : TEXCOORD0,
+//   out float4 o0 : SV_Target0
+// )
+// {
+//   // get center
+//   float4 col = t_color.Load(int3(v0.xy, 0));
+//   o0 = col;
+// 
+//   float coc = t_coc.Load(int3(v0.xy, 0));
+//   // o0.xyz = coc; return; // debug 
+//   if (/* abs */ (coc) <= 0.0001)
+//   {
+//     // o0.xyz = float3(1,0,0);
+//     return;
+//   }
+// 
+//   float depth = LinearizeDepth(t_depth.Load(int3(v0.xy, 0)));
+// 
+//   // spread
+//   float2 texSize = LumaSettings.RenderSize;
+//   float2 pixSize = LumaSettings.RenderInvSize;
+//   float2 spread = pixSize * coc;
+// 
+//   // loop
+//   float3 aCol = col.xyz * coc;
+//   float aCoc = coc;
+// 	[unroll] for (int i = 1; i < KERNEL_LENGTH; i++) // start i = 1 to skip center sample
+//   {
+//     float2 texcoordCurr = KERNEL[i] * spread + v1.xy;
+// 
+//     float3 colCurr = t_color.Sample(s_point, texcoordCurr).rgb; // MUST BE POINT! else, linear will leak
+//     float cocCurr = t_coc.Sample(s_point, texcoordCurr).r;
+// 
+//     aCol += colCurr * cocCurr;
+//     aCoc += cocCurr;
+//   }
+//   aCol = abs(aCol); // clean
+//   aCol /= aCoc;
+//   // g_spread_scale.z controls final alpha blend i think. it sucks! not how dof works.
+// 
+//   o0.xyz = aCol;
+// }
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // // Presort
 // SamplerState g_depth_sampler_s : register(s0);
@@ -302,7 +505,7 @@ void BlurEffect(
 //   out float4 o1 : SV_Target1 // x: blurred downsampled color, y: 0, z:  (g_presort)
 // )
 // {
-//   // kernel texcoord offsets, forms diamond pattern https://www.desmos.com/calculator/cyn6ok0dor
+//   // KERNEL texcoord offsets, forms diamond pattern https://www.desmos.com/calculator/cyn6ok0dor
 //   const float4 icb[] = { { 0.000781, 0, 0.000781, 0},
 //                          { 0.000241, -0.001321, 0, -0.001389},
 //                          { 0.000241, 0.001321, -0.000781, 0},
@@ -350,7 +553,7 @@ void BlurEffect(
 //   // loop (original highest quality 8-tap)
 //   [unroll] for (int i = 0; i < 8; i++)
 //   {
-//     // texcoord offset (based on kernel & blur factor) https://www.desmos.com/calculator/cyn6ok0dor
+//     // texcoord offset (based on KERNEL & blur factor) https://www.desmos.com/calculator/cyn6ok0dor
 //     float2 texCoordCurr = icb[i + 5].xy * blurFactorForOffset + v1.xy;
 // 
 //     // depth at current texcoord

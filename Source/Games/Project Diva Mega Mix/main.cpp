@@ -4053,24 +4053,32 @@ namespace DepthOfField
       constexpr const char* Luma_MegaMix_DepthOfField = "Luma_MegaMix_DepthOfField";
 
       // shader names      
-      constexpr const char* Luma_MegaMix_DepthOfField_CalcCoC = "Luma_MegaMix_DepthOfField_CalcCoC";
-      constexpr const char* Luma_MegaMix_DepthOfField_BlurEffect = "Luma_MegaMix_DepthOfField_BlurEffect";
+      constexpr const char* Luma_MegaMix_DepthOfField_Prefilter = "Luma_MegaMix_DepthOfField_Prefilter";
+      constexpr const char* Luma_MegaMix_DepthOfField_BokehSim0 = "Luma_MegaMix_DepthOfField_BokehSim0";
+      constexpr const char* Luma_MegaMix_DepthOfField_BokehSim1 = "Luma_MegaMix_DepthOfField_BokehSim1";
+      constexpr const char* Luma_MegaMix_DepthOfField_Upsample  = "Luma_MegaMix_DepthOfField_Upsample";
 
       void OnInit()
       {
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_CalcCoC), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "CalcCoC", {{}}});
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_BlurEffect), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "BlurEffect", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Prefilter), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "Prefilter", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_BokehSim0), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "BokehSim0", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_BokehSim1), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "BokehSim1", {{}}});
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_MegaMix_DepthOfField_Upsample), ShaderDefinition{ Luma_MegaMix_DepthOfField, reshade::api::pipeline_subobject_type::pixel_shader,   nullptr, "Upsample", {{}}});
       }
    }
 
    namespace Resources
    {
-      ComPtr<ID3D11ShaderResourceView> coc_srv = nullptr;
-      ComPtr<ID3D11RenderTargetView> coc_rtv = nullptr;
+      ComPtr<ID3D11ShaderResourceView> half0_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> half0_rtv = nullptr;
+
+      ComPtr<ID3D11ShaderResourceView> half1_srv = nullptr;
+      ComPtr<ID3D11RenderTargetView> half1_rtv = nullptr;
       
       void Reset()
       {
-         coc_srv.reset(); coc_rtv.reset();
+         half0_srv.reset(); half0_rtv.reset();
+         half1_srv.reset(); half1_rtv.reset();
       }
    }
 
@@ -4139,14 +4147,16 @@ namespace DepthOfField
             else if (enabled == Enhanced)
             {
                // create resources
-               [[unlikely]] if (!Resources::coc_srv)
+               [[unlikely]] if (!Resources::half0_srv)
                {
+                  ComPtr<ID3D11Texture2D> tex;
+
                   D3D11_TEXTURE2D_DESC tex_desc;
-                  tex_desc.Width = RenderTracker::res_main_color_size.x;
-                  tex_desc.Height = RenderTracker::res_main_color_size.y;
+                  tex_desc.Width = RenderTracker::res_main_color_size.x/2;
+                  tex_desc.Height = RenderTracker::res_main_color_size.y/2;
                   tex_desc.MipLevels = 1;
                   tex_desc.ArraySize = 1;
-                  tex_desc.Format = DXGI_FORMAT_R16_FLOAT;
+                  tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
                   tex_desc.SampleDesc.Count = 1;
                   tex_desc.SampleDesc.Quality = 0;
                   tex_desc.Usage = D3D11_USAGE_DEFAULT;
@@ -4154,13 +4164,19 @@ namespace DepthOfField
                   tex_desc.CPUAccessFlags = 0;
                   tex_desc.MiscFlags = 0;
 
-                  ComPtr<ID3D11Texture2D> tex;
-                  auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
-                  ASSERT_MSG(SUCCEEDED(hr0), "DepthOfField: Create hr0");
-                  auto hr1 = native_device->CreateShaderResourceView(tex.get(), nullptr, Resources::coc_srv.put());
-                  ASSERT_MSG(SUCCEEDED(hr1), "DepthOfField: Create hr1");
-                  auto hr2 = native_device->CreateRenderTargetView(tex.get(), nullptr, Resources::coc_rtv.put());
-                  ASSERT_MSG(SUCCEEDED(hr2), "DepthOfField: Create hr2");
+                  auto hr3 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr3), "DepthOfField: Create hr3");
+                  auto hr4 = native_device->CreateShaderResourceView(tex.get(), nullptr, Resources::half0_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr4), "DepthOfField: Create hr4");
+                  auto hr5 = native_device->CreateRenderTargetView(tex.get(), nullptr, Resources::half0_rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr5), "DepthOfField: Create hr5");
+
+                  auto hr6 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+                  ASSERT_MSG(SUCCEEDED(hr6), "DepthOfField: Create hr6");
+                  auto hr7 = native_device->CreateShaderResourceView(tex.get(), nullptr, Resources::half1_srv.put());
+                  ASSERT_MSG(SUCCEEDED(hr7), "DepthOfField: Create hr7");
+                  auto hr8 = native_device->CreateRenderTargetView(tex.get(), nullptr, Resources::half1_rtv.put());
+                  ASSERT_MSG(SUCCEEDED(hr8), "DepthOfField: Create hr8");
                   
                   reshade::log::message(reshade::log::level::info, std::format("DepthOfField: Created Resources for size {}x{}", tex_desc.Width, tex_desc.Height).c_str());
                }
@@ -4180,15 +4196,38 @@ namespace DepthOfField
                std::array<ID3D11SamplerState*, 2> samplers = { device_data.sampler_state_point.get(), device_data.sampler_state_linear.get() };
                native_device_context->PSSetSamplers(0, samplers.size(), samplers.data());
 
-               // PASS: Calculate CoC
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_CalcCoC)).get(), nullptr, 0);
-               native_device_context->OMSetRenderTargets(1, &Resources::coc_rtv, nullptr);
+               // PASS: Prefilter
+               D3D11_VIEWPORT viewport;
+               viewport.TopLeftX = 0;
+               viewport.TopLeftY = 0;
+               viewport.Width  = RenderTracker::res_main_color_size.x/2;
+               viewport.Height = RenderTracker::res_main_color_size.y/2;
+               viewport.MinDepth = 0;
+               viewport.MaxDepth = 1;
+               native_device_context->RSSetViewports(1, &viewport);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Prefilter)).get(), nullptr, 0);
+               native_device_context->OMSetRenderTargets(1, &Resources::half0_rtv, nullptr);
                native_device_context->Draw(4, 0);
 
-               // PASS: Blur Effect
-               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_BlurEffect)).get(), nullptr, 0);
+               // PASS: Bokeh Sim 0
+               native_device_context->OMSetRenderTargets(1, &Resources::half1_rtv, nullptr);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_BokehSim0)).get(), nullptr, 0);
+               native_device_context->PSSetShaderResources(5, 1, &Resources::half0_srv);
+               native_device_context->Draw(4, 0);
+
+               // PASS: Bokeh Sim 1
+               native_device_context->OMSetRenderTargets(1, &Resources::half0_rtv, nullptr);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_BokehSim1)).get(), nullptr, 0);
+               native_device_context->PSSetShaderResources(5, 1, &Resources::half1_srv);
+               native_device_context->Draw(4, 0);
+
+               // PASS: Upsample
+               viewport.Width  = RenderTracker::res_main_color_size.x;
+               viewport.Height = RenderTracker::res_main_color_size.y;
+               native_device_context->RSSetViewports(1, &viewport);
                native_device_context->OMSetRenderTargets(1, &rtv0, nullptr);
-               native_device_context->PSSetShaderResources(5, 1, &Resources::coc_srv);
+               native_device_context->PSSetShader(device_data.native_pixel_shaders.at(CompileTimeStringHash(Shaders::Luma_MegaMix_DepthOfField_Upsample)).get(), nullptr, 0);
+               native_device_context->PSSetShaderResources(5, 1, &Resources::half0_srv);
                native_device_context->Draw(4, 0);
 
                // // clean
@@ -8200,7 +8239,7 @@ public:
       ImGui::PushID("###DepthOfField");
       if (DrawCollapsingHeaderEnabledColored("Depth of Field", DepthOfField::enabled > DepthOfField::Vanilla))
       {
-         DrawColoredSubHeader("Blurring of areas out of focus.");
+         DrawColoredSubHeader("Simulate focus of a lens, blurring objects out of the focal plane to a bokeh.");
 
          // dropdown Vanilla, Disable, DLAA
          auto curr = static_cast<int>(DepthOfField::enabled);
@@ -8211,7 +8250,9 @@ public:
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Options for Depth of Field."
                                                                                           "\n"
-                                                                                          "\nTODO");
+                                                                                          "\n[Enhanced]"
+                                                                                          "\nRemoved unnecessary ugly tiling optimization, anti-bleed downsample,"
+                                                                                          "\nmodern non-temporal high quality bokeh blurring, upsample masking without unrealistic alpha blending.");
       }
       ImGui::PopID();
 
