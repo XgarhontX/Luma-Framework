@@ -198,7 +198,7 @@ namespace Installation // support for mod manager's config.toml
       HRESULT hr = URLDownloadToFileW(nullptr, L"https://github.com/XgarhontX/display-commander/releases/download/v1.0.0/zzz_display_commander_megamix.addon64", path_dc_dst.c_str(), 0, nullptr);
       if (!SUCCEEDED(hr))
       {
-         MessageBoxA(nullptr, "Failed! Please do it manually:\n\n- Download .addon64\n- Drop it next to dxgi.dll\n\n(Both browser and file explorer will now open!)", "Luma Display Commander Install", MB_OK | MB_ICONERROR);
+         MessageBoxA(nullptr, "Failed! Please do it manually:\n\n- Download .addon64\n- Drop it next to the game's exe\n\n(Both browser and file explorer will now open!)", "Luma Display Commander Install", MB_OK | MB_ICONERROR);
          OpenURL("https://github.com/XgarhontX/display-commander/releases/");
          OpenFilePath(path_addon.string().c_str());
       }
@@ -1514,6 +1514,11 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
    {
 
    }
+}
+
+namespace MSAA
+{
+   int enabled = 0;
 }
 
 namespace SeparableUI
@@ -4498,6 +4503,8 @@ namespace ShadowMap
    constexpr std::array<uint32_t, 2> silhouette_shaders = {
       0xF2368D1C, // has alpha 
       0x8BD626DD, // completely opaque
+      0xE0689ABB, // unwitnessed
+      0x08335994, // unwitnessed
       // (there are other named variants, but the cso's are the exact same)
    };
 
@@ -5755,6 +5762,7 @@ namespace DuplicateWorldReflections
       0x208EEA46,
       0x8C19842C,
       0x74805C84,
+      0x5890C15A, // unwitnessed
       // 0x4579859D, // default skin shader (PBR)
       // 0xA263A14B, // default skin shader (no SSS) (NPR)
    };
@@ -8199,7 +8207,7 @@ public:
 
          // dropdown Vanilla, Disable, DLAA
          auto curr = static_cast<int>(AntiAliasing::enabled);
-         if (ImGui::Combo("Mode", &curr, "(Weak) Morphological Anti-Aliasing (MLAA)\0Disallow\0(Strong) Directional Localized Anti-Aliasing (DLAA)\0(Balanced) Subpixel Morphological Anti-Aliasing (SMAA) w/ Depth Predication\0"))
+         if (ImGui::Combo("Mode", &curr, "(Weak) MLAA\0Disallow\0(Strong) DLAA\0(Balanced) SMAA\0"))
          {
             reshade::set_config_value(runtime, NAME, AntiAliasing::reshadesave_enabled, curr);
             AntiAliasing::enabled = static_cast<AntiAliasing::Enabled>(curr);
@@ -8208,14 +8216,14 @@ public:
                                                                                           "\n"
                                                                                           "\n[Morphological Anti-Aliasing (MLAA)]"
                                                                                           "\nThe vanilla option, blurring the least."
-                                                                                          "\nThis algorithm is the OG, where edges to blur are found geometrically."
+                                                                                          "\nThis algorithm is the OG/seminal, where edges to blur are found geometrically."
                                                                                           "\n"
                                                                                           "\n[Directional Localized Anti-Aliasing (DLAA)]"
                                                                                           "\nMore lenient, DLAA will result in a more blurred look."
                                                                                           "\nDebuting in Star Wars: The Force Unleashed II, DLAA finds and blurs along the direction of edges."
                                                                                           "\nThis is about the same cost as MLAA."
                                                                                           "\n"
-                                                                                          "\n[Subpixel Morphological Anti-Aliasing (SMAA)]"
+                                                                                          "\n[SMAA (Subpixel Morphological Anti-Aliasing)]"
                                                                                           "\nSmarter, it'll blur stronger than MLAA, and won't overdo like DLAA."
                                                                                           "\nInitially seen in CryTek & Call of Duty, it has the most involved edge detection."
                                                                                           "\nThis is the most taxing option, taking in 3D depth to find edges.");
@@ -8225,7 +8233,7 @@ public:
          ImGui::PopStyleColor();
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Btw, FXAA never seems to draw.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Btw, vanilla FXAA is stripped from code.");
          ImGui::PopStyleColor();
 
          ImGui::NewLine();

@@ -1,3 +1,9 @@
+/*
+reduce_tex_reduce_2
+sss_copy
+star_milky_way
+*/
+
 // ---- Created with 3Dmigoto v1.3.16 on Mon Sep 01 02:43:29 2025
 
 SamplerState g_sampler_s : register(s0);
