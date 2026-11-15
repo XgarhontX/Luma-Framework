@@ -47,7 +47,12 @@
     #define DEPTH_MIP_SAMPLING_MINIMUM_LEVEL 0
     #define DEPTH_MIP_SAMPLING_NORMALSSMOOTH 0
 #endif
-#define DEPTH_MIP_SAMPLING_OFFSET 3.3 // Default 3.3
+
+#if XEGTAO_CHARACTERSONLY
+    #define DEPTH_MIP_SAMPLING_OFFSET 4.3
+#else
+    #define DEPTH_MIP_SAMPLING_OFFSET 3.3
+#endif
 
 #define EFFECT_RADIUS 0.078 // Default 0.5 // TODO: why the helly is this so low?
 #define RADIUS_MULTIPLIER 1.516 // Default 1.457
@@ -99,6 +104,18 @@
 #elif XEGTAO_THREADS_DENOISE == 1 // unused
     #define XEGTAO_THREADS_DENOISE_X 16
     #define XEGTAO_THREADS_DENOISE_Y 16
+#endif
+
+#if CUSTOM_MSAA == 1 // 2x
+    #define MSAA_COUNT 2
+#elif CUSTOM_MSAA == 2 // 4x
+    #define MSAA_COUNT 4
+#elif CUSTOM_MSAA == 3 // 8x
+    #define MSAA_COUNT 8
+#elif CUSTOM_MSAA == 4 // 16x
+    #define MSAA_COUNT 16
+#else
+    #define MSAA_COUNT 0
 #endif
 
 struct GTAOConstants
@@ -156,6 +173,7 @@ cbuffer Scene : register(b1)
   float4 g_fog_bump_params : packoffset(c40);
   float4 g_fog_state_params : packoffset(c41); 
     // 0.9, -1.1, 26.2, 0.03663
+    // 0.04, 10, 65, 0.0181818
     // linear fog: amount?, negative start offset, far distance, rcp(far distance - negative start offset)
   float4 g_normal_tangent_transforms[3] : packoffset(c42);
   float4 g_esm_param : packoffset(c45);
@@ -259,9 +277,9 @@ GTAOConstants GetNDCToView(GTAOConstants c)
     return c;
 }
 
-float InverseLerpFallback0(float a, float b, float value)
+float InverseLerpFog(float a, float b, float value)
 {
-  if (a == b) return 0.0;
+  if (/* a == b && */ b <= a) return 0.0;
   return (value - a) / (b - a);
 }
 
@@ -326,10 +344,18 @@ float XeGTAO_DepthMIPFilter(float depth0, float depth1, float depth2, float dept
     return (weight0 * depth0 + weight1 * depth1 + weight2 * depth2 + weight3 * depth3) * rcp(weightSum);
 }
 
+float XeGTAO_CharactersDepthReject(float dOpaque, float dSSS) // TODO: this doesnt fully work. transparent clothing might not get draw SSS level, so now mask is made
+{
+    if (dSSS == 0) return dSSS;
+    return dSSS == dOpaque ? dSSS : dOpaque; // WOAH, it's that accurate
+    // return abs(dSSS - dOpaque) < 0.0001 ? dSSS : dOpaque; 
+}
+
 groupshared float g_scratchDepths[8][8];
 void XeGTAO_PrefilterDepths16x16CS(uint2 dispatchThreadID, uint2 groupThreadID, const GTAOConstants consts)
 {
     Texture2D sourceNDCDepth = t0;
+    Texture2D sourceNDCDepthSSS = t1;
     RWTexture2D<float> outDepth32 = out_working_depth_32;
     RWTexture2D<float> outDepth0 = out_working_depth_mip0;
     RWTexture2D<float> outDepth1 = out_working_depth_mip1;
@@ -341,33 +367,44 @@ void XeGTAO_PrefilterDepths16x16CS(uint2 dispatchThreadID, uint2 groupThreadID, 
     const uint2 baseCoord = dispatchThreadID;
     const uint2 pixCoord = baseCoord * 2;
 
+    // TODO: do something like https://github.com/Novum/vkQuake/blob/master/Shaders/ssao_evaluate.inc to let characters contribute to world
 #if XEGTAO_HALFRES == 0
     float4 depths4 = sourceNDCDepth.GatherRed(s0, float2((pixCoord /* + 0.5 */) * consts.ViewportPixelSize), int2(1, 1));
-    float depth0 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.w));
-    float depth1 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.z));
-    float depth2 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.x));
-    float depth3 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.y));
+    float depth0 = depths4.w;
+    float depth1 = depths4.z;
+    float depth2 = depths4.x;
+    float depth3 = depths4.y;
+    #if XEGTAO_CHARACTERSONLY
+        float4 depths4sss = sourceNDCDepthSSS.GatherRed(s0, float2((pixCoord /* + 0.5 */) * consts.ViewportPixelSize), int2(1, 1));
+        depth0 = XeGTAO_CharactersDepthReject(depth0, depths4sss.w);
+        depth1 = XeGTAO_CharactersDepthReject(depth1, depths4sss.z);
+        depth2 = XeGTAO_CharactersDepthReject(depth2, depths4sss.x);
+        depth3 = XeGTAO_CharactersDepthReject(depth3, depths4sss.y);
+    #endif
 #else
-    // basically skip original mip0
-    // float2 pixSize = consts.ViewportPixelSize;
-    // #if XEGTAO_MANUALSIZE == 1
-    //     pixSize *= 2;
-    // #endif
-    // float4 depthsA = sourceNDCDepth.GatherRed(s0, float2(((pixCoord + 0.5) + uint2(0, 0)) * pixSize), int2(1, 1));
-    // float4 depthsB = sourceNDCDepth.GatherRed(s0, float2(((pixCoord + 0.5) + uint2(1, 0)) * pixSize), int2(1, 1));
-    // float4 depthsC = sourceNDCDepth.GatherRed(s0, float2(((pixCoord + 0.5) + uint2(0, 1)) * pixSize), int2(1, 1));
-    // float4 depthsD = sourceNDCDepth.GatherRed(s0, float2(((pixCoord + 0.5) + uint2(1, 1)) * pixSize), int2(1, 1));
-    // float depth0 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depthsA.w));
-    // float depth1 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depthsB.w));
-    // float depth2 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depthsC.w));
-    // float depth3 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depthsD.w));
-
     uint2 texCoord = (pixCoord /* + 0.5 */) * 2;
-    float depth0 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(sourceNDCDepth.Load(int3(texCoord + uint2(0, 0), 0)).x));
-    float depth1 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(sourceNDCDepth.Load(int3(texCoord + uint2(1, 0), 0)).x));
-    float depth2 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(sourceNDCDepth.Load(int3(texCoord + uint2(0, 1), 0)).x));
-    float depth3 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(sourceNDCDepth.Load(int3(texCoord + uint2(1, 1), 0)).x));
+    float depth0 = sourceNDCDepth.Load(int3(texCoord + uint2(0, 0), 0)).x;
+    float depth1 = sourceNDCDepth.Load(int3(texCoord + uint2(1, 0), 0)).x;
+    float depth2 = sourceNDCDepth.Load(int3(texCoord + uint2(0, 1), 0)).x;
+    float depth3 = sourceNDCDepth.Load(int3(texCoord + uint2(1, 1), 0)).x;
+    #if XEGTAO_CHARACTERSONLY
+        float depth0SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(0, 0), 0)).x;
+        float depth1SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(1, 0), 0)).x;
+        float depth2SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(0, 1), 0)).x;
+        float depth3SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(1, 1), 0)).x;
+
+        depth0 = XeGTAO_CharactersDepthReject(depth0, depth0SSS);
+        depth1 = XeGTAO_CharactersDepthReject(depth1, depth1SSS);
+        depth2 = XeGTAO_CharactersDepthReject(depth2, depth2SSS);
+        depth3 = XeGTAO_CharactersDepthReject(depth3, depth3SSS);
+    #endif
 #endif
+
+    depth0 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depth0));
+    depth1 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depth1));
+    depth2 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depth2));
+    depth3 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depth3));
+
     outDepth0[pixCoord + uint2(0, 0)] = depth0;
     outDepth0[pixCoord + uint2(1, 0)] = depth1;
     outDepth0[pixCoord + uint2(0, 1)] = depth2;
@@ -570,7 +607,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
     const float normalSmoothViewRadius = (EFFECT_RADIUS + (centerZ * EFFECT_RADIUS_DISTANCE_SCALE)) * RADIUS_MULTIPLIER * NORMAL_SMOOTH_SCALE; // TODO: dont copy main pass / use diff coeffs?
     const float2 viewspacePixelSizeAtDepth = centerZ * abs(consts.NDCToViewMul);
     const float2 stepUV = normalSmoothViewRadius * rcp(max(viewspacePixelSizeAtDepth, 1e-6));
-#if XE_GTAO_NORMALSMOOTH_2ND
+#if XEGTAO_NORMALSMOOTH_2ND
     const float2 stepUVScaled = stepUV;
 #else
     const float2 stepUVScaled = stepUV * 2.0;
@@ -882,8 +919,8 @@ void XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, const GTAOConstants co
 
         // float fogHScore = smoothstep(g_fog_height_params.y, g_fog_height_params.z, viewspaceZ) /* * g_fog_height_params.x */;
         // float fogSScore = smoothstep(g_fog_state_params.y, g_fog_state_params.z, viewspaceZ) /* * g_fog_state_params.x */;
-        float fogHScore = saturate(InverseLerpFallback0(g_fog_height_params.y, g_fog_height_params.z, viewspaceZ)) /* * g_fog_height_params.x */;
-        float fogSScore = saturate(InverseLerpFallback0(g_fog_state_params.y, g_fog_state_params.z, viewspaceZ)) /* * g_fog_state_params.x */;
+        // float fogHScore = saturate(InverseLerpFog(g_fog_height_params.y, g_fog_height_params.z, viewspaceZ)) * saturate(g_fog_height_params.x * 1.5);
+        float fogSScore = saturate(InverseLerpFog(g_fog_state_params.y, g_fog_state_params.z, viewspaceZ)) * saturate(g_fog_state_params.x * 1.5);
         float fogScore = fogSScore/* max(fogHScore, fogSScore) */;
         fogScore = pow(fogScore, 0.777); // curve
         fogScore *= fogLuma; // color
@@ -939,7 +976,7 @@ void XeGTAO_AddSample(float ssaoValue, float edgeValue, inout float sum, inout f
 
 void XeGTAO_DenoiseCS(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, SamplerState texSampler, RWTexture2D<unorm float2> outputTexture, const GTAOConstants consts)
 {
-#if XE_GTAO_FINAL_APPLY
+#if XEGTAO_FINAL_APPLY
     const float blurAmount = DENOISE_BLUR_BETA;
 #else
     const float blurAmount = DENOISE_BLUR_BETA / 5.0;
@@ -1226,7 +1263,6 @@ float4 apply_ps(float4 sv_pos : SV_Position0) : SV_Target0
 
     // color
     float4 color = tColor.Load(int3(pixCoord.xy, 0)).xyzw;
-    // float4 color = tColor.SampleLevel(sPoint, uv, 0);
     color = max(0, color); color.w = min(color.w, 1); //REQUIRED!
 
     // ao
@@ -1336,12 +1372,12 @@ float4 apply_ps(float4 sv_pos : SV_Position0) : SV_Target0
 
     // return float4(ao.xxx, 1);
 
-#if XE_GTAO_DEBUG_NORMALS == 1
+#if XEGTAO_DEBUG_NORMALS == 1
     float3 x = tHalfNormals.SampleLevel(sPoint, uv, 0).xyz;
     x = NormalsDenormalize(x);
     x = x * 0.5 + 0.5;
     color.w = 1;
-#elif XE_GTAO_DEBUG_DEPTH == 1
+#elif XEGTAO_DEBUG_DEPTH == 1
     // float d = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(tFullDepth32.SampleLevel(sPoint, uv, 0).x));
     float d = tHalfDepth16.SampleLevel(sPoint, uv, DEVELOPMENT ? floor(DVS10 * XE_GTAO_DEPTH_MIP_LEVELS) : 0).x;
     // d = 0.1 * d;
@@ -1372,12 +1408,14 @@ float4 apply_ps(float4 sv_pos : SV_Position0) : SV_Target0
     l *= LUMINANCE_DODGE;
     ao = remap(ao, 0, 1, l, 1);
     ao = saturate(ao);
+    
+    return float4(pow(ao, 1/2.2).xxx, 1); // gamma multiply blend
 
-    x *= ao; //apply
-    x *= ambientLuma; //ambient scale inverse
-    x = pow(x, 1.0 / 2.2); //gamma encode
+    // x *= ao; //apply
+    // x *= ambientLuma; //ambient scale inverse
+    // x = pow(x, 1.0 / 2.2); //gamma encode
 
-#if XE_GTAO_DEBUG_AO == 1
+#if XEGTAO_DEBUG_AO == 1
     x = ao;
     color.w = 1;
 #endif

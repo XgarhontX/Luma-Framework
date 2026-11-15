@@ -117,7 +117,11 @@ void main(
   r1.w = cmp(0 < v3.z);
   r2.x = 0.479999989 * v3.x; //exposure
   r1.xyz = r1.xyz * r2.xxx + r0.xyz;
+  #if CUSTOM_SDR_1
+    r1.xyz = min(0.959999979, r1.xyz); // eww, but it deglows
+  #endif
   r0.xyz = r1.www ? r1.xyz : r0.xyz;
+
 
   colorUntonemapped = r0.xyz;
   colorUntonemapped = DecodeIntermediate(max(0, colorUntonemapped));

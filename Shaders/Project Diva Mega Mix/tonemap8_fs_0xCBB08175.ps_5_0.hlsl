@@ -79,7 +79,9 @@ void main(
   r1.xyz = r1.xyz * r2.zzz + r0.xyz;
 
   //bloom or not
-  // r1.xyz = min(float3(0.959999979,0.959999979,0.959999979), r1.xyz); //clamp
+  #if CUSTOM_SDR_1
+    r1.xyz = min(float3(0.959999979), r1.xyz); // eww, but it deglows
+  #endif
   r0.w = cmp(0 < v3.z);
   r0.xyz = r0.www ? r1.xyz : r0.xyz; //bloom or not
   

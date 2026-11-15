@@ -58,7 +58,9 @@ void main(
   r0.xyz = r0.xyz * r0.www + r1.xyz; //scale bloom then add color 
 
   //bloom or not
-  // r0.xyz = min(float3(0.959999979,0.959999979,0.959999979), r0.xyz);
+  #if CUSTOM_SDR_1
+    r0.xyz = min(float3(0.959999979), r0.xyz); // eww, but it deglows
+  #endif
   r0.w = cmp(0 < v3.z);
   r0.xyz = r0.www ? r0.xyz : r1.xyz;
 

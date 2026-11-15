@@ -81,13 +81,18 @@ void main(
   r1.x = 0.479999989 * v3.x; //exposure
   // colorUntonemapped *= r1.x; //exposure
   r0.xyz = r1.xxx * r0.xyz;
-  // r0.xyz = min(float3(0.959999979,0.959999979,0.959999979), r0.xyz);
+  #if CUSTOM_SDR_1
+    r0.xyz = min(float3(0.959999979), r0.xyz); // eww, but it deglows
+  #endif
 
   colorUntonemapped = r0.xyz;
   colorUntonemapped = DecodeIntermediate(max(0, colorUntonemapped));
 
-  r0.xyz = /* saturate */(r0.xyz * g_tone_scale.xyz + g_tone_offset.xyz);
-
+  r0.xyz = r0.xyz * g_tone_scale.xyz + g_tone_offset.xyz;
+  #if CUSTOM_SDR_1
+    r0.xyz = saturate(r0.xyz); // eww, but it deglows
+  #endif
+  
   r0.xyz = Tonemap_Do(colorUntonemapped, r0.xyz, v1.xy, g_textures_0_, true);
 
   //fade + out

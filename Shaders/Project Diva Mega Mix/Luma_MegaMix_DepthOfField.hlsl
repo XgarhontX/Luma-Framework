@@ -1,6 +1,6 @@
 // main reference, for disc: https://github.com/keijiro/KinoBokeh
 // straight forward full res DoF hype: https://github.com/ninjamica/Painted-DOF/blob/main/DOF_Paint.fx
-// for hexgonal (not implemented): https://github.com/zigguratvertigo/HexBokehBlur/blob/master/HexagonalBokehBlur.rfx
+// for hexagonal (not implemented): https://github.com/zigguratvertigo/HexBokehBlur/blob/master/HexagonalBokehBlur.rfx
 
 cbuffer PsCommon : register(b0)
 {
@@ -94,7 +94,8 @@ float CalculateBlurFactor(float linearDepth, bool isFarOnly = false, bool isPara
   if (isCustom) // vanilla faithful fudge
   {
     x *= 0.3; 
-    x = x * x * x * x;
+    x *= x;
+    // x = x * x * x * x;
     x = clamp(x, 0, COC_MAX);
   }
 
@@ -169,7 +170,7 @@ void Prefilter( // aka Downsample
   float wBL = saturate(cocBLAbs * 1/COC_MAX);
   float wBR = saturate(cocBRAbs * 1/COC_MAX);
 
-  #if BLUR_IN_LINEAR // TODO: idk, it still flickers. we need that TAA action
+  #if BLUR_IN_LINEAR && CUSTOM_DOF_LUMAWEIGHTS // TODO: idk, it still flickers. we need that TAA action
     // Apply luma weights to reduce flickering. Inspired by goo.gl/j1fhLe goo.gl/mfuZ4h
     wTL *= 1 / (GetLuminance(cTL) + 1);
     wTR *= 1 / (GetLuminance(cTR) + 1);
@@ -267,6 +268,9 @@ void BokehSim0(
 
   // o0 = t_halfprev.Load(int3(v0.xy, 0)); // debug passthrough
   BokehSim(v0, v1, o0, false); // do BOKEH!
+  #if BLUR_IN_LINEAR
+    o0.xyz = pow(o0.xyz, 1 / 2.2);
+  #endif
 }
 
 // https://github.com/keijiro/KinoBokeh/blob/master/Assets/Kino/Bokeh/Shader/Composition.cginc
@@ -280,7 +284,7 @@ float4 Sample9Tent(float2 uv, float2 pixelSize)
   acc += t_halfprev.SampleLevel(s_linear, uv - duv.wy, 0) * 2;
   acc += t_halfprev.SampleLevel(s_linear, uv - duv.zy, 0)    ;
   acc += t_halfprev.SampleLevel(s_linear, uv + duv.zw, 0) * 2;
-  acc += t_halfprev.SampleLevel(s_linear, uv, 0)          * 4;
+  acc += t_halfprev.SampleLevel(s_linear, uv         , 0) * 4;
   acc += t_halfprev.SampleLevel(s_linear, uv + duv.xw, 0) * 2;
   acc += t_halfprev.SampleLevel(s_linear, uv + duv.zy, 0)    ;
   acc += t_halfprev.SampleLevel(s_linear, uv + duv.wy, 0) * 2;
@@ -295,18 +299,22 @@ void BokehSim1(
   out float4 o0 : SV_Target0
 )
 {
-  float2 texSizeMain = LumaSettings.RenderSize;
-  float2 pixSizeMain = LumaSettings.RenderInvSize;
-  float2 texSizeHalf = LumaSettings.RenderSize / 2;
   float2 pixSizeHalf = LumaSettings.RenderInvSize * 2;
 
-  // o0 = t_halfprev.Load(int3(v0.xy, 0));
-  // BokehSim(v0, v1, o0, true);
   o0 = Sample9Tent(v1.xy, pixSizeHalf); // expand blur, so reconstruct is easier
-  // #if BLUR_IN_LINEAR
-  //   o0.xyz = pow(o0.xyz, 1/2.2);
-  // #endif
 }
+
+void BokehSim2(
+  float4 v0 : SV_POSITION0, // pix pos
+  float4 v1 : TEXCOORD0, // center: xy
+  out float4 o0 : SV_Target0
+)
+{
+  float2 pixSizeQuarter = LumaSettings.RenderInvSize * 4;
+
+  o0 = Sample9Tent(v1.xy, pixSizeQuarter); // expand blur, so reconstruct is easier
+}
+
 
 // https://github.com/keijiro/KinoBokeh/blob/master/Assets/Kino/Bokeh/Shader/Composition.cginc
 void Upsample(
@@ -324,29 +332,24 @@ void Upsample(
 
   // center
   float4 cs = t_color.Load(int3(v0.xy, 0));
-  #if BLUR_IN_LINEAR
-    cs.xyz = pow(cs.xyz, 2.2);
-  #endif
+  cs.xyz = abs(cs.xyz);
+  cs.w = saturate(cs.w);
+  // #if BLUR_IN_LINEAR
+  //   cs.xyz = pow(cs.xyz, 2.2);
+  // #endif
   o0 = cs;
 
   float depth = LinearizeDepth(t_depth.Load(int3(v0.xy, 0)));
 
   // upsample
   float4 cb = t_halfprev.SampleLevel(s_linear, v1.xy, 0);
-  // float4 cb = Sample9Tent(v1.xy, pixSizeHalf);
-
-//   // combine
-//   float3 rgb = cb.xyz;
-//   rgb += cs.xyz * cb.w;
-// 
-//   // reconstruction (only fixes half the cases for edge pixels, needs better spatial aware)
-//   float coc = CalculateBlurFactor(depth, false, false, false, false) /* * COC_FUDGE */;
-//   if (cb.a < 1 && abs(coc) <= 0.00001) rgb = cs.xyz; // edge (literally) case
+  // float4 cb = Sample9Tent(v1.xy, pixSizeHalf); // barely a diff
 
   // reconstruction cheese (AI helped)
-  float A = saturate(1.0 - cb.a); // blurred coverage
-  float3 B = cb.rgb / max(A, 1e-5); // unpremultiply
-  // float3 rgb = B; // debug
+  float A = saturate(1-cb.a);
+  float3 B = cb.rgb / max(A, 1e-5);
+  // float A = cb.a;
+  // float3 B = cb.rgb;
 
   // mimic Prefilter coc as best as possible (AI helped)
   float coc = CalculateBlurFactor(depth, false, true, true, true) * COC_FUDGE;
@@ -357,13 +360,13 @@ void Upsample(
   const float radiusEnd = 16.0 * texSizeMain.y / 2160.0; // fudge, based on 4k
   const float coverageConfidence = 0.2; // fudge
   float mask = smoothstep(radiusStart, radiusEnd, radiusPixels);
-  mask *= smoothstep(1e-5, coverageConfidence, A);
+  mask *= smoothstep(0, coverageConfidence, A);
   float3 rgb = lerp(cs.rgb, B, mask);
   
   // out
-  #if BLUR_IN_LINEAR
-    rgb = pow(rgb, 1/2.2);
-  #endif
+  // #if BLUR_IN_LINEAR
+  //   rgb = pow(rgb, 1/2.2);
+  // #endif
   o0 = half4(rgb, cs.a);
 }
 
@@ -439,7 +442,7 @@ void Upsample(
 // Texture2D<float4> g_color : register(t1); // full res
 // 
 // // Blur
-// // that one disc pattern, dont know when first used, but Jiminez 2014 / CoD:AW for sure https://www.desmos.com/calculator/cyn6ok0dor
+// // that one disc pattern https://www.desmos.com/calculator/cyn6ok0dor
 // cbuffer Offset : register(b1)
 // {
 //   float4 g_offsets[25] : packoffset(c0);

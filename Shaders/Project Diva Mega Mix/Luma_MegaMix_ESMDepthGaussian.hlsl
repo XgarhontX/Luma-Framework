@@ -209,7 +209,7 @@ void frag_main()
         const float sigmaIncrease = radiusReduce - 1;
         const float sigmaIncreaseUser = CUSTOM_ESM_DEPTH_SIGMAINCREASE * 0.5;
 
-        const float sigma = (2 * newSizeRatio) + sigmaIncreaseUser + sigmaIncrease; // TODO: expose to user customization, but this will stop unrolling gaussian blur weights
+        const float sigma = (2 * newSizeRatio) + sigmaIncreaseUser + sigmaIncrease;
         const float radius = 7 / radiusReduce * newSizeRatio;
         float2 step = cb0_m0 * newSizeRatioInv; // which axis?
         [unroll] for (float i = 1; i <= radius; i++)
