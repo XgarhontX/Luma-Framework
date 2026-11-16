@@ -19,7 +19,7 @@ cbuffer PsCommon : register(b0)
 
 #include "./Includes/Common.hlsl"
 
-#define COC_MAX 0.600 // vanilla faithful fudge
+#define COC_MAX 0.65 // vanilla faithful fudge (max kernel can handle @ 4k is about 0.65)
 #define COC_FUDGE 4.000 * 0.005 // vanilla faithful fudge
 
 #define BLUR_IN_LINEAR 1 // trade flickering for really good bokeh
@@ -89,14 +89,24 @@ float CalculateBlurFactor(float linearDepth, bool isFarOnly = false, bool isPara
   x = exp2(x);
   x = 1 - x;
 
+  bool isNear = linearDepth < params.x;
+
   if (isParamW) x *= params.w; // final multiplier, gets clamped later
 
   if (isCustom) // vanilla faithful fudge
   {
-    x *= 0.3; 
-    x *= x;
-    // x = x * x * x * x;
-    x = clamp(x, 0, COC_MAX);
+    x = max(x, 0);
+
+    #if CUSTOM_DOF_CURVEPROFILE == 0
+      x = pow(x * 0.16, 1.2);
+    #else
+      if (isNear) x *= 0.2;
+      else x *= 0.3;
+      x *= x;
+    #endif
+    // x = pow(x * DVS1, DVS2);
+
+    x = min(x, COC_MAX);
   }
 
   if (isNearNegative && linearDepth < params.x) x = -x;
@@ -170,7 +180,7 @@ void Prefilter( // aka Downsample
   float wBL = saturate(cocBLAbs * 1/COC_MAX);
   float wBR = saturate(cocBRAbs * 1/COC_MAX);
 
-  #if BLUR_IN_LINEAR && CUSTOM_DOF_LUMAWEIGHTS // TODO: idk, it still flickers. we need that TAA action
+  #if BLUR_IN_LINEAR && CUSTOM_DOF_LUMAWEIGHTS
     // Apply luma weights to reduce flickering. Inspired by goo.gl/j1fhLe goo.gl/mfuZ4h
     wTL *= 1 / (GetLuminance(cTL) + 1);
     wTR *= 1 / (GetLuminance(cTR) + 1);

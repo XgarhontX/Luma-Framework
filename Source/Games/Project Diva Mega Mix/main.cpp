@@ -564,9 +564,6 @@ namespace ShaderHashesLists
    void OnInit()
    {
 #if DEVELOPMENT
-      // forced_shader_names.emplace(Blur4Tap, "4tapblur");
-      // forced_shader_names.emplace(CopyWithMultiplier, "copywithmultiplier");
-      // forced_shader_names.emplace(WaterWavesNormals0, "waterwavesnormals");
       ForcedShaderNamesReadCSV();
 #endif
    }
@@ -645,6 +642,7 @@ namespace ShaderDefineInfo
    constexpr uint32_t CUSTOM_SEPARABLEUI                = char_ptr_crc32("CUSTOM_SEPARABLEUI");
    constexpr uint32_t CUSTOM_MSAA                       = char_ptr_crc32("CUSTOM_MSAA");
    constexpr uint32_t CUSTOM_DOF_LUMAWEIGHTS            = char_ptr_crc32("CUSTOM_DOF_LUMAWEIGHTS");
+   constexpr uint32_t CUSTOM_DOF_CURVEPROFILE           = char_ptr_crc32("CUSTOM_DOF_CURVEPROFILE");
 
    void OnInit()
    {
@@ -696,6 +694,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_UPGRADE_DEBUG", '0', true, false, "Show inputs into UpgradeToneMap().", 5},
          {"CUSTOM_MSAA", '0', true, false, "MSAA render target for main color.", 5},
          {"CUSTOM_DOF_LUMAWEIGHTS", '1', true, false, "Depth of Field use pixel's luminance for anti-flicker.", 5},
+         {"CUSTOM_DOF_CURVEPROFILE", '1', true, false, "Depth of Field Circle of Confusion curve.", 5},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       auto_recompile_defines = true; //force
@@ -2023,6 +2022,7 @@ namespace MSAA
       rect.bottom = RenderTracker::res_main_depth_size.y;
       native_device_context->RSSetScissorRects(1, &rect);
       native_device_context->RSSetState(nullptr);
+      
 
       constexpr ID3D11RenderTargetView* null_rtv = nullptr;
       ID3D11RenderTargetView* rtv_effective = null_rtv;
@@ -2030,6 +2030,10 @@ namespace MSAA
          else if (mode == NonSSSContourMaskAndDepth) rtv_effective = Resources::orig_rtv1.get(); // nonsss contour mask
       native_device_context->OMSetRenderTargets(1, &rtv_effective, Resources::orig_dsv.get()); // original is not an RTV res
       native_device_context->OMSetDepthStencilState(Resources::resolve_dss.get(), 0);
+      
+      constexpr ID3D11BlendState* blend_state_null = nullptr; // because 
+      constexpr FLOAT blend_factor[4] = { 1.f, 1.f, 1.f, 1.f };
+      native_device_context->OMSetBlendState(blend_state_null, blend_factor, 0xFFFFFFFF);
 
       const std::array<ID3D11ShaderResourceView*, 2> srvs = { mode != NonSSSContourMaskAndDepth ? Resources::color_srv.get() : Resources::nonsss_contour_mask_srv.get(), Resources::depth_srv.get() };
       native_device_context->PSSetShaderResources(0, srvs.size(), srvs.data());
@@ -2049,7 +2053,8 @@ namespace MSAA
    void ResolveMSAA_XeGTAO(ID3D11DeviceContext* native_device_context, DeviceData& device_data, uint32_t ps)
    {
       ASSERT_MSG(ps == 0xF94D4A4A, "MSAA::XeGTAO_ResolveMSAA() requested when not sun_no_textured_ps");
-      ResolveMSAA_Internal(native_device_context, device_data, FastDepth, false);
+      ASSERT_MSG(state_draws_since_last_depth_resolve == -1, "MSAA::XeGTAO_ResolveMSAA() requested when not in ReplacedAndDrawing");
+      ResolveMSAA_Internal(native_device_context, device_data, FastColorAndDepth, false);
    }
 
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
@@ -6563,7 +6568,7 @@ namespace ShadowMap
                   }
                   else if (!state_texa_drawn && state_texb_drawn)
                   {
-                     ASSERT_MSG(false, "ShadowMap: MainRender impossible TexB use but not TexA.");
+                     native_device_context->PSSetShaderResources(6, 1, &Resources::color_use_b_srv); // set B like as A (BRUH)
                   }
                }
                if (Resources::IsDepthNewReady())
@@ -6586,7 +6591,7 @@ namespace ShadowMap
       return result;
    }
 
-   bool OnClearRenderTargetViewMegaMix(uint32_t rtv_handle)
+   bool OnClearRenderTargetViewMegaMix(uint64_t rtv_handle)
    {
       bool is_prevent = false; // result
 
@@ -9238,7 +9243,7 @@ public:
          ImGui::PopStyleColor();
 
          ImGui::NewLine();
-         DrawColoredSubHeader("Multisample (MSAA): Blend color by subpixel info from higher resolution depth buffer.");
+         DrawColoredSubHeader("Multisample (MSAA): One color sample is resolved by multiple depth samples to detect edges.");
 
          static int prev_msaa = -1;
          int curr_msaa = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_MSAA, "Sample Count", {"Off", "2x (Recommended for SSAA)", "4x (Recommended for Native)", "8x", "16x (GPU Probably Rejects)"}, "The subpixel sample count.");
@@ -9246,8 +9251,8 @@ public:
          prev_msaa = curr_msaa;
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA only works on geometric edges, so aliasing from textures is unresolved.");
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Pair with SSAA to achieve Temporal AA level smoothness without smearing.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA only using polygon edges, so aliasing from textures is unresolved.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though costly, pair with SSAA to achieve Temporal AA level smoothness without smearing.");
          ImGui::PopStyleColor();
       }
       ImGui::PopID();
@@ -9269,7 +9274,16 @@ public:
                                                                                           "\n"
                                                                                           "\n[Enhanced]"
                                                                                           "\nRemoved unnecessary ugly tiling optimization, added anti-bleed downsample,"
-                                                                                          "\nreplaced with modern non-temporal high quality bokeh blurring, removed unrealistic alpha blending from upsample.");
+                                                                                          "\nand replaced with a more modern bokeh blur.");
+
+         ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_DOF_CURVEPROFILE, "Circle of Confusion Curve", { "Faithful", "Favor Bokeh" },
+            "The out-of-focus curve profile."
+            "\n"
+            "\n[Faithful]"
+            "\nFaithfully adhere to vanilla, often blending unrealistically between blur vs sharp color, creating that haze."
+            "\n"
+            "\n[Favor Bokeh]"
+            "\nPrioritizes bokeh, where the unrealistic blend is reduced to better reveal the actual shape.");
 
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::CUSTOM_DOF_LUMAWEIGHTS, "Luminance Weighting", "Weigh color input by luminance to reduce flicker/fireflies.");
 

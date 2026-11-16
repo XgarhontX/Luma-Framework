@@ -10,8 +10,8 @@
   #define MSAA_COUNT 0
 #endif
 
-Texture2DMS<float> colorMS : register(t0);
-Texture2DMS<float> depthMS : register(t1);
+Texture2DMS<float4> colorMS : register(t0);
+Texture2DMS<float>  depthMS : register(t1);
 
 void FullDepthMaxToOriginal(float4 pos: SV_Position, out float depth: SV_Depth) // original is not RTV
 {
@@ -39,14 +39,14 @@ void FastDepthToOriginal(float4 pos: SV_Position, out float depth: SV_Depth) // 
 }
 
 // mainly for XeGTAO. fast, just take the first sample (since XeGTAO luminance dodge doesn't need precision)
-void FastColorAndDepthToOriginal(float4 pos: SV_Position, out float4 color: SV_Target, out float depth: SV_Depth)
+void FastColorAndDepthToOriginal(float4 pos: SV_Position, out float4 color: SV_Target0, out float depth: SV_Depth)
 {
   uint2 pix = uint2(pos.xy);
   color = colorMS.Load(pix, 0);
   depth = depthMS.Load(pix, 0);
 }
 
-// void NonSSSContourMaskAndDepth(float4 pos: SV_Position, out float4 color: SV_Target, out float depth: SV_Depth)
+// void NonSSSContourMaskAndDepth(float4 pos: SV_Position, out float4 color: SV_Target0, out float depth: SV_Depth)
 // {
 //   uint2 pix = uint2(pos.xy);
 //   color = colorMS.Load(pix, 0);

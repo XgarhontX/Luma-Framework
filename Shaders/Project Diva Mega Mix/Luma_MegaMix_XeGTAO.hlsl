@@ -1263,7 +1263,7 @@ float4 apply_ps(float4 sv_pos : SV_Position0) : SV_Target0
 
     // color
     float4 color = tColor.Load(int3(pixCoord.xy, 0)).xyzw;
-    color = max(0, color); color.w = min(color.w, 1); //REQUIRED!
+    color = max(0, color); color.w = min(color.w, 1); // REQUIRED!
 
     // ao
 #if XEGTAO_HALFRES == 0
