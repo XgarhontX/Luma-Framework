@@ -1792,7 +1792,8 @@ namespace MSAA
    uint64_t transparent_overlay_rtv_handle = 0; // main color is copied to this before more is drawn on top
 
    int8_t state_draws_since_last_depth_resolve = -1; // while in ReplacedAndDrawing, redundant otherwise
-   bool state_gaurantee_need_rebind_token = false;
+   bool state_guarantee_need_rebind_token = false;
+   bool state_was_contour_no_sss_generate_last_draw = false;
 
    // std::unordered_map<uint32_t, int8_t> relevant_shaders_to_main_color_srv = { 
    //    {0xF94D4A4A, -1}, // random write before transparency (sun_no_textured_ps)
@@ -1825,10 +1826,15 @@ namespace MSAA
    {
       uint8_t sample_count = 0;
       
-      // color0
-      ComPtr<ID3D11Texture2D> color0_tex;
-      ComPtr<ID3D11ShaderResourceView> color0_srv;
-      ComPtr<ID3D11RenderTargetView> color0_rtv;
+      // color
+      ComPtr<ID3D11Texture2D> color_tex;
+      ComPtr<ID3D11ShaderResourceView> color_srv;
+      ComPtr<ID3D11RenderTargetView> color_rtv;
+
+      // nonsss contour mask (kms moment)
+      ComPtr<ID3D11Texture2D> nonsss_contour_mask_tex;
+      ComPtr<ID3D11ShaderResourceView> nonsss_contour_mask_srv;
+      ComPtr<ID3D11RenderTargetView> nonsss_contour_mask_rtv;
       
       // depth
       ComPtr<ID3D11Texture2D> depth_tex;
@@ -1836,16 +1842,20 @@ namespace MSAA
       ComPtr<ID3D11DepthStencilView> depth_dsv;
       
       // originals
-      ComPtr<ID3D11RenderTargetView> orig_rtv;
+      ComPtr<ID3D11RenderTargetView> orig_rtv0;
+      ComPtr<ID3D11RenderTargetView> orig_rtv1;
       ComPtr<ID3D11DepthStencilView> orig_dsv;
-      ComPtr<ID3D11DepthStencilState> resolve_dss;
+
+      // DSS that always write for ResolveMSAA()
+      ComPtr<ID3D11DepthStencilState> resolve_dss; 
 
       void Reset()
       {
          sample_count = 0;
-         color0_tex.reset(); color0_srv.reset(); color0_rtv.reset();
+         color_tex.reset(); color_srv.reset(); color_rtv.reset();
+         nonsss_contour_mask_tex.reset(); nonsss_contour_mask_srv.reset(); nonsss_contour_mask_rtv.reset();
          depth_tex.reset(); depth_srv.reset(); depth_dsv.reset();
-         orig_rtv.reset(); orig_dsv.reset();
+         orig_rtv0.reset(); orig_rtv1.reset(); orig_dsv.reset();
          resolve_dss.reset();
       }
       
@@ -1865,7 +1875,7 @@ namespace MSAA
          auto quality = TryGetQualityFromUser(native_device, user); 
          [[unlikely]] if (quality < 0)
          {
-            MessageBoxA(nullptr, std::format("Main Color:\nMSAA {}x not supported.", sample_count).c_str(), "Luma", MB_ICONWARNING | MB_OK);
+            MessageBoxA(nullptr, std::format("Main Color:\nYour GPU denied MSAA {}x.\nDisabling feature.", sample_count).c_str(), "Luma", MB_ICONWARNING | MB_OK);
             reshade::log::message(reshade::log::level::warning, std::format("MSAA::TryCreate(): MSAA {}x not supported.", sample_count).c_str());
             ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_MSAA, 0);
             sample_count = 0;
@@ -1887,9 +1897,9 @@ namespace MSAA
          desc.MiscFlags = 0;
 
          // color
-         auto hr0 = native_device->CreateTexture2D(&desc, nullptr, color0_tex.put()); ASSERT_MSG(SUCCEEDED(hr0), "MSAA::TryCreate() hr0");
-         auto hr1 = native_device->CreateShaderResourceView(color0_tex.get(), nullptr, color0_srv.put()); ASSERT_MSG(SUCCEEDED(hr1), "MSAA::TryCreate() hr1");
-         auto hr2 = native_device->CreateRenderTargetView(color0_tex.get(), nullptr, color0_rtv.put()); ASSERT_MSG(SUCCEEDED(hr2), "MSAA::TryCreate() hr2");
+         auto hr0 = native_device->CreateTexture2D(&desc, nullptr, color_tex.put()); ASSERT_MSG(SUCCEEDED(hr0), "MSAA::TryCreate() hr0");
+         auto hr1 = native_device->CreateShaderResourceView(color_tex.get(), nullptr, color_srv.put()); ASSERT_MSG(SUCCEEDED(hr1), "MSAA::TryCreate() hr1");
+         auto hr2 = native_device->CreateRenderTargetView(color_tex.get(), nullptr, color_rtv.put()); ASSERT_MSG(SUCCEEDED(hr2), "MSAA::TryCreate() hr2");
          
          // depth
          desc.Width = RenderTracker::res_main_depth_size.x;
@@ -1906,13 +1916,56 @@ namespace MSAA
          dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DMS;
          auto hr8 = native_device->CreateDepthStencilView(depth_tex.get(), &dsv_desc, depth_dsv.put()); ASSERT_MSG(SUCCEEDED(hr8), "MSAA::TryCreate() hr8");
 
-         // dss always
+         // dss always write
          D3D11_DEPTH_STENCIL_DESC dss_desc = {};
          dss_desc.DepthEnable = TRUE;
          dss_desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
          dss_desc.DepthFunc = D3D11_COMPARISON_ALWAYS;
          dss_desc.StencilEnable = FALSE;
          auto hr9 = native_device->CreateDepthStencilState(&dss_desc, resolve_dss.put()); ASSERT_MSG(SUCCEEDED(hr9), "MSAA::TryCreate() hr9");
+
+         return true;
+      }
+
+      bool CreateNonSSSContourMask(ID3D11Device* native_device)
+      {
+         // gatekeep
+         [[likely]] if (nonsss_contour_mask_tex) return true;
+         if (RenderTracker::res_main_color_size.x == 0 || RenderTracker::res_main_color_size.y == 0) return false;
+         ASSERT_MSG(sample_count > 0, "MSAA::CreateNonSSSContourMask() sample_count == 0");
+         
+         // CUSTOM_MSAA -> 2x, 4x, 8x, 16x // TODO: reduce copy paste
+         int user = ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_MSAA);
+         ASSERT_MSG(!user == 0, "MSAA::TryCreate(): user == 0");
+
+         auto quality = TryGetQualityFromUser(native_device, user); 
+         [[unlikely]] if (quality < 0)
+         {
+            MessageBoxA(nullptr, std::format("Main Color:\nYour GPU denied MSAA {}x.\nDisabling feature.", sample_count).c_str(), "Luma", MB_ICONWARNING | MB_OK);
+            reshade::log::message(reshade::log::level::warning, std::format("MSAA::TryCreate(): MSAA {}x not supported.", sample_count).c_str());
+            ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_MSAA, 0);
+            sample_count = 0;
+            return false;
+         }
+         
+         // desc
+         D3D11_TEXTURE2D_DESC desc = {};
+         desc.Width = RenderTracker::res_main_color_size.x;
+         desc.Height = RenderTracker::res_main_color_size.y;
+         desc.MipLevels = 1;
+         desc.ArraySize = 1;
+         desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+         desc.SampleDesc.Count = sample_count;
+         desc.SampleDesc.Quality = 0;
+         desc.Usage = D3D11_USAGE_DEFAULT;
+         desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+         desc.CPUAccessFlags = 0;
+         desc.MiscFlags = 0;
+
+         // create
+         auto hr0 = native_device->CreateTexture2D(&desc, nullptr, nonsss_contour_mask_tex.put()); ASSERT_MSG(SUCCEEDED(hr0), "MSAA::CreateNonSSSContourMask() hr0");
+         auto hr1 = native_device->CreateShaderResourceView(nonsss_contour_mask_tex.get(), nullptr, nonsss_contour_mask_srv.put()); ASSERT_MSG(SUCCEEDED(hr1), "MSAA::CreateNonSSSContourMask() hr1");
+         auto hr2 = native_device->CreateRenderTargetView(nonsss_contour_mask_tex.get(), nullptr, nonsss_contour_mask_rtv.put()); ASSERT_MSG(SUCCEEDED(hr2), "MSAA::CreateNonSSSContourMask() hr2");
 
          return true;
       }
@@ -1924,11 +1977,13 @@ namespace MSAA
       FullDepthMin,
       FastDepth,
       FastColorAndDepth,
+      NonSSSContourMaskAndDepth, // FastColorAndDepth but with nonsss contour mask instead of main color
    };
-   constexpr std::array<uint32_t, 4> resolve_mode_ps_hashes = {
+   constexpr std::array<uint32_t, 5> resolve_mode_ps_hashes = {
       CompileTimeStringHash(Shaders::Luma_MegaMix_MSAAResolve_FullDepthMaxToOriginal),
       CompileTimeStringHash(Shaders::Luma_MegaMix_MSAAResolve_FullDepthMinToOriginal),
       CompileTimeStringHash(Shaders::Luma_MegaMix_MSAAResolve_FastDepthToOriginal),
+      CompileTimeStringHash(Shaders::Luma_MegaMix_MSAAResolve_FastColorAndDepthToOriginal),
       CompileTimeStringHash(Shaders::Luma_MegaMix_MSAAResolve_FastColorAndDepthToOriginal),
    };
    void ResolveMSAA_Internal(ID3D11DeviceContext* native_device_context, DeviceData& device_data, ResolveMode mode, bool is_cache_and_restore_state)
@@ -1945,6 +2000,7 @@ namespace MSAA
 
       // cache
       DrawStateStack<DrawStateStackType::SimpleGraphics> dss; // TODO: do manually?
+      ASSERT_ONCE_MSG(dss.srv_num == 3, "WTH! Is DrawStateStackType::SimpleGraphics srv_num != 3?!?!");
       if (is_cache_and_restore_state) dss.Cache(native_device_context, 0);
 
       // ps
@@ -1969,10 +2025,13 @@ namespace MSAA
       native_device_context->RSSetState(nullptr);
 
       constexpr ID3D11RenderTargetView* null_rtv = nullptr;
-      native_device_context->OMSetRenderTargets(1, mode != FastColorAndDepth ? &null_rtv : &Resources::orig_rtv, Resources::orig_dsv.get()); // original is not an RTV res
+      ID3D11RenderTargetView* rtv_effective = null_rtv;
+         if (mode == FastColorAndDepth) rtv_effective = Resources::orig_rtv0.get(); // main color
+         else if (mode == NonSSSContourMaskAndDepth) rtv_effective = Resources::orig_rtv1.get(); // nonsss contour mask
+      native_device_context->OMSetRenderTargets(1, &rtv_effective, Resources::orig_dsv.get()); // original is not an RTV res
       native_device_context->OMSetDepthStencilState(Resources::resolve_dss.get(), 0);
 
-      const std::array<ID3D11ShaderResourceView*, 2> srvs = { Resources::color0_srv.get(), Resources::depth_srv.get() };
+      const std::array<ID3D11ShaderResourceView*, 2> srvs = { mode != NonSSSContourMaskAndDepth ? Resources::color_srv.get() : Resources::nonsss_contour_mask_srv.get(), Resources::depth_srv.get() };
       native_device_context->PSSetShaderResources(0, srvs.size(), srvs.data());
 
       native_device_context->VSSetShader(device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), nullptr, 0);
@@ -2008,20 +2067,23 @@ namespace MSAA
       {
          case Waiting:
          {
-            if (!state_gaurantee_need_rebind_token)
+            if (!state_guarantee_need_rebind_token)
             {
                // gatekeep: N/A (very required, since SSS uses main color buffer too)
                if (!RenderTracker::IsMainColorBeingOrHasBeenDrawnTo()) break;
 
-               // RTV0 & DSV
-               native_device_context->OMGetRenderTargets(1, Resources::orig_rtv.put(), Resources::orig_dsv.put());
+               // RTVs & DSV
+               std::array<ID3D11RenderTargetView*, 2> rtvs_array = { nullptr };
+               native_device_context->OMGetRenderTargets(rtvs_array.size(), rtvs_array.data(), Resources::orig_dsv.put());
+               Resources::orig_rtv0.attach(rtvs_array[0]);
+               Resources::orig_rtv1.attach(rtvs_array[1]); // can be null
 
                // gatekeep: null
-               if (Resources::orig_rtv == nullptr || Resources::orig_dsv == nullptr) break;
+               if (Resources::orig_rtv0 == nullptr || Resources::orig_dsv == nullptr) break;
 
                // gatekeep: RTV0 matches
                ComPtr<ID3D11Resource> rtv_res;
-               Resources::orig_rtv->GetResource(rtv_res.put());
+               Resources::orig_rtv0->GetResource(rtv_res.put());
                uint64_t rtv0_handle = reinterpret_cast<uint64_t>(rtv_res.get());
                if (rtv0_handle != RenderTracker::res_main_color_handle) break;
 
@@ -2038,14 +2100,20 @@ namespace MSAA
                [[unlikely]] if (!Resources::Create(native_device)) return result;
                ASSERT_MSG(Resources::sample_count > 0, "MSAA::OnDrawOrDispatch() Resources::sample_count == 0");
 
+               // create nonsss contour mask
+               [[unlikely]] if (Resources::orig_rtv1 && !Resources::CreateNonSSSContourMask(native_device)) return result; // TODO: this is sooo trash, as the sub samples are not fully utilized.
+               ASSERT_MSG(!(Resources::orig_rtv1 && !Resources::nonsss_contour_mask_rtv), "MSAA::OnDrawOrDispatch() Resources::orig_rtv1 && !Resources::nonsss_contour_mask_rtv");
+
                // clear black
                constexpr float clear_color[4] = { 0.f, 0.f, 0.f, 0.f };
-               native_device_context->ClearRenderTargetView(Resources::color0_rtv.get(), clear_color);
+               native_device_context->ClearRenderTargetView(Resources::color_rtv.get(), clear_color);
+               if (Resources::orig_rtv1) native_device_context->ClearRenderTargetView(Resources::nonsss_contour_mask_rtv.get(), clear_color);
                native_device_context->ClearDepthStencilView(Resources::depth_dsv.get(), D3D11_CLEAR_DEPTH, 0.f, 0);
             }
             
             // replace RTV0 & DSV
-            native_device_context->OMSetRenderTargets(1, &Resources::color0_rtv, Resources::depth_dsv.get());
+            const std::array<ID3D11RenderTargetView*, 2> rtvs_array = { Resources::color_rtv.get(), Resources::nonsss_contour_mask_rtv.get() }; // inconsequential if RTV1 null
+            native_device_context->OMSetRenderTargets(rtvs_array.size(), rtvs_array.data(), Resources::depth_dsv.get());
 
             state = ReplacedAndDrawing;
             break;
@@ -2055,33 +2123,51 @@ namespace MSAA
             // SPECIAL backtrack: depth_copy requires rebind
             if (ps == 0x68F1F24A)
             {
-               ASSERT_MSG(RenderTracker::ps_prev == 0xF94D4A4A, "MSAA::OnDrawOrDispatch() depth_copy ps without sun_no_textured_ps prior");
+               ASSERT_ONCE_MSG(RenderTracker::ps_prev == 0xF94D4A4A, "MSAA::OnDrawOrDispatch() depth_copy ps without sun_no_textured_ps prior"); // TODO: how is this erroring???
                ResolveMSAA_Internal(native_device_context, device_data, FastDepth, true); // resolve for this draw
                state = Waiting; // backtrack
-               state_gaurantee_need_rebind_token = true; // force rebind next draw
+               state_guarantee_need_rebind_token = true; // force rebind next draw
                break;
             }
+            
+            // SPECIAL: NonSSS Contour Create Edges needs mask & depth
+            if (ps == 0xD3B7A039)
+            {
+               // resolve both mask & depth (best to do prepass because ps samples multiple times)
+               ASSERT_MSG(Resources::orig_rtv1 != nullptr, "MSAA::OnDrawOrDispatch() NonSSS Contour Create Edges ps without RTV1 prior");
+               ASSERT_MSG(Resources::nonsss_contour_mask_rtv != nullptr, "MSAA::OnDrawOrDispatch() NonSSS Contour Create Edges ps without nonsss_contour_mask_rtv prior");
+               ResolveMSAA_Internal(native_device_context, device_data, NonSSSContourMaskAndDepth, true);
+               state_was_contour_no_sss_generate_last_draw = true;
+               break; // should end up in below case next draw
+            }
 
-            // SPECIAL skip: NPR Contour needs resolve and rebind (BRUHHHHH)
+            // SPECIAL backtrack: Contour Resolve needs depth & rebind
             if (ps == 0x86E4A609)
             {
-               // ASSERT_MSG(RenderTracker::ps_prev == 0xF94D4A4A, "MSAA::OnDrawOrDispatch() NPR Contour ps without sun_no_textured_ps prior"); // TODO: how is this erroring???
+               // resolve
+               if (!state_was_contour_no_sss_generate_last_draw) // redundant if previous already resolved depth
+               {
+                  // ASSERT_MSG(RenderTracker::ps_prev == 0xF94D4A4A || RenderTracker::ps_prev == 0xD3B7A039, "MSAA::OnDrawOrDispatch() NPR Contour ps without sun_no_textured_ps prior"); // TODO: how is this erroring???
+                  
+                  // unbind SRV10 (main depth)
+                  ComPtr<ID3D11ShaderResourceView> srv10;
+                  native_device_context->PSGetShaderResources(10, 1, srv10.put()); // TODO: let RenderTracker make SRV and use that
+                  ID3D11ShaderResourceView* null_srv = nullptr;
+                  native_device_context->PSSetShaderResources(10, 1, &null_srv);
+                  
+                  // resolve depth (best to do prepass because ps samples multiple times)
+                  ResolveMSAA_Internal(native_device_context, device_data, FullDepthMin, true);
 
-               // unbind SRV10 (main depth)
-               ComPtr<ID3D11ShaderResourceView> srv10;
-               native_device_context->PSGetShaderResources(10, 1, srv10.put());
-               ID3D11ShaderResourceView* null_srv = nullptr;
-               native_device_context->PSSetShaderResources(10, 1, &null_srv);
+                  // rebind
+                  native_device_context->PSSetShaderResources(10, 1, &srv10); // SRV10
+               }
                
-               // resolve depth
-               ResolveMSAA_Internal(native_device_context, device_data, FullDepthMin, true); 
+               // bind color RTV0
+               native_device_context->OMSetRenderTargets(1, &Resources::color_rtv, nullptr); // msaa color RTV0
 
-               // rebind
-               native_device_context->PSSetShaderResources(10, 1, &srv10); // SRV10
-               native_device_context->OMSetRenderTargets(1, &Resources::color0_rtv, nullptr); // msaa color RTV0
                
                state = Waiting; // backtrack
-               state_gaurantee_need_rebind_token = true; // force rebind next draw
+               state_guarantee_need_rebind_token = true; // force rebind next draw
                break;
             }
             
@@ -2112,7 +2198,7 @@ namespace MSAA
                [[unlikely]] if (dsv_handle != RenderTracker::res_main_depth_handle) break; // gatekeep
 
                // Resolve
-               native_device_context->ResolveSubresource(RenderTracker::res_main_color.get(), 0, Resources::color0_tex.get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT); // hardware
+               native_device_context->ResolveSubresource(RenderTracker::res_main_color.get(), 0, Resources::color_tex.get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT); // hardware
                ResolveMSAA_Internal(native_device_context, device_data, FastDepth, true); // resolve for this draw
                native_device_context->CopyResource(rtv_res.get(), RenderTracker::res_main_color.get()); // do the copy we prevented earlier
                state_transparent_overlay = Overlay_CompositeNextRequiresCopyBack;
@@ -2120,26 +2206,80 @@ namespace MSAA
                break;
             }
             
-            // gatekeep: wait until shader
-            // const std::unordered_set<uint32_t> relevant_shaders = {
-            //    // 0xF94D4A4A, // begin of transparency (sun_no_textured_ps)
-            //    0x83AE9A79, // DoF start
-            //    0x68722F15, // Downsample for bloom & autoexposure
-            //    // 0xEAEE5F62, // transparency ps (handled by CopyResource() detection)
-            // };
-            if (ps != 0x83AE9A79 && ps != 0x68722F15) break; // TODO: could this be missed if backtracked to waiting? no if at least 1 transparency rendering after opaque
+            // Standard:  // TODO: could this be missed if backtracked to waiting? no if at least 1 transparency rendering after opaque
+            constexpr std::array<uint32_t, 2> relevant_shaders = {
+               0x83AE9A79, // DoF start
+               0x68722F15, // Downsample for bloom & autoexposure
+            };
+            if (std::ranges::contains(relevant_shaders, ps))
+            {
+               // Resolve: color
+               native_device_context->ResolveSubresource(RenderTracker::res_main_color.get(), 0, Resources::color_tex.get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT); // hardware
 
-            // Resolve: color
-            native_device_context->ResolveSubresource(RenderTracker::res_main_color.get(), 0, Resources::color0_tex.get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT); // hardware
+               // Resolve: depth
+               ResolveMode mode = FastDepth;
+               if (ps == 0x68722F15 && !AntiAliasing::DoesAARequireDepthBuffer())
+                  goto SkipDepthResolve; // bloom & autoexposure don't require depth resolve
+               if (ps == 0x83AE9A79)
+                  mode = FullDepthMax; // required to not let DoF bleed
+               ResolveMSAA_Internal(native_device_context, device_data, mode, true);
+               SkipDepthResolve:
 
-            // Resolve: depth
-            ResolveMode mode = FastDepth;
-            if (ps == 0x68722F15 && !AntiAliasing::DoesAARequireDepthBuffer()) goto SkipDepthResolve; // bloom & autoexposure don't require depth resolve
-            if (ps == 0x83AE9A79) mode = FullDepthMax; // required to not let DoF bleed
-            ResolveMSAA_Internal(native_device_context, device_data, mode, true);
-            SkipDepthResolve:
+               state = ResolvedAndRestored;
+               break;
+            }
+
+            // Not relevant or FAILED
+            if (DEVELOPMENT)
+            {
+               static std::unordered_set<uint32_t> seen_shaders;
+                  
+               // Check RTV0 & DSV is as expected. Else, this mean an unaccounted path!
+               ComPtr<ID3D11RenderTargetView> rtv0;
+               ComPtr<ID3D11DepthStencilView> dsv;
+               native_device_context->OMGetRenderTargets(1, rtv0.put(), dsv.put());
+
+               // try add to unaccounted_shaders
+               if (!seen_shaders.contains(ps))
+               {
+                  seen_shaders.insert(ps);
+
+                  if (rtv0 == nullptr)
+                  {
+                     ASSERT_MSG(rtv0 == nullptr, "MSAA Debug Shader Track: dsv_res != nullptr");
+                     reshade::log::message(reshade::log::level::error, std::format("MSAA Debug Shader Track: ps 0x{:08X} RTV0 == nullptr", ps).c_str());
+                  }
+                  else if (dsv == nullptr)
+                  {
+                     ASSERT_MSG(dsv == nullptr, "MSAA Debug Shader Track: rtv0_res != nullptr");
+                     reshade::log::message(reshade::log::level::error, std::format("MSAA Debug Shader Track: ps 0x{:08X} DSV == nullptr", ps).c_str());
+                  }
+                  else
+                  {
+                     ComPtr<ID3D11Resource> rtv0_res;
+                     ComPtr<ID3D11Resource> dsv_res;
+                     rtv0->GetResource(rtv0_res.put());
+                     dsv->GetResource(dsv_res.put());
+                        
+                     ComPtr<ID3D11Resource> orig_rtv_res;
+                     Resources::orig_rtv0->GetResource(orig_rtv_res.put());
+                     ComPtr<ID3D11Resource> orig_dsv_res;
+                     Resources::orig_dsv->GetResource(orig_dsv_res.put());
+
+                     if (dsv_res != orig_dsv_res && dsv_res != Resources::depth_tex)
+                     {
+                        ASSERT_MSG(dsv_res == orig_dsv_res, "MSAA Debug Shader Track: DSV unbound");
+                        reshade::log::message(reshade::log::level::error, std::format("MSAA Debug Shader Track: ps 0x{:08X} DSV doesn't match original", ps).c_str());
+                     } 
+                     else if (rtv0_res != orig_rtv_res && rtv0_res != Resources::color_tex)
+                     {
+                        ASSERT_MSG(rtv0_res == orig_rtv_res, "MSAA Debug Shader Track: RTV unbound");
+                        reshade::log::message(reshade::log::level::error, std::format("MSAA Debug Shader Track: ps 0x{:08X} RTV0 doesn't match original", ps).c_str());
+                     }
+                  }
+               }
+            }
             
-            state = ResolvedAndRestored;
             break;
          }
          case ResolvedAndRestored:
@@ -2218,7 +2358,8 @@ namespace MSAA
       state = Waiting;
       state_transparent_overlay = Overlay_NotDrawn;
       state_draws_since_last_depth_resolve = -1;
-      state_gaurantee_need_rebind_token = false;
+      state_guarantee_need_rebind_token = false;
+      state_was_contour_no_sss_generate_last_draw = false;
    }
 
    void HardReset()
@@ -2990,7 +3131,7 @@ namespace XeGTAO
       {
          // check with MSAA RES
          // if (main_color_res.get() != MSAA::Resources::color0_tex.get()) return false;
-         ASSERT_ONCE_MSG(main_color_res.get() == MSAA::Resources::color0_tex.get(), "XeGTAO::TryDraw() main_color_res != MSAA::Resources::color0_tex");
+         ASSERT_ONCE_MSG(main_color_res.get() == MSAA::Resources::color_tex.get(), "XeGTAO::TryDraw() main_color_res != MSAA::Resources::color0_tex");
       }
       
       // Thread counts setup
@@ -3185,7 +3326,7 @@ namespace XeGTAO
          // native_device_context->OMSetDepthStencilState(depth_stencil_state, 0);
          // native_device_context->PSSetSamplers(0, samplers.size(), samplers.data()); // DrawStateStackType::SimpleGraphics only saves 1, so just be safe and only use 1
             native_device_context->PSSetSamplers(0, 1, &device_data.sampler_state_point);
-         native_device_context->OMSetRenderTargets(1, !isMSAA ? &FoundResource::Color::rtv : &MSAA::Resources::color0_rtv, nullptr);
+         native_device_context->OMSetRenderTargets(1, !isMSAA ? &FoundResource::Color::rtv : &MSAA::Resources::color_rtv, nullptr);
          native_device_context->VSSetShader(vs->second.get(), nullptr, 0);
          native_device_context->PSSetShader(device_data.native_pixel_shaders.at(ps_hash).get(), nullptr, 0);
          native_device_context->IASetInputLayout(nullptr);
@@ -6714,7 +6855,7 @@ namespace DuplicateWorldReflections
          int quality = MSAA::TryGetQualityFromUser(native_device, desired_msaa);
          [[unlikely]] if (quality < 0)
          {
-            MessageBoxA(nullptr, std::format("Duplicate World Reflections:\nMSAA {}x not supported.", effective_samplecount_new).c_str(), "Luma", MB_ICONWARNING | MB_OK);
+            MessageBoxA(nullptr, std::format("Duplicate World Reflections:\nYour GPU denied MSAA {}x.\nDisabling feature.", effective_samplecount_new).c_str(), "Luma", MB_ICONWARNING | MB_OK);
             reshade::log::message(reshade::log::level::warning, std::format("DuplicateWorldReflections MSAA {}x not supported.", effective_samplecount_new).c_str());
             effective_samplecount_new = 0;
             desired_msaa = 0;
@@ -9100,12 +9241,12 @@ public:
          DrawColoredSubHeader("Multisample (MSAA): Blend color by subpixel info from higher resolution depth buffer.");
 
          static int prev_msaa = -1;
-         int curr_msaa = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_MSAA, "Sample Count", {"Off", "2x (Recommended for SSAA)", "4x (Recommended for Native)", "8x", "16x"}, "The subpixel sample count.");
+         int curr_msaa = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_MSAA, "Sample Count", {"Off", "2x (Recommended for SSAA)", "4x (Recommended for Native)", "8x", "16x (GPU Probably Rejects)"}, "The subpixel sample count.");
          if (prev_msaa != curr_msaa) MSAA::HardReset(); // TODO: ugly UI dependency
          prev_msaa = curr_msaa;
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA only works on geometric edges, so aliasing from textures goes unresolved.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA only works on geometric edges, so aliasing from textures is unresolved.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Pair with SSAA to achieve Temporal AA level smoothness without smearing.");
          ImGui::PopStyleColor();
       }
@@ -9291,9 +9432,9 @@ public:
       {
          DrawColoredSubHeader("A separate pass for many accurate spotlights.");
 
-         if (ImGui::Checkbox("Full Resolution", &SpotLightShadows::enabled))
+         if (ImGui::Checkbox("Full Color Resolution & 2x Shadow Map Resolution", &SpotLightShadows::enabled))
             reshade::set_config_value(runtime, NAME, SpotLightShadows::reshadesave_enabled, SpotLightShadows::enabled);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Make the separated spotlights lighting pass resolve to a full resolution color buffer.");
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Make the spotlights lighting pass resolve to a full resolution color buffer.");
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This FX is rather rare. 2 PVs using this are Meiteki Cybernetics & Gaikotsu Gakudan to Riria.");

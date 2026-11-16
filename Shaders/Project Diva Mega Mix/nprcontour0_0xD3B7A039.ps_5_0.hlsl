@@ -1,5 +1,5 @@
+// contour_nonsss (where edges are created by 3D opaque & transparent (even though transparent results are not even used))
 #include "./Includes/Common.hlsl"
-
 
 cbuffer cb0_buf : register(b0)
 {

@@ -42,6 +42,13 @@ void FastDepthToOriginal(float4 pos: SV_Position, out float depth: SV_Depth) // 
 void FastColorAndDepthToOriginal(float4 pos: SV_Position, out float4 color: SV_Target, out float depth: SV_Depth)
 {
   uint2 pix = uint2(pos.xy);
-  depth = depthMS.Load(pix, 0);
   color = colorMS.Load(pix, 0);
+  depth = depthMS.Load(pix, 0);
 }
+
+// void NonSSSContourMaskAndDepth(float4 pos: SV_Position, out float4 color: SV_Target, out float depth: SV_Depth)
+// {
+//   uint2 pix = uint2(pos.xy);
+//   color = colorMS.Load(pix, 0);
+//   FullDepthMinToOriginal(pos, depth);
+// }

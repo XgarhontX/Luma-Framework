@@ -1,3 +1,4 @@
+// contour (where edges are create during SSS)
 #include "./Includes/Common.hlsl"
 
 cbuffer cb0_buf : register(b0)
