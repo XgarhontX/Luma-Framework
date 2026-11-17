@@ -43,7 +43,7 @@ void main(
     r2.xy = r0.zw * cb3[6].zw + r2.xy;
     r2.xyz = t6.Sample(s1_s, r2.xy).xyz; //this is supposed to be linear color scaled unorm 32768 before SMAA
 
-    #if CUSTOM_SDR == 0 && CUSTOM_SR > 0
+    #if CUSTOM_SDR == 0
       r2.xyz = Trade_Out_NoCS(r2.xyz) * 32768.f * 2.f;
       // r2.xyz = max(r2.xyz, 0); //clamp BT709
     #endif

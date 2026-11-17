@@ -129,6 +129,36 @@ Texture2D<float3> postEffect0 : register(t0); //LUT: 1024x1024 = 32x32x32
 #define cmp -
 #include "./common1.hlsl"
 
+float3 WCG_Clamp709(float3 c)
+{
+#if CUSTOM_LUTBUILDER_COLORSPACE == 1
+  return BT2020_To_BT709(saturate(BT709_To_BT2020(c)));
+#else
+  return saturate(c);
+#endif
+}
+
+static const float3 WCG_LUMA_709 = float3(0.212599993, 0.715200007, 0.0722000003);
+float3 WCG_ZonePow3(float3 v, float3 g)
+{
+#if CUSTOM_LUTBUILDER_COLORSPACE == 1
+  if (all(v >= 0.0)) return exp2(g * log2(saturate(v)));
+  float Y = dot(v, WCG_LUMA_709);
+  if (Y <= 0.0) return 0.0;
+  float3 d = v - Y;
+  float t = 1.0;
+  [unroll] for (int i = 0; i < 3; i++) if (d[i] < 0.0) t = min(t, Y / -d[i]);
+  t = saturate(t);
+  float3 xb = Y + t * d;
+  float3 yb = exp2(g * log2(saturate(xb)));
+  float3 yY = exp2(g * log2(saturate(Y.xxx)));
+  if (t <= 1e-4) return yb;
+  return yb + (yb - yY) * ((1.0 - t) / t);
+#else
+  return exp2(g * log2(saturate(v)));
+#endif
+}
+
 Texture1D<float4> IniParams : register(t120);
 Texture2D<float4> StereoParams : register(t125);
 RWTexture3D<float4> lut3D : register(u0); // dcl_uav_typed_texture3d (float,float,float,float) u0
@@ -210,33 +240,23 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
   r3.y = postFxConst21.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst24.xyz);
   r3.z = postFxConst24.w + r0.w;
-  r0.w = saturate(dot(r3.xyz, r1.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst27.w * r0.w;
-  r3.x = exp2(r0.w);
+  r3.x = dot(r3.xyz, r1.xyz);
   r0.w = dot(r2.xyz, postFxConst19.xyz);
   r4.x = postFxConst19.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst22.xyz);
   r4.y = postFxConst22.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst25.xyz);
   r4.z = postFxConst25.w + r0.w;
-  r0.w = saturate(dot(r4.xyz, r1.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst28.w * r0.w;
-  r3.y = exp2(r0.w);
+  r3.y = dot(r4.xyz, r1.xyz);
   r0.w = dot(r2.xyz, postFxConst20.xyz);
   r4.x = postFxConst20.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst23.xyz);
   r4.y = postFxConst23.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst26.xyz);
   r4.z = postFxConst26.w + r0.w;
-  r0.w = saturate(dot(r4.xyz, r1.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst29.w * r0.w;
-  r3.z = exp2(r0.w);
-  r1.x = saturate(dot(r3.xyz, postFxConst27.xyz));
-  r1.y = saturate(dot(r3.xyz, postFxConst28.xyz));
-  r1.z = saturate(dot(r3.xyz, postFxConst29.xyz));
+  r3.z = dot(r4.xyz, r1.xyz);
+  r3.xyz = WCG_ZonePow3(r3.xyz, float3(postFxConst27.w, postFxConst28.w, postFxConst29.w));
+  r1.xyz = WCG_Clamp709(float3(dot(r3.xyz, postFxConst27.xyz), dot(r3.xyz, postFxConst28.xyz), dot(r3.xyz, postFxConst29.xyz)));
   r1.xyz = r1.xyz + -r2.xyz;
   r1.xyz = postFxConst15.www * r1.xyz + r2.xyz;
   r1.xyz = postFxConst60.yyy * r1.xyz;
@@ -262,33 +282,23 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
   r4.y = postFxConst06.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst09.xyz);
   r4.z = postFxConst09.w + r0.w;
-  r0.w = saturate(dot(r4.xyz, r0.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst12.w * r0.w;
-  r4.x = exp2(r0.w);
+  r4.x = dot(r4.xyz, r0.xyz);
   r0.w = dot(r2.xyz, postFxConst04.xyz);
   r5.x = postFxConst04.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst07.xyz);
   r5.y = postFxConst07.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst10.xyz);
   r5.z = postFxConst10.w + r0.w;
-  r0.w = saturate(dot(r5.xyz, r0.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst13.w * r0.w;
-  r4.y = exp2(r0.w);
+  r4.y = dot(r5.xyz, r0.xyz);
   r0.w = dot(r2.xyz, postFxConst05.xyz);
   r5.x = postFxConst05.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst08.xyz);
   r5.y = postFxConst08.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst11.xyz);
   r5.z = postFxConst11.w + r0.w;
-  r0.x = saturate(dot(r5.xyz, r0.xyz));
-  r0.x = log2(r0.x);
-  r0.x = postFxConst14.w * r0.x;
-  r4.z = exp2(r0.x);
-  r0.x = saturate(dot(r4.xyz, postFxConst12.xyz));
-  r0.y = saturate(dot(r4.xyz, postFxConst13.xyz));
-  r0.z = saturate(dot(r4.xyz, postFxConst14.xyz));
+  r4.z = dot(r5.xyz, r0.xyz);
+  r4.xyz = WCG_ZonePow3(r4.xyz, float3(postFxConst12.w, postFxConst13.w, postFxConst14.w));
+  r0.xyz = WCG_Clamp709(float3(dot(r4.xyz, postFxConst12.xyz), dot(r4.xyz, postFxConst13.xyz), dot(r4.xyz, postFxConst14.xyz)));
   r0.xyz = r0.xyz + -r2.xyz;
   r0.xyz = postFxConst00.www * r0.xyz + r2.xyz;
   r0.xyz = r0.xyz * postFxConst60.xxx + r1.xyz;
@@ -310,33 +320,23 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
   r3.y = postFxConst36.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst39.xyz);
   r3.z = postFxConst39.w + r0.w;
-  r0.w = saturate(dot(r3.xyz, r1.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst42.w * r0.w;
-  r3.x = exp2(r0.w);
+  r3.x = dot(r3.xyz, r1.xyz);
   r0.w = dot(r2.xyz, postFxConst34.xyz);
   r4.x = postFxConst34.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst37.xyz);
   r4.y = postFxConst37.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst40.xyz);
   r4.z = postFxConst40.w + r0.w;
-  r0.w = saturate(dot(r4.xyz, r1.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst43.w * r0.w;
-  r3.y = exp2(r0.w);
+  r3.y = dot(r4.xyz, r1.xyz);
   r0.w = dot(r2.xyz, postFxConst35.xyz);
   r4.x = postFxConst35.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst38.xyz);
   r4.y = postFxConst38.w + r0.w;
   r0.w = dot(r2.xyz, postFxConst41.xyz);
   r4.z = postFxConst41.w + r0.w;
-  r0.w = saturate(dot(r4.xyz, r1.xyz));
-  r0.w = log2(r0.w);
-  r0.w = postFxConst44.w * r0.w;
-  r3.z = exp2(r0.w);
-  r1.x = saturate(dot(r3.xyz, postFxConst42.xyz));
-  r1.y = saturate(dot(r3.xyz, postFxConst43.xyz));
-  r1.z = saturate(dot(r3.xyz, postFxConst44.xyz));
+  r3.z = dot(r4.xyz, r1.xyz);
+  r3.xyz = WCG_ZonePow3(r3.xyz, float3(postFxConst42.w, postFxConst43.w, postFxConst44.w));
+  r1.xyz = WCG_Clamp709(float3(dot(r3.xyz, postFxConst42.xyz), dot(r3.xyz, postFxConst43.xyz), dot(r3.xyz, postFxConst44.xyz)));
   r1.xyz = r1.xyz + -r2.xyz;
   r1.xyz = postFxConst30.www * r1.xyz + r2.xyz;
   r0.xyz = r1.xyz * postFxConst60.zzz + r0.xyz;
@@ -352,12 +352,10 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
   //luma based tint
   float3 colorBefore2 = r0.xyz;
   #if 1
-    r0.w = dot(r0.xyz, postFxControl0.xyz);
-    r1.x = saturate(postFxControl0.w + r0.w);
-    r0.w = dot(r0.xyz, postFxControl1.xyz); //Start of WEIRD SWIZZLE?
-    r0.x = dot(r0.xyz, postFxControl2.xyz);
-    r1.z = saturate(postFxControl2.w + r0.x);
-    r1.y = saturate(postFxControl1.w + r0.w);
+    r1.x = postFxControl0.w + dot(r0.xyz, postFxControl0.xyz);
+    r1.y = postFxControl1.w + dot(r0.xyz, postFxControl1.xyz);
+    r1.z = postFxControl2.w + dot(r0.xyz, postFxControl2.xyz);
+    r1.xyz = WCG_Clamp709(r1.xyz);
   #else
     r1.xyz = r0.xyz;
   #endif
@@ -428,44 +426,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     r0.xyz *= 32768;
   #endif
 #else
-  #if CUSTOM_LUTBUILDER_SATBOOST == 0 || CUSTOM_SDR > 0
-    r0.xyz = BT709_To_BT2020(DecodeRec709(r0.xyz));
-  #else
-    float3 color709 = r0.xyz;
-    float3 color2020 = BT709_To_BT2020(r0.xyz);
-
-    color709 = DecodeRec709(color709);
-    color2020 = DecodeRec709(color2020);
-
-    color709 = UCSTo(color709, CS_BT709);
-    color2020 = UCSTo(color2020, CS_BT2020);
-    r0.xyz = RestoreHueAndChrominanceUcs(color709, color2020, 0, GS_LUTBuilderExpansionChrominance, 1);
-    r0.x = lerp(color709.x, color2020.x, GS_LUTBuilderExpansionLuminance);
-    // r0.xyz = color709;
-
-    // r0.xyz = CorrectPerChannelTonemapHiglightsDesaturationBo3(r0.xyz, 1.0, 1 - GS_LUTBuilderHighlightSat, GS_LUTBuilderHighlightSatHighlightsOnly, CS_BT2020);
-    {
-      float sourceChrominance = length(r0.yz);
-      float3 color = UCSFrom(r0.xyz, CS_BT2020);
-
-      float maxBrightness = max3(color); 
-      float midBrightness = GetMidValue(color);
-      float minBrightness = min3(color);
-      float brightnessRatio = saturate(maxBrightness / 1.0f);
-
-      brightnessRatio = lerp(brightnessRatio, sqrt(brightnessRatio), sqrt(saturate(InverseLerp(minBrightness, maxBrightness, midBrightness))));
-      brightnessRatio = pow(brightnessRatio, GS_LUTBuilderHighlightSatHighlightsOnly); //skewed towards highlights only
-
-      float chrominancePow = lerp(1.0, 1.0 / (1 - GS_LUTBuilderHighlightSat), brightnessRatio);
-      
-      float targetChrominance = sourceChrominance > 1.0 ? pow(sourceChrominance, chrominancePow) : (1.0 - pow(1.0 - sourceChrominance, chrominancePow));
-      float chrominanceRatio = safeDivision(targetChrominance, sourceChrominance, 1);
-
-      r0.yz *= chrominanceRatio * 1.0115;
-    }
-
-    r0.xyz = UCSFrom(r0.xyz, CS_BT2020);
-  #endif
+  r0.xyz = BT709_To_BT2020(DecodeRec709(r0.xyz));
 #endif
 
 
