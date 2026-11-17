@@ -9251,7 +9251,7 @@ public:
          prev_msaa = curr_msaa;
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA only using polygon edges, so aliasing from textures is unresolved.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA uses geometry edges, so aliasing from textures is unresolved.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though costly, pair with SSAA to achieve Temporal AA level smoothness without smearing.");
          ImGui::PopStyleColor();
       }
@@ -9291,7 +9291,8 @@ public:
          {
             ImGui::NewLine();
             DrawColoredSubHeader("Auxiliary Resources");
-            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Downsample Resolution: %dx%d", DepthOfField::Resources::size_half.x, DepthOfField::Resources::size_half.y);
+            uint2 size = DepthOfField::Resources::quarter0_srv ? DepthOfField::Resources::size_quarter : DepthOfField::Resources::size_half;
+            ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Downsample Resolution: %dx%d", size.x, size.y);
          }
       }
       ImGui::PopID();
@@ -9346,7 +9347,7 @@ public:
             // DuplicateWorldReflections::desired_msaa
             if (ImGui::Combo("MSAA", &DuplicateWorldReflections::desired_msaa, "Off\0002x\0004x\0008x\00016x\0"))
                reshade::set_config_value(runtime, NAME, DuplicateWorldReflections::reshadesave_desired_msaa, DuplicateWorldReflections::desired_msaa);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multisample Anti-Aliasing for reflections output.");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Multisample Anti-Aliasing for reflections render target.");
             DrawResetButton(DuplicateWorldReflections::desired_msaa, DuplicateWorldReflections::desired_msaa_def, DuplicateWorldReflections::reshadesave_desired_msaa, runtime);
             
             if (UserSettingsMisc::imgui_show_advanced)

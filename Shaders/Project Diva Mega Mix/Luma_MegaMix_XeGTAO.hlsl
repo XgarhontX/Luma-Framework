@@ -605,7 +605,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
 
     // stepUV (close = wider)
     const float normalSmoothViewRadius = (EFFECT_RADIUS + (centerZ * EFFECT_RADIUS_DISTANCE_SCALE)) * RADIUS_MULTIPLIER * NORMAL_SMOOTH_SCALE; // TODO: dont copy main pass / use diff coeffs?
-    const float2 viewspacePixelSizeAtDepth = centerZ * abs(consts.NDCToViewMul);
+    const float2 viewspacePixelSizeAtDepth = sqrt(1.2 * centerZ * abs(consts.NDCToViewMul));
     const float2 stepUV = normalSmoothViewRadius * rcp(max(viewspacePixelSizeAtDepth, 1e-6));
 #if XEGTAO_NORMALSMOOTH_2ND
     const float2 stepUVScaled = stepUV;
@@ -634,6 +634,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
         // normal-similarity term catches silhouettes/corners where depth stays smooth but the normal doesn't (plain depth bilateral would miss these)
         float4 normalWeights = saturate(float4(dot(centerNormal, leftN), dot(centerNormal, rightN), dot(centerNormal, topN), dot(centerNormal, bottomN))); // TODO: weights is from AI fart. is there better?
         normalWeights *= normalWeights;
+        // normalWeights = pow(normalWeights, DVS2);
 
         const float4 weights = depthWeights * normalWeights;
 
