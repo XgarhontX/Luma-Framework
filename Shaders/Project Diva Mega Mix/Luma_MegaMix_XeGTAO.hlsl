@@ -38,7 +38,7 @@
 #else
     #define STEPS_PER_SLICE 3.0
 #endif
-// #define FINAL_VALUE_POWER 0.9 // Default 2.2
+#define FINAL_VALUE_POWER 0.826 // Default 2.2
 
 #if XEGTAO_HALFRES == 1 
     #define DEPTH_MIP_SAMPLING_MINIMUM_LEVEL 0
@@ -65,7 +65,7 @@
 #define THIN_OCCLUDER_COMPENSATION 0 // Default 0.0 
 #define DENOISE_BLUR_BETA 0.00001 // Default 1.2
 #define LUMINANCE_DODGE 0.03
-#define MINIMUM_AO_OUTPUT 0.03 // 0.03
+#define MINIMUM_AO_OUTPUT 0.126 // 0.03
 
 #define XE_GTAO_PI 3.1415926535897932384626433832795
 #define XE_GTAO_PI_OVER_360 0.00872664625997
@@ -193,6 +193,14 @@ cbuffer Scene : register(b1)
   float4 g_foward_z_projection_row2 : packoffset(c77);
 }
 
+cbuffer Size : register(b0)
+{
+    float2 SizeBase;
+    float2 SizeBaseInv;
+    float2 SizeHalf;
+    float2 SizeHalfInv;
+}
+
 SamplerState s0 : register(s0); //point 
 SamplerState s1 : register(s1); //linear
 Texture2D<float4> t0 : register(t0); 
@@ -230,6 +238,7 @@ float3 NormalsDenormalize(float3 x) { x *= x; return x * 2.f - 1.f; }
 
 bool IsEvenFrame() { return LumaSettings.FrameIndex % 2 == 0; }
 
+// TODO: deprecated, del
 void GetViewport(Texture2D viewportTexture, out float2 viewportSize, out float2 viewportSizeInv, bool isHalf = true) 
 {
 // #if XEGTAO_MANUALSIZE == 1
@@ -249,7 +258,7 @@ void GetViewport(Texture2D viewportTexture, out float2 viewportSize, out float2 
     viewportSize = LumaSettings.RenderSize;
     viewportSizeInv = LumaSettings.RenderInvSize;
     if (isHalf) {
-        viewportSize *= 2.f;
+        viewportSize /= 2.f;
         viewportSizeInv *= 2.f;
     }
 }
@@ -344,7 +353,7 @@ float XeGTAO_DepthMIPFilter(float depth0, float depth1, float depth2, float dept
     return (weight0 * depth0 + weight1 * depth1 + weight2 * depth2 + weight3 * depth3) * rcp(weightSum);
 }
 
-float XeGTAO_CharactersDepthReject(float dOpaque, float dSSS) // TODO: this doesnt fully work. transparent clothing might not get draw SSS level, so now mask is made
+float XeGTAO_CharactersDepthReject(float dOpaque, float dSSS) // TODO: this doesnt fully work. transparent clothing might not get draw SSS level, so no mask is made
 {
     if (dSSS == 0) return dSSS;
     return dSSS == dOpaque ? dSSS : dOpaque; // WOAH, it's that accurate
@@ -374,30 +383,12 @@ void XeGTAO_PrefilterDepths16x16CS(uint2 dispatchThreadID, uint2 groupThreadID, 
     float depth1 = depths4.z;
     float depth2 = depths4.x;
     float depth3 = depths4.y;
-    #if XEGTAO_CHARACTERSONLY
-        float4 depths4sss = sourceNDCDepthSSS.GatherRed(s0, float2((pixCoord /* + 0.5 */) * consts.ViewportPixelSize), int2(1, 1));
-        depth0 = XeGTAO_CharactersDepthReject(depth0, depths4sss.w);
-        depth1 = XeGTAO_CharactersDepthReject(depth1, depths4sss.z);
-        depth2 = XeGTAO_CharactersDepthReject(depth2, depths4sss.x);
-        depth3 = XeGTAO_CharactersDepthReject(depth3, depths4sss.y);
-    #endif
 #else
     uint2 texCoord = (pixCoord /* + 0.5 */) * 2;
     float depth0 = sourceNDCDepth.Load(int3(texCoord + uint2(0, 0), 0)).x;
-    float depth1 = sourceNDCDepth.Load(int3(texCoord + uint2(1, 0), 0)).x;
-    float depth2 = sourceNDCDepth.Load(int3(texCoord + uint2(0, 1), 0)).x;
-    float depth3 = sourceNDCDepth.Load(int3(texCoord + uint2(1, 1), 0)).x;
-    #if XEGTAO_CHARACTERSONLY
-        float depth0SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(0, 0), 0)).x;
-        float depth1SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(1, 0), 0)).x;
-        float depth2SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(0, 1), 0)).x;
-        float depth3SSS = sourceNDCDepthSSS.Load(int3(texCoord + uint2(1, 1), 0)).x;
-
-        depth0 = XeGTAO_CharactersDepthReject(depth0, depth0SSS);
-        depth1 = XeGTAO_CharactersDepthReject(depth1, depth1SSS);
-        depth2 = XeGTAO_CharactersDepthReject(depth2, depth2SSS);
-        depth3 = XeGTAO_CharactersDepthReject(depth3, depth3SSS);
-    #endif
+    float depth1 = sourceNDCDepth.Load(int3(texCoord + uint2(2, 0), 0)).x;
+    float depth2 = sourceNDCDepth.Load(int3(texCoord + uint2(0, 2), 0)).x;
+    float depth3 = sourceNDCDepth.Load(int3(texCoord + uint2(2, 2), 0)).x;
 #endif
 
     depth0 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depth0));
@@ -530,8 +521,11 @@ void XeGTAO_ComputeViewspaceNormal(const uint2 pixCoord, const GTAOConstants con
     RWTexture2D<unorm float4> outputNormal = normals;
     // RWTexture2D<float3> outputNormal = normals_11_11_10f;
 
+    // outputNormal[pixCoord] = pixCoord.x > DVS1 ? float4(0, 0, 0, 1) : float4(1, 0, 0, 0); return;
+    // if (pixCoord.x > DVS1) { outputNormal[pixCoord] = float4(0, 0, 0, 1); return; }
+
     float2 normalizedScreenPos = (pixCoord + 0.5.xx) * consts.ViewportPixelSize;
-    float2 sampleUV =            (pixCoord + 0.5.xx) * consts.ViewportPixelSize;
+    float2 sampleUV =            (pixCoord /* + 0.5.xx */) * consts.ViewportPixelSize;
 
     // Requires 32 bit!
     float4 valuesUL   = sourceViewspaceDepth32.GatherRed(depthSampler, sampleUV            );
@@ -588,7 +582,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
 
     // viewspace normal & skip sky
     float4 viewspaceNormal4 = sourceViewspaceNormal.SampleLevel(normalSampler, sampleUV, 0); 
-    // [branch] if (viewspaceNormal4.w == 0)
+    // [branch] if (viewspaceNormal4.w == 0) // debug passthrough
     // {
     //     outputNormal[pixCoord] = viewspaceNormal4.xyzw; 
     //     return;
@@ -610,7 +604,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
 #if XEGTAO_NORMALSMOOTH_2ND
     const float2 stepUVScaled = stepUV;
 #else
-    const float2 stepUVScaled = stepUV * 2.0;
+    const float2 stepUVScaled = stepUV * 2;
 #endif
 
     // accumulator
@@ -634,6 +628,7 @@ void XeGTAO_SmoothViewspaceNormal(const uint2 pixCoord, const GTAOConstants cons
         // normal-similarity term catches silhouettes/corners where depth stays smooth but the normal doesn't (plain depth bilateral would miss these)
         float4 normalWeights = saturate(float4(dot(centerNormal, leftN), dot(centerNormal, rightN), dot(centerNormal, topN), dot(centerNormal, bottomN))); // TODO: weights is from AI fart. is there better?
         normalWeights *= normalWeights;
+        // normalWeights *= normalWeights;
         // normalWeights = pow(normalWeights, DVS2);
 
         const float4 weights = depthWeights * normalWeights;
@@ -935,7 +930,7 @@ void XeGTAO_MainPassCS(uint2 pixCoord, float2 localNoise, const GTAOConstants co
         visibility = max(visibility, depthFade);
 
         // Final visibility
-		visibility = pow(visibility, /* FINAL_VALUE_POWER * */ GS.XeGTAOFinalPower); 
+		visibility = pow(visibility, FINAL_VALUE_POWER * GS.XeGTAOFinalPower); 
 		visibility = max(MINIMUM_AO_OUTPUT, visibility); // disallow total occlusion (which wouldn't make any sense anyhow since pixel is visible but also helps with packing bent normals)
     }
 
@@ -1141,7 +1136,9 @@ void prefilter_depths16x16_cs(uint2 dtid : SV_DispatchThreadID, uint2 gtid : SV_
 {
     GTAOConstants c = (GTAOConstants)0;
 
-    GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    // GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    c.ViewportSize = SizeBase;
+    c.ViewportPixelSize = SizeBaseInv;
 
     XeGTAO_PrefilterDepths16x16CS(dtid, gtid, c);
 }
@@ -1153,17 +1150,19 @@ void normal_generate_cs(uint2 dtid : SV_DispatchThreadID)
 
     // checkboard
     uint2 pixCoord = dtid;
+    uint fi = LumaSettings.FrameIndex;
     #if XEGTAO_CHECKBOARD == 1 // half
         pixCoord.y = dtid.y;
-        pixCoord.x = dtid.x * 2 + ((dtid.y + LumaSettings.FrameIndex) & 1);
+        pixCoord.x = dtid.x * 2 + ((dtid.y + fi) & 1);
     #elif XEGTAO_CHECKBOARD == 2 // quarter
-        uint fi = LumaSettings.FrameIndex;
         pixCoord.x = dtid.x * 2 + ((dtid.y + fi) & 1);
         pixCoord.y = dtid.y * 2 + (((dtid.x + (fi >> 1)) & 1));
     #endif
 
     // size
-    GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    // GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    c.ViewportSize = SizeHalf;
+    c.ViewportPixelSize = SizeHalfInv;
 
     // NDC to View
     c = GetNDCToView(c);
@@ -1174,21 +1173,27 @@ void normal_generate_cs(uint2 dtid : SV_DispatchThreadID)
 [numthreads(XEGTAO_THREADS_NORMALSSMOOTH_X, XEGTAO_THREADS_NORMALSSMOOTH_Y, 1)]
 void normal_smooth_cs(uint2 dtid : SV_DispatchThreadID)
 {
+    // // debug passthrough
+    // normals[dtid] = t0.Load(uint3(dtid, 0));
+    // return;
+
     GTAOConstants c = (GTAOConstants)0;
 
     // checkboard
     uint2 pixCoord = dtid;
+    uint fi = LumaSettings.FrameIndex;
     #if XEGTAO_CHECKBOARD == 1 // half
         pixCoord.y = dtid.y;
-        pixCoord.x = dtid.x * 2 + ((dtid.y + LumaSettings.FrameIndex) & 1);
+        pixCoord.x = dtid.x * 2 + ((dtid.y + fi) & 1);
     #elif XEGTAO_CHECKBOARD == 2 // quarter
-        uint fi = LumaSettings.FrameIndex;
         pixCoord.x = dtid.x * 2 + ((dtid.y + fi) & 1);
         pixCoord.y = dtid.y * 2 + (((dtid.x + (fi >> 1)) & 1));
     #endif
 
     // size
-    GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    // GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    c.ViewportSize = SizeHalf;
+    c.ViewportPixelSize = SizeHalfInv;
 
     // NDC to View
     c = GetNDCToView(c);
@@ -1203,17 +1208,19 @@ void main_pass_cs(uint2 dtid : SV_DispatchThreadID)
 
     // checkboard
     uint2 pixCoord = dtid;
+    uint fi = LumaSettings.FrameIndex;
     #if XEGTAO_CHECKBOARD == 1 // half
         pixCoord.y = dtid.y;
-        pixCoord.x = dtid.x * 2 + ((dtid.y + LumaSettings.FrameIndex) & 1);
+        pixCoord.x = dtid.x * 2 + ((dtid.y + fi) & 1);
     #elif XEGTAO_CHECKBOARD == 2 // quarter
-        uint fi = LumaSettings.FrameIndex;
         pixCoord.x = dtid.x * 2 + ((dtid.y + fi) & 1);
         pixCoord.y = dtid.y * 2 + (((dtid.x + (fi >> 1)) & 1));
     #endif
 
     // size
-    GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    // GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    c.ViewportSize = SizeBase;
+    c.ViewportPixelSize = SizeBaseInv;
 
     // NDC to View
     c = GetNDCToView(c);
@@ -1237,7 +1244,9 @@ void denoise_pass_cs(uint2 dtid : SV_DispatchThreadID)
     GTAOConstants c = (GTAOConstants)0;
 
     // size
-    GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    // GetViewport(t0, c.ViewportSize, c.ViewportPixelSize, XEGTAO_HALFRES);
+    c.ViewportSize = SizeBase;
+    c.ViewportPixelSize = SizeBaseInv;
     c.RenderPixelSize = c.ViewportPixelSize;
 
     const uint2 pix_coord_base = dtid * uint2(2, 1); // we're computing 2 horizontal pixels at a time (performance optimization)
@@ -1248,9 +1257,8 @@ float4 apply_ps(float4 sv_pos : SV_Position0) : SV_Target0
 {
     int2 pixCoord = sv_pos.xy;
 
-    float2 viewportSize;
-    float2 viewportPixelSize;
-    GetViewport(t0, viewportSize, viewportPixelSize, false);
+    float2 viewportSize = LumaSettings.RenderSize;
+    float2 viewportPixelSize = LumaSettings.RenderInvSize;
     float2 uv = (pixCoord + float2(-0.5, -0.5)) * viewportPixelSize;
     float2 normalizedScreenPos = (pixCoord + 0.5) * viewportPixelSize;
 
@@ -1388,33 +1396,37 @@ float4 apply_ps(float4 sv_pos : SV_Position0) : SV_Target0
     float3 x = d;
     color.w = 1;
 #else
-    // color
-    float3 x = color.xyz;
-    x = pow(x, 2.2); //gamma decode
-
-    // scale to ambient (biggest offender: Tokyo Teddy Bear)
-    float aLuma = GetLuminance(g_shadow_ambient.xyz) /* * g_shadow_ambient.w */;
-    float bLuma = GetLuminance(g_shadow_ambient1.xyz) /* * g_shadow_ambient1.w */; //w is usally 0
-    float ambientLuma = max(aLuma, bLuma);
-    // return float4((ambientLuma - DVS1).xxx, 1);
-
-    ambientLuma = max(ambientLuma, 0.0001); //safe
-    ambientLuma = pow(ambientLuma, 2.2); //gamma decode
-    ambientLuma = 1 / ambientLuma; //compute scale
-    x /= ambientLuma; //ambient scale
-
-    // reduce ao for brighter color
-    float l = GetLuminance(x);
-    l *= l; //curved
-    l *= LUMINANCE_DODGE;
-    ao = remap(ao, 0, 1, l, 1);
-    ao = saturate(ao);
-    
-    return float4(pow(ao, 1/2.2).xxx, 1); // gamma multiply blend
-
-    // x *= ao; //apply
-    // x *= ambientLuma; //ambient scale inverse
-    // x = pow(x, 1.0 / 2.2); //gamma encode
+//     #if CUSTOM_MSAA == 0
+//         // color
+//         float3 x = color.xyz;
+//         x = pow(x, 2.2); //gamma decode
+// 
+//         // scale to ambient (biggest offender: Tokyo Teddy Bear)
+//         float aLuma = GetLuminance(g_shadow_ambient.xyz) /* * g_shadow_ambient.w */;
+//         float bLuma = GetLuminance(g_shadow_ambient1.xyz) /* * g_shadow_ambient1.w */; //w is usally 0
+//         float ambientLuma = max(aLuma, bLuma);
+//         // return float4((ambientLuma - DVS1).xxx, 1);
+// 
+//         ambientLuma = max(ambientLuma, 0.0001); //safe
+//         ambientLuma = pow(ambientLuma, 2.2); //gamma decode
+//         ambientLuma = 1 / ambientLuma; //compute scale
+//         x /= ambientLuma; //ambient scale
+// 
+//         // reduce ao for brighter color
+//         float l = GetLuminance(x);
+//         l *= l; //curved
+//         l *= LUMINANCE_DODGE;
+//         ao = remap(ao, 0, 1, l, 1);
+//         ao = saturate(ao);
+// 
+//         x = pow(ao, 1 / 2.2).xxx;
+// 
+//         // x *= ao; //apply
+//         // x *= ambientLuma; //ambient scale inverse
+//         // x = pow(x, 1.0 / 2.2); //gamma encode
+//     #else
+        float3 x = pow(ao, 1 / 2.2).xxx; // gamma multiply blended
+//     #endif
 
 #if XEGTAO_DEBUG_AO == 1
     x = ao;

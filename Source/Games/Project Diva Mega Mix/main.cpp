@@ -66,7 +66,16 @@ void OpenFilePath(const char* path)
 #endif
    // System::OpenExplorerToFile(path);
 }
-   
+
+namespace Jitter
+{
+   float2 GetJitter(int phases)
+   {
+      const uint temporal_frame = cb_luma_global_settings.FrameIndex % phases;
+      return float2(SR::HaltonSequence(temporal_frame, 2), SR::HaltonSequence(temporal_frame, 3));
+   }
+}
+
 bool IsModEnabled() {return custom_shaders_enabled || !ignore_indirect_upgraded_textures || !ignore_upgraded_samplers;}
 
 float FPSToMilliseconds(float fps) { return fps > 0 ? 1000.f / fps : 0.f; }
@@ -694,7 +703,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_UPGRADE_DEBUG", '0', true, false, "Show inputs into UpgradeToneMap().", 5},
          {"CUSTOM_MSAA", '0', true, false, "MSAA render target for main color.", 5},
          {"CUSTOM_DOF_LUMAWEIGHTS", '1', true, false, "Depth of Field use pixel's luminance for anti-flicker.", 5},
-         {"CUSTOM_DOF_CURVEPROFILE", '1', true, false, "Depth of Field Circle of Confusion curve.", 5},
+         {"CUSTOM_DOF_CURVEPROFILE", '0', true, false, "Depth of Field Circle of Confusion curve.", 5},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       auto_recompile_defines = true; //force
@@ -995,7 +1004,7 @@ namespace MemoryHack
    void Init()
    {
       uintptr_t base = std::bit_cast<uintptr_t>(GetModuleHandleA("DivaMegaMix.exe"));
-      ASSERT_MSG(base != 0, "FATAL: Failed to get base address of exe.");
+      if (base == 0) MessageBoxA(nullptr, "FATAL!\nFailed to get the base address of exe.", "Luma", MB_ICONERROR);
       addr_puiGameLimit   = std::bit_cast<uint32_t*> (base + 0x14ABBB8);
       addr_menuFlagPtr    = std::bit_cast<uintptr_t*>(base + 0x11481E8); //to object
       addr_pvNameString   = std::bit_cast<char*>     (base + 0x12EF228); //failable
@@ -2054,7 +2063,7 @@ namespace MSAA
    {
       ASSERT_MSG(ps == 0xF94D4A4A, "MSAA::XeGTAO_ResolveMSAA() requested when not sun_no_textured_ps");
       ASSERT_MSG(state_draws_since_last_depth_resolve == -1, "MSAA::XeGTAO_ResolveMSAA() requested when not in ReplacedAndDrawing");
-      ResolveMSAA_Internal(native_device_context, device_data, FastColorAndDepth, false);
+      ResolveMSAA_Internal(native_device_context, device_data, FastDepth, false);
    }
 
    DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
@@ -2119,6 +2128,21 @@ namespace MSAA
             // replace RTV0 & DSV
             const std::array<ID3D11RenderTargetView*, 2> rtvs_array = { Resources::color_rtv.get(), Resources::nonsss_contour_mask_rtv.get() }; // inconsequential if RTV1 null
             native_device_context->OMSetRenderTargets(rtvs_array.size(), rtvs_array.data(), Resources::depth_dsv.get());
+
+            // vp
+            // float2 offset = Jitter::GetJitter(8);
+            // offset.x *= cb_luma_global_settings.DevSettings[9];
+            // offset.y *= cb_luma_global_settings.DevSettings[9];
+            // constexpr std::array<float2, 4> offsets = { float2(0.25f, 0.25f), float2(-0.25f, -0.25f), float2(-0.25f, 0.25f), float2(0.25f, -0.25f) };
+            // float2 offset = offsets[cb_luma_global_settings.FrameIndex & 1];
+            D3D11_VIEWPORT vp;
+            vp.TopLeftX = 0.0f /*+ offset.x*/;
+            vp.TopLeftY = 0.0f /*+ offset.y*/;
+            vp.Width    = RenderTracker::res_main_color_size.x /*- offset.x*/;
+            vp.Height   = RenderTracker::res_main_color_size.y /*- offset.y*/;
+            vp.MinDepth = 0.0f;
+            vp.MaxDepth = 1.0f;
+            native_device_context->RSSetViewports(1, &vp);
 
             state = ReplacedAndDrawing;
             break;
@@ -2521,9 +2545,6 @@ namespace XeGTAO
    bool disallow_for_npr = true;
    constexpr const char* reshadesave_disallow_for_npr = "XeGTAODisallowForNPR";
 
-   bool is_characters_only = false;
-   constexpr const char* reshadesave_is_characters_only = "XeGTAOCharactersOnly";
-
    PUBLISHING_CONSTEXPR bool is_fog_dodge = true; // use fog dodging variant // TODO: still false pos, not enough dodge (Doubleganger) or too much (Secret Garden)
 
    int denoise_count = 3; // denoise the AO result
@@ -2562,7 +2583,6 @@ namespace XeGTAO
    
    constexpr const char* Luma_MegaMix_XeGTAO = "Luma_MegaMix_XeGTAO"; //file name
    constexpr const char* Luma_XeGTAO_Prefilter = "XeGTAO Prefilter Depths CS";
-   constexpr const char* Luma_XeGTAO_Prefilter_CharsOnly = "XeGTAO Prefilter Depths CharsOnly CS";
    constexpr const char* Luma_XeGTAO_NormalGenerate = "XeGTAO Normals Generate CS";
    constexpr const char* Luma_XeGTAO_NormalSmooth1 = "XeGTAO Normals Smooth 1 CS";
    constexpr const char* Luma_XeGTAO_NormalSmooth2 = "XeGTAO Normals Smooth 2 CS";
@@ -2578,7 +2598,6 @@ namespace XeGTAO
    void OnInit()
    {
       native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_Prefilter),                ShaderDefinition{ Luma_MegaMix_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_Prefilter_CharsOnly),      ShaderDefinition{ Luma_MegaMix_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs", {{ "XEGTAO_CHARACTERSONLY", "1" }} });
       native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_NormalGenerate),           ShaderDefinition{ Luma_MegaMix_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "normal_generate_cs" });
       native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_NormalSmooth1),            ShaderDefinition{ Luma_MegaMix_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "normal_smooth_cs" });
       native_shaders_definitions.emplace(CompileTimeStringHash(Luma_XeGTAO_NormalSmooth2),            ShaderDefinition{ Luma_MegaMix_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "normal_smooth_cs", {{ "XEGTAO_NORMALSMOOTH_2ND", "1" }} });
@@ -2595,6 +2614,8 @@ namespace XeGTAO
    namespace CreatedResource
    {
       bool initialized = false;
+      uint2 size_base = {}; // the base resolution, desired could be full like main color render target, or half
+      uint2 size_half = {}; // 1/2 of base resolution, for smooth normals
       
       namespace PreFilteredDepth
       {
@@ -2607,16 +2628,6 @@ namespace XeGTAO
       }
 
       namespace Depth32
-      {
-         D3D11_TEXTURE2D_DESC tex_desc;
-         ComPtr<ID3D11Texture2D> tex = nullptr;
-
-         ComPtr<ID3D11UnorderedAccessView> uav = nullptr;
-         
-         ComPtr<ID3D11ShaderResourceView> srv = nullptr;
-      }
-
-      namespace Depth32SSS
       {
          D3D11_TEXTURE2D_DESC tex_desc;
          ComPtr<ID3D11Texture2D> tex = nullptr;
@@ -2666,31 +2677,41 @@ namespace XeGTAO
          ComPtr<ID3D11ShaderResourceView> srv = nullptr;
       }
       
-      namespace MainColorDuped
-      {
-         D3D11_TEXTURE2D_DESC tex_desc;
-         ComPtr<ID3D11Texture2D> tex = nullptr;
-         
-         ComPtr<ID3D11ShaderResourceView> srv = nullptr;
-      }
+      // namespace MainColorDuped
+      // {
+      //    D3D11_TEXTURE2D_DESC tex_desc;
+      //    ComPtr<ID3D11Texture2D> tex = nullptr;
+      //    
+      //    ComPtr<ID3D11ShaderResourceView> srv = nullptr;
+      // }
 
       ComPtr<ID3D11BlendState> blend_state_multiply = nullptr;
+
+      ComPtr<ID3D11Buffer> cb = nullptr;
+      struct CB
+      {
+         float2 size_base;
+         float2 size_base_inv;
+         float2 size_half;
+         float2 size_half_inv;
+      };
       
       void Create(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint2 size, bool is_half)
       {
          // gatekeep: created
-         [[likely]]
-         if (initialized) return;
+         [[likely]] if (initialized) return;
          initialized = true;
 
-         uint2 size_half = uint2{ size.x / 2, size.y / 2 };
+         size_base = size;
+         if (is_half) size_base = uint2(size.x / 2, size.y / 2);
+         size_half = uint2(size_base.x / 2, size_base.y / 2);
          
          // PreFilteredDepth
          {
             // tex desc
             PreFilteredDepth::tex_desc = {};
-            PreFilteredDepth::tex_desc.Width  = !is_half ? size.x : size_half.x;
-            PreFilteredDepth::tex_desc.Height = !is_half ? size.y : size_half.y;
+            PreFilteredDepth::tex_desc.Width  = size_base.x;
+            PreFilteredDepth::tex_desc.Height = size_base.y;
             PreFilteredDepth::tex_desc.MipLevels = DEPTH_MIP_LEVELS;
             PreFilteredDepth::tex_desc.ArraySize = 1;
             PreFilteredDepth::tex_desc.Format = /*DXGI_FORMAT_R32_FLOAT*/ DXGI_FORMAT_R16_FLOAT;
@@ -2721,8 +2742,8 @@ namespace XeGTAO
          {
             // tex desc
             Depth32::tex_desc = {};
-            Depth32::tex_desc.Width  = !is_half ? size.x : size_half.x;
-            Depth32::tex_desc.Height = !is_half ? size.y : size_half.y;
+            Depth32::tex_desc.Width  = size_base.x;
+            Depth32::tex_desc.Height = size_base.y;
             Depth32::tex_desc.MipLevels = 1;
             Depth32::tex_desc.ArraySize = 1;
             Depth32::tex_desc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -2742,44 +2763,12 @@ namespace XeGTAO
             ASSERT_MSG(SUCCEEDED(hr2), "Depth32 hr2");
          }
 
-         // Depth32SSS
-         {
-            // tex desc
-            Depth32SSS::tex_desc = {};
-            Depth32SSS::tex_desc.Width  = size.x;
-            Depth32SSS::tex_desc.Height = size.y;
-            Depth32SSS::tex_desc.MipLevels = 1;
-            Depth32SSS::tex_desc.ArraySize = 1;
-            Depth32SSS::tex_desc.Format = DXGI_FORMAT_R32_TYPELESS;
-            Depth32SSS::tex_desc.SampleDesc.Count = 1;
-            Depth32SSS::tex_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-
-            // tex
-            auto hr0 = native_device->CreateTexture2D(&Depth32SSS::tex_desc, nullptr, Depth32SSS::tex.put());
-            ASSERT_MSG(SUCCEEDED(hr0), "Depth32SSS hr0");
-
-            // uav
-            D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
-            uav_desc.Format = DXGI_FORMAT_R32_FLOAT;
-            uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-            auto hr1 = native_device->CreateUnorderedAccessView(Depth32SSS::tex.get(), &uav_desc, Depth32SSS::uav.put());
-            ASSERT_MSG(SUCCEEDED(hr1), "Depth32SSS hr1");
-
-            // srv
-            D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-            srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
-            srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srv_desc.Texture2D.MipLevels = 1;
-            auto hr2 = native_device->CreateShaderResourceView(Depth32SSS::tex.get(), &srv_desc, Depth32SSS::srv.put());
-            ASSERT_MSG(SUCCEEDED(hr2), "Depth32SSS hr2");
-         }
-
          // Normals 0 & 1
          {
             // tex desc
             Normals0::tex_desc = {};
-            Normals0::tex_desc.Width  = !is_half ? size.x : size_half.x;
-            Normals0::tex_desc.Height = !is_half ? size.y : size_half.y;
+            Normals0::tex_desc.Width  = size_half.x;
+            Normals0::tex_desc.Height = size_half.y;
             Normals0::tex_desc.MipLevels = 1;
             Normals0::tex_desc.ArraySize = 1;
             Normals0::tex_desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM /*DXGI_FORMAT_R16G16B16A16_SNORM*/ /*DXGI_FORMAT_R11G11B10_FLOAT*/;
@@ -2809,8 +2798,8 @@ namespace XeGTAO
          {
             // tex desc
             Main0::tex_desc = {};
-            Main0::tex_desc.Width  = !is_half ? size.x : size_half.x;
-            Main0::tex_desc.Height = !is_half ? size.y : size_half.y;
+            Main0::tex_desc.Width  = size_base.x;
+            Main0::tex_desc.Height = size_base.y;
             Main0::tex_desc.MipLevels = 1;
             Main0::tex_desc.ArraySize = 1;
             Main0::tex_desc.Format = DXGI_FORMAT_R8G8_UNORM;
@@ -2836,30 +2825,30 @@ namespace XeGTAO
             ASSERT_MSG(SUCCEEDED(hr2_1), "Main1 hr2_1");
          }
 
-         // MainColorDuped
-         {
-            // tex desc
-            MainColorDuped::tex_desc = {};
-            MainColorDuped::tex_desc.Width  = size.x;
-            MainColorDuped::tex_desc.Height = size.y;
-            MainColorDuped::tex_desc.MipLevels = 1;
-            MainColorDuped::tex_desc.ArraySize = 1;
-            MainColorDuped::tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-            MainColorDuped::tex_desc.SampleDesc.Count = 1;
-            MainColorDuped::tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/;
-
-            // tex
-            auto hr0 = native_device->CreateTexture2D(&MainColorDuped::tex_desc, nullptr, MainColorDuped::tex.put());
-            ASSERT_MSG(SUCCEEDED(hr0), "MainColorDuped hr0");
-
-            // srv
-            auto hr1 = native_device->CreateShaderResourceView(MainColorDuped::tex.get(), nullptr, MainColorDuped::srv.put());
-            ASSERT_MSG(SUCCEEDED(hr1), "MainColorDuped hr1");
-            
-            // // rtv
-            // auto hr2 = native_device->CreateRenderTargetView(MainColorDuped::tex.get(), nullptr, MainColorDuped::rtv.put());
-            // ASSERT_MSG(SUCCEEDED(hr2), "MainColorDuped hr2");
-         }
+         // // MainColorDuped
+         // {
+         //    // tex desc
+         //    MainColorDuped::tex_desc = {};
+         //    MainColorDuped::tex_desc.Width  = size.x;
+         //    MainColorDuped::tex_desc.Height = size.y;
+         //    MainColorDuped::tex_desc.MipLevels = 1;
+         //    MainColorDuped::tex_desc.ArraySize = 1;
+         //    MainColorDuped::tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+         //    MainColorDuped::tex_desc.SampleDesc.Count = 1;
+         //    MainColorDuped::tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/;
+         //
+         //    // tex
+         //    auto hr0 = native_device->CreateTexture2D(&MainColorDuped::tex_desc, nullptr, MainColorDuped::tex.put());
+         //    ASSERT_MSG(SUCCEEDED(hr0), "MainColorDuped hr0");
+         //
+         //    // srv
+         //    auto hr1 = native_device->CreateShaderResourceView(MainColorDuped::tex.get(), nullptr, MainColorDuped::srv.put());
+         //    ASSERT_MSG(SUCCEEDED(hr1), "MainColorDuped hr1");
+         //    
+         //    // // rtv
+         //    // auto hr2 = native_device->CreateRenderTargetView(MainColorDuped::tex.get(), nullptr, MainColorDuped::rtv.put());
+         //    // ASSERT_MSG(SUCCEEDED(hr2), "MainColorDuped hr2");
+         // }
 
          // blend state
          {
@@ -2876,6 +2865,24 @@ namespace XeGTAO
             blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
             auto hr0 = native_device->CreateBlendState(&blend_desc, blend_state_multiply.put());
             ASSERT_MSG(SUCCEEDED(hr0), "XeGTAO TryDraw() failed to create BlendState");
+         }
+
+         // Constant Buffer
+         {
+            D3D11_BUFFER_DESC desc = {};
+            desc.ByteWidth = sizeof(CB);
+            desc.Usage = D3D11_USAGE_IMMUTABLE; // never changed after create
+            desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            desc.CPUAccessFlags = 0;
+            CB cb_data = {
+               float2(size_base.x, size_base.y),
+               float2(1.f / size_base.x, 1.f / size_base.y),
+               float2(size_half.x, size_half.y),
+               float2(1.f / size_half.x, 1.f / size_half.y),
+            };
+            D3D11_SUBRESOURCE_DATA init_data = { &cb_data, 0, 0 };
+            auto hr0 = native_device->CreateBuffer(&desc, &init_data, cb.put());
+            ASSERT_MSG(SUCCEEDED(hr0), "XeGTAO TryDraw() failed to create constant buffer");
          }
 
          // log
@@ -2905,8 +2912,8 @@ namespace XeGTAO
          Main1::uav.reset();
          Main1::srv.reset();
 
-         MainColorDuped::tex.reset();
-         MainColorDuped::srv.reset();
+         // MainColorDuped::tex.reset();
+         // MainColorDuped::srv.reset();
          
          blend_state_multiply.reset();
       }
@@ -2917,7 +2924,6 @@ namespace XeGTAO
       // if > 0, everything else should have been found and created.
       uint2 size = { 0, 0 };
       bool IsSizeValid() { return size.x > 0 && size.y > 0; }
-      uint2 GetSizeHalf() { return { size.x / 2, size.y / 2 }; }
       
       namespace Depth
       {
@@ -2958,15 +2964,14 @@ namespace XeGTAO
       {
          int8_t thread_count = -1;
          UINT x = 0;
-         UINT x_half = 0;
          UINT y = 0;
+         UINT x_half = 0;
          UINT y_half = 0;
 
-         void Update(int new_thread_count, bool is_half_size)
+         void Update(int new_thread_count, uint2 size)
          {
-            if (new_thread_count != thread_count) //dirty?
+            [[unlikely]] if (new_thread_count != thread_count) // dirty?
             {
-               uint2 size = is_half_size ? FoundResource::GetSizeHalf() : FoundResource::size;
                thread_count = new_thread_count;
                
                x = (size.x + thread_count - 1) / thread_count;
@@ -2977,10 +2982,10 @@ namespace XeGTAO
             }
          }
 
-         void Update(uint32_t shader_def, bool is_half_size)
+         void Update(uint32_t shader_def, uint2 size)
          {
             int new_thread_count = !ShaderDefineInfo::Get(shader_def) ? 8 : 16;
-            Update(new_thread_count, is_half_size);
+            Update(new_thread_count, size);
          }
          
          UINT GetXEffective(bool is_checkboard) const { return is_checkboard ? x_half : x; }
@@ -2988,11 +2993,13 @@ namespace XeGTAO
       };
 
       ThreadCount def_8 = {};
+      ThreadCount def_8_half = {};
       ThreadCount main_pass = {};
 
       void Reset()
       {
          def_8 = {};
+         def_8_half = {};
          main_pass = {};
       }
    }
@@ -3083,6 +3090,7 @@ namespace XeGTAO
             
             tex->GetDesc(&tex_desc);
             FoundResource::size = { tex_desc.Width, tex_desc.Height };
+            ASSERT_MSG(FoundResource::size.x == RenderTracker::res_main_color_size.x && FoundResource::size.y == RenderTracker::res_main_color_size.y, "FoundResource size != RenderTracker main color size");
             ASSERT_MSG(FoundResource::IsSizeValid(), "FoundResource size invalid");
          }
 
@@ -3140,10 +3148,10 @@ namespace XeGTAO
       }
       
       // Thread counts setup
-      bool is_half_res = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_HALFRES);
-      int checkerboard_mode = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD);
-      ThreadCount::main_pass.Update(ShaderDefineInfo::XEGTAO_THREADS_AO, is_half_res);
-      ThreadCount::def_8.Update(8, is_half_res);
+      int checkerboard_mode = ShaderDefineInfo::Get(ShaderDefineInfo::XEGTAO_CHECKBOARD);
+      ThreadCount::main_pass.Update(ShaderDefineInfo::XEGTAO_THREADS_AO, CreatedResource::size_base);
+      ThreadCount::def_8.Update(8, CreatedResource::size_base);
+      ThreadCount::def_8_half.Update(8, CreatedResource::size_half);
       UINT thread_x_effective;
       UINT thread_y_effective;
 
@@ -3156,7 +3164,7 @@ namespace XeGTAO
       }
       
       // Back up draw 
-      DrawStateStack<DrawStateStackType::SimpleGraphics> dss; // TODO: do this manually?
+      DrawStateStack<DrawStateStackType::SimpleGraphics> dss;
       dss.Cache(native_device_context, 0);
 
       // Resolve MSAA to non-MSAA resources
@@ -3177,7 +3185,8 @@ namespace XeGTAO
       native_device_context->CSSetSamplers(0, samplers.size(), samplers.data());
 
       // CB bind
-      native_device_context->CSSetConstantBuffers(1, 1, &FoundResource::SceneCB::cb);
+      const std::array<ID3D11Buffer*, 2> cbs = { CreatedResource::cb.get(), FoundResource::SceneCB::cb.get() };
+      native_device_context->CSSetConstantBuffers(0, cbs.size(), cbs.data());
       SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
       
       // PreFilterDepth bind and draw
@@ -3190,9 +3199,8 @@ namespace XeGTAO
          CreatedResource::PreFilteredDepth::uavs[4]
       };
       native_device_context->CSSetUnorderedAccessViews(0, uavs_depth.size(), uavs_depth.data(), nullptr); //out: prefiltered depth mips
-      native_device_context->CSSetShader(device_data.native_compute_shaders.at(!is_characters_only ? CompileTimeStringHash(Luma_XeGTAO_Prefilter) : CompileTimeStringHash(Luma_XeGTAO_Prefilter_CharsOnly)).get(), nullptr, 0);
-      const std::array<ID3D11ShaderResourceView*, 2> srvs_depth = { FoundResource::Depth::srv.get(), CreatedResource::Depth32SSS::srv.get() }; //in: depths
-      native_device_context->CSSetShaderResources(0, srvs_depth.size(), srvs_depth.data());
+      native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_Prefilter)).get(), nullptr, 0);
+      native_device_context->CSSetShaderResources(0, 1, &FoundResource::Depth::srv); //in: depth
       native_device_context->Dispatch((CreatedResource::PreFilteredDepth::tex_desc.Width + 16 - 1) / 16, (CreatedResource::PreFilteredDepth::tex_desc.Height + 16 - 1) / 16, 1);
       
       // Unbind PreFilteredDepth UAVs
@@ -3205,8 +3213,8 @@ namespace XeGTAO
       const std::array<ID3D11ShaderResourceView*, 2> srvs_normals_gen = { CreatedResource::Depth32::srv.get(), CreatedResource::PreFilteredDepth::srv.get() }; //in: depth, prefiltered depth
       native_device_context->CSSetShaderResources(0, srvs_normals_gen.size(), srvs_normals_gen.data()); //in: depth
       {
-         thread_x_effective = ThreadCount::def_8.GetXEffective(checkerboard_mode >= 1);
-         thread_y_effective = ThreadCount::def_8.GetYEffective(checkerboard_mode >= 2);
+         thread_x_effective = ThreadCount::def_8_half.GetXEffective(checkerboard_mode >= 1);
+         thread_y_effective = ThreadCount::def_8_half.GetYEffective(checkerboard_mode >= 2);
       }
       native_device_context->Dispatch(thread_x_effective, thread_y_effective, 1);
       ID3D11ShaderResourceView* normals_srv_effective = CreatedResource::Normals0::srv.get();
@@ -3215,8 +3223,8 @@ namespace XeGTAO
       {
          // NormalsSmooth 1 bind and draw
          {
-            thread_x_effective = ThreadCount::def_8.GetXEffective(checkerboard_mode >= 1);
-            thread_y_effective = ThreadCount::def_8.GetYEffective(checkerboard_mode >= 2);
+            thread_x_effective = ThreadCount::def_8_half.GetXEffective(checkerboard_mode >= 1);
+            thread_y_effective = ThreadCount::def_8_half.GetYEffective(checkerboard_mode >= 2);
          }
          native_device_context->CSSetUnorderedAccessViews(0, 1, &CreatedResource::Normals1::uav, nullptr); //out: normals smoothed 1
          native_device_context->CSSetShader(device_data.native_compute_shaders.at(CompileTimeStringHash(Luma_XeGTAO_NormalSmooth1)).get(), nullptr, 0);
@@ -3279,9 +3287,9 @@ namespace XeGTAO
       constexpr std::array<ID3D11ShaderResourceView*, 4> null_srvs = { };
       native_device_context->CSSetShaderResources(0, null_srvs.size(), null_srvs.data());
       
-      constexpr ID3D11Buffer* null_1cb = nullptr;
-      native_device_context->CSSetConstantBuffers(1, 1, &null_1cb);
-      native_device_context->CSSetConstantBuffers(luma_data_cbuffer_index, 1, &null_1cb);
+      constexpr std::array<ID3D11Buffer*, 2> null_cbs = { nullptr, nullptr };
+      native_device_context->CSSetConstantBuffers(0, null_cbs.size(), null_cbs.data());
+      native_device_context->CSSetConstantBuffers(luma_data_cbuffer_index, 1, null_cbs.data());
       
       constexpr ID3D11ComputeShader* null_cs = nullptr;
       native_device_context->CSSetShader(null_cs, nullptr, 0);
@@ -3290,7 +3298,7 @@ namespace XeGTAO
       native_device_context->CSSetSamplers(0, null_2samplers.size(), null_2samplers.data());
       
       // CopyResource() to MainColorDuped (has to be, since original main color is not UAV-able)
-      if (!isMSAA) native_device_context->CopyResource(CreatedResource::MainColorDuped::tex.get(), FoundResource::Color::res.get());
+      // if (!isMSAA) native_device_context->CopyResource(CreatedResource::MainColorDuped::tex.get(), FoundResource::Color::res.get());
       
       // Apply XeGTAO to main color RTV0 bind and draw (will also be cleaned up by dss)
       {
@@ -3302,7 +3310,7 @@ namespace XeGTAO
             CompileTimeStringHash(Luma_XeGTAO_ApplyDbgDepth)
          };
          uint32_t ps_hash = ps_hashes[std::clamp(static_cast<uint32_t>(debug_out), 0u, static_cast<uint32_t>(ps_hashes.size() - 1))];
-         const std::array<ID3D11ShaderResourceView*, 5> ps_srvs = { !isMSAA ? CreatedResource::MainColorDuped::srv.get() : FoundResource::Color::srv.get(), ao_srv, FoundResource::Depth::srv.get(), CreatedResource::PreFilteredDepth::srv.get(), normals_srv_effective };
+         const std::array<ID3D11ShaderResourceView*, 5> ps_srvs = { /*!isMSAA ? CreatedResource::MainColorDuped::srv.get() : FoundResource::Color::srv.get()*/nullptr, ao_srv, FoundResource::Depth::srv.get(), CreatedResource::PreFilteredDepth::srv.get(), normals_srv_effective };
 
          // save index 3+
          ASSERT_ONCE_MSG(dss.srv_num == 3, "WTH! Is DrawStateStackType::SimpleGraphics srv_num != 3?!?!");
@@ -3381,23 +3389,10 @@ namespace XeGTAO
          }
          case Ready:
          {
-            // split execution by SSS
-            if (is_characters_only && RenderTracker::IsSSSResolved() && ps == 0x54415551)
-            {
-               native_device_context->CopyResource(CreatedResource::Depth32SSS::tex.get(), FoundResource::Depth::res.get()); // copy depth of characters only
-            } 
-            else if (RenderTracker::IsMainColorBeingOrHasBeenDrawnTo())
+            if (RenderTracker::IsMainColorBeingOrHasBeenDrawnTo())
             {
                // failed: debug only allows dof or downsample shaders
                if (debug_late && ps != 0x043F4B65 && ps != 0x68722F15) break;
-
-               // failed: is_characters_only but no SSS this frame
-               if (is_characters_only && RenderTracker::IsSSSSkipped()) // TODO: this is not working 100% for some reason
-               {
-                  // reshade::log::message(reshade::log::level::info, std::format("SSS::OnDrawOrDispatchOverride() is_characters_only but no SSS this frame, skipping for shader {:08X}", ps).c_str());
-                  state = Done;
-                  break;
-               }
             
                // failed: no relevant_shaders_to_main_color_srv
                auto i = relevant_shaders_to_main_color_srv.find(ps);
@@ -3430,7 +3425,6 @@ namespace XeGTAO
       reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled);
       reshade::get_config_value(runtime, NAME, reshadesave_disallow_for_npr, disallow_for_npr);
       reshade::get_config_value(runtime, NAME, reshadesave_denoise, denoise_count);
-      reshade::get_config_value(runtime, NAME, reshadesave_is_characters_only, is_characters_only);
    }
 
    void OnInitSwapchain(bool is_resolution_changed)
@@ -7714,8 +7708,10 @@ namespace UserPresets
          bool  bloom_hq = true;
          AntiAliasing::Enabled aa_mode = AntiAliasing::Vanilla;
          int   aa_ssaafilter = 1;
+         int   aa_msaa = 1;
          bool  reflections_enabled = true;
          float reflections_ratio = 0.5f;
+         int   reflections_msaa = 1;  
          bool  spotlights_enabled = true;
          DepthOfField::Enabled dof_enabled = DepthOfField::Enhanced;
 
@@ -7743,12 +7739,18 @@ namespace UserPresets
             
             ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_SSAA_FILTER, aa_ssaafilter);
 
+            ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_MSAA, aa_msaa);
+
             DuplicateWorldReflections::enabled = reflections_enabled;
             reshade::set_config_value(nullptr, NAME, DuplicateWorldReflections::reshadesave_enabled, DuplicateWorldReflections::enabled);
 
             DuplicateWorldReflections::desired_resolution = uint2(RenderTracker::res_main_color_size.x * reflections_ratio, RenderTracker::res_main_color_size.y * reflections_ratio);
+            if (DuplicateWorldReflections::desired_resolution.x > 1920) DuplicateWorldReflections::desired_resolution = uint2(1920, static_cast<uint32_t>(DuplicateWorldReflections::desired_resolution.y * (1920.f / DuplicateWorldReflections::desired_resolution.x)));
             reshade::set_config_value(nullptr, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_x, DuplicateWorldReflections::desired_resolution.x);
             reshade::set_config_value(nullptr, NAME, DuplicateWorldReflections::reshadesave_desired_resolution_y, DuplicateWorldReflections::desired_resolution.y);
+
+            DuplicateWorldReflections::desired_msaa = reflections_msaa;
+            reshade::set_config_value(nullptr, NAME, DuplicateWorldReflections::reshadesave_desired_msaa, DuplicateWorldReflections::desired_msaa);
 
             SpotLightShadows::enabled = spotlights_enabled;
             reshade::set_config_value(nullptr, NAME, SpotLightShadows::reshadesave_enabled, SpotLightShadows::enabled);
@@ -7775,9 +7777,11 @@ namespace UserPresets
          preset.bloom_neutral = 0;
          preset.bloom_hq = false;
          // preset.aa_mode = AntiAliasing::Vanilla;
+         preset.aa_msaa = 0;
          preset.aa_ssaafilter = 0;
          preset.reflections_enabled = false;
          // preset.reflections_ratio = 0.5f;
+         // preset.reflections_msaa = 0;
          preset.spotlights_enabled = false;
          preset.dof_enabled = DepthOfField::Vanilla;
          preset.Apply();
@@ -7790,6 +7794,8 @@ namespace UserPresets
          preset.shadows_baseres++;
          preset.aa_mode = AntiAliasing::SMAA;
          preset.aa_ssaafilter++;
+         preset.aa_msaa++;
+         preset.reflections_msaa++;
          preset.Apply();
       }
       
@@ -7800,7 +7806,20 @@ namespace UserPresets
          preset.shadows_baseres += 2;
          preset.aa_mode = AntiAliasing::SMAA;
          preset.aa_ssaafilter++;
-         preset.reflections_ratio = 1.0f;
+         preset.aa_msaa++;
+         preset.reflections_msaa++;
+         preset.Apply();
+      }
+
+      void ApplySSAAHigh()
+      {
+         UserPreset preset = {};
+         preset.ao_slice++;
+         preset.shadows_baseres++;
+         preset.aa_mode = AntiAliasing::DLAA;
+         preset.aa_ssaafilter++;
+         // preset.aa_msaa++;
+         preset.reflections_msaa++;
          preset.Apply();
       }
    }
@@ -8453,7 +8472,7 @@ public:
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("The quickest setup is to use the presets below.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("CTRL click a slider for keyboard input.");
          ImGui::PopStyleColor();
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) This mod is tuned for a faithful at +1 HDR Stop (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.)."
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) This mod is tuned for a faithful +1 HDR Stop (e.g. 200 Paper & 400 Peak, 300 Paper & 600 Peak, etc.)."
                                                                 "\nIt's mainly because lighting is done in gamma, which makes bright colors exponentially brighter when unclamped.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) UI elems of PV (e.g. lens flare) can be drawn after HDR tonemap, affected by UI Brightness slider.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("(HDR Users) MegaMix/NPR is clamped to SDR (+0 Stops) unless changed otherwise (for the worst tbh).");
@@ -8486,7 +8505,11 @@ public:
          if (ImGui::Button("Off")) UserPresets::Quality::ApplyOff(); ImGui::SameLine();
          if (ImGui::Button("High")) UserPresets::Quality::ApplyOn(); ImGui::SameLine();
          if (ImGui::Button("Extreme")) UserPresets::Quality::ApplyOnHigh(); ImGui::SameLine();
-         if (ImGui::Button("Extra Extreme")) UserPresets::Quality::ApplyOnHigh2();
+         if (ImGui::Button("Extra Extreme")) UserPresets::Quality::ApplyOnHigh2(); ImGui::SameLine();
+         if (ImGui::Button("Extreme for SSAA")) UserPresets::Quality::ApplySSAAHigh();
+         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.f));
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Requires MLAA selected in graphics settings!");
+         ImGui::PopStyleColor();
 
          ImGui::NewLine();
          DrawColoredSubHeader("PS4: Enables gamma and frame blending seen on PS4.");
@@ -8787,20 +8810,12 @@ public:
          if (ImGui::Checkbox("Enabled", &XeGTAO::enabled))
             reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_enabled, XeGTAO::enabled);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Insert Intel's implementation (XeGTAO) of Ground Truth Ambient Occlusion (GTAO).\n\nDebuting in Call of Duty: Black Ops 3 (or Advanced Warfare?),\nit's a screen space AO solution estimating path tracing level quality at a fraction of the cost.\n\nHere, the pass is inserted before transparency rendering & post FX, so no overlapping like generic ReShade FX solutions.\n(Please report if otherwise, especially concerning mod support.)");
+            ImGui::SetTooltip("Insert Intel's implementation of Ground Truth Ambient Occlusion (XeGTAO).\n\nDebuting in Call of Duty: Black Ops 3 (or Advanced Warfare?),\nit's a screen space AO solution estimating path tracing level quality at a fraction of the cost.\n\nHere, the pass is inserted before transparency rendering & post FX, so no overlapping like generic ReShade FX solutions.\n(Please report if otherwise, especially concerning mod support.)");
 
          if (ImGui::Checkbox("Disallow MegaMix", &XeGTAO::disallow_for_npr))
             reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_disallow_for_npr, XeGTAO::disallow_for_npr);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("When MegaMix NPR detected, this will not draw.\n\n(This doesn't discern the style of a scene, e.g. \"Two-Faced Lovers\".\nAll 3D is indiscriminately treated as an occluder.)");
-
-         // is_characters_only
-         ImGui::BeginDisabled(!XeGTAO::disallow_for_npr);
-         if (ImGui::Checkbox("Characters Only (Requires Disallow MegaMix) (WIP, buggy)", &XeGTAO::is_characters_only))
-            reshade::set_config_value(runtime, NAME, XeGTAO::reshadesave_is_characters_only, XeGTAO::is_characters_only);
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Only apply AO to characters / dynamic objects, ignoring the environment.\n(This plays it safe to avoid errors, like occlusion on skybox.)");
-         ImGui::EndDisabled();
          
          ImGui::NewLine();
          DrawColoredSubHeader("Parameters");
@@ -9280,7 +9295,7 @@ public:
             "The out-of-focus curve profile."
             "\n"
             "\n[Faithful]"
-            "\nFaithfully adhere to vanilla, often blending unrealistically between blur vs sharp color, creating that haze."
+            "\nFaithfully adhere to vanilla for compatibility, often blending unrealistically between blur vs sharp color."
             "\n"
             "\n[Favor Bokeh]"
             "\nPrioritizes bokeh, where the unrealistic blend is reduced to better reveal the actual shape.");
@@ -9316,12 +9331,14 @@ public:
             static int2 desired_resolution = {0,0};
             desired_resolution = int2(DuplicateWorldReflections::desired_resolution.x, DuplicateWorldReflections::desired_resolution.y);
 
-            static float2 prev_output_resolution = { 0, 0 };
+            static uint2 prev_output_resolution = { 0, 0 };
             static std::array<uint2, 4> res_presets = {};
             auto DrawTooltipForPreset = []() { if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Higher = sharper.\n(Based on render resolution.)"); };
             if (prev_output_resolution.x != RenderTracker::res_main_color_size.x || prev_output_resolution.y != RenderTracker::res_main_color_size.y)
             {
-               prev_output_resolution = device_data.output_resolution;
+               prev_output_resolution = RenderTracker::res_main_color_size;
+               uint2 res = RenderTracker::res_main_color_size;
+               if (res.x > 3840) res = uint2(3840, static_cast<uint>(3840.f / res.x * res.y));
                res_presets[0] = uint2(RenderTracker::res_main_color_size.x / 8.f, RenderTracker::res_main_color_size.y / 8.f);
                res_presets[1] = uint2(RenderTracker::res_main_color_size.x / 4.f, RenderTracker::res_main_color_size.y / 4.f);
                res_presets[2] = uint2(RenderTracker::res_main_color_size.x / 2.f, RenderTracker::res_main_color_size.y / 2.f);
@@ -9970,6 +9987,7 @@ public:
       ImGui::BulletText("Bug Hunter: gin");
       ImGui::BulletText("Bug Hunter: NevaArt3");
       ImGui::BulletText("Bug Hunter: DolanNorth");
+      ImGui::BulletText("Bug Hunter: Yonny Alenjadro");
 
       ImGui::NewLine();
       

@@ -138,8 +138,16 @@ void main(
     float3 prev = prev_texture.Sample(sampP, v1.xy).xyz; // load prev
 
     #if CUSTOM_PS4BLUR_1 == 1 // lerp ghosting
-      // x = sqrt(lerp(prev * prev, x * x, 0.75)); //TODO: each scene can have a different blend factor... could it be stored in PV file?
-      x = sqrt(lerp(x * x, prev * prev, GS.FrameBlendRatio));
+      x = sqrt(lerp(x * x, prev * prev, GS.FrameBlendRatio)); //TODO: each scene can have a different blend factor... could it be stored in PV file?
+      // o1.xyz = x; // blur accumulate, max payne 2 dream ahh
+
+      // // really dumb fake "SMAA T2X"
+      // bool isEvenFrame = LumaSettings.FrameIndex % 2 == 0;
+      // if (isEvenFrame) {
+      //   x = sqrt((x * x + prev * prev) * 0.5); // avg
+      // } else {
+      //   x = prev;
+      // }
     #elif CUSTOM_PS4BLUR_1 == 2 // horizontal interlacing
       float2 texSize = g_texel_size.zw;
       bool isEvenFrame = LumaSettings.FrameIndex % 2 == 0;
