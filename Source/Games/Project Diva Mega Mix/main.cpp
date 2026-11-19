@@ -674,7 +674,7 @@ namespace ShaderDefineInfo
          {"CUSTOM_HDTVREC709_1", '0', true, false, "Decode color and swapchain to HDTV rec.709, like PS4's display output.", 1},
          {"CUSTOM_GAMMACORRECT22", '1', true, false, "Enable Gamma Correction 2.2 for OS and displays missing it.", 1},
          {"CUSTOM_PROGRESSBAR", '0', true, false, "Play head progress bar.", 2},
-         {"CUSTOM_PS4BLUR_1", '0', true, false, "PS4 frame blur / ghosting.", 2},
+         {"CUSTOM_PS4BLUR_1", '0', true, false, "PS4 frame blur / ghosting.", 3},
          {"CUSTOM_BLOOM_THRESHOLD_1", '0', true, false, "Bloom threshold mode.", 4},
          {"CUSTOM_SSAA_FILTER", '0', true, false, "SSAA downsample filter", 2},
          {"CUSTOM_HDRTONEMAPONSDR", '0', true, false, "Use new HDR tonemapping in SDR path.", 1},
@@ -1745,6 +1745,11 @@ namespace SSAA // detects https://github.com/korenkonder/MMPlusMods/blob/master/
    }
 }
 
+namespace XeGTAO // partial
+{
+   bool DoesXeGTAORequireDepthBuffer();
+}
+
 namespace MSAA
 {
    constexpr std::array<uint8_t, 5> samplecount_array = { 1, 2, 4, 8, 16 };;
@@ -1776,6 +1781,34 @@ namespace MSAA
       BuildQualityArray(native_device);
       user = std::clamp(user, 1, static_cast<int>(quality_array.size()) - 1);
       return static_cast<uint>(quality_array[user]);
+   }
+
+   //////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+   enum FakeTAA : uint8_t
+   {
+      FakeTAA_Off,
+      FakeTAA_SMAAT2X,
+      FakeTAA_SMAAT2X_4,
+      FakeTAA_Halton,
+   };
+   FakeTAA fake_taa = FakeTAA_Off;
+   int fake_taa_halton = 8;
+   float2 GetJitterFromCurrFakeTAA()
+   {
+      constexpr std::array<float2, 4> offsets = { float2(0.25f, 0.25f), float2(-0.25f, -0.25f), float2(-0.25f, 0.25f), float2(0.25f, -0.25f) };
+      switch (fake_taa)
+      {
+         case FakeTAA_SMAAT2X:
+            return offsets[cb_luma_global_settings.FrameIndex & 1];
+         case FakeTAA_SMAAT2X_4:
+            return offsets[cb_luma_global_settings.FrameIndex % 4];
+         case FakeTAA_Halton:
+            return Jitter::GetJitter(fake_taa_halton);
+         case FakeTAA_Off:
+         default: 
+            return float2(0.f, 0.f);
+      }
    }
    
    bool IsEnabled() { return ShaderDefineInfo::GetB(ShaderDefineInfo::CUSTOM_MSAA); }
@@ -1855,7 +1888,7 @@ namespace MSAA
       ComPtr<ID3D11DepthStencilView> orig_dsv;
 
       // DSS that always write for ResolveMSAA()
-      ComPtr<ID3D11DepthStencilState> resolve_dss; 
+      ComPtr<ID3D11DepthStencilState> resolve_dss;
 
       void Reset()
       {
@@ -2130,18 +2163,21 @@ namespace MSAA
             native_device_context->OMSetRenderTargets(rtvs_array.size(), rtvs_array.data(), Resources::depth_dsv.get());
 
             // vp
-            // float2 offset = Jitter::GetJitter(8);
-            // offset.x *= cb_luma_global_settings.DevSettings[9];
-            // offset.y *= cb_luma_global_settings.DevSettings[9];
-            // constexpr std::array<float2, 4> offsets = { float2(0.25f, 0.25f), float2(-0.25f, -0.25f), float2(-0.25f, 0.25f), float2(0.25f, -0.25f) };
-            // float2 offset = offsets[cb_luma_global_settings.FrameIndex & 1];
             D3D11_VIEWPORT vp;
-            vp.TopLeftX = 0.0f /*+ offset.x*/;
-            vp.TopLeftY = 0.0f /*+ offset.y*/;
-            vp.Width    = RenderTracker::res_main_color_size.x /*- offset.x*/;
-            vp.Height   = RenderTracker::res_main_color_size.y /*- offset.y*/;
+            vp.TopLeftX = 0.0f;
+            vp.TopLeftY = 0.0f;
+            vp.Width    = RenderTracker::res_main_color_size.x;
+            vp.Height   = RenderTracker::res_main_color_size.y;
             vp.MinDepth = 0.0f;
             vp.MaxDepth = 1.0f;
+            if (fake_taa != FakeTAA_Off)
+            {
+               float2 offset = GetJitterFromCurrFakeTAA();
+               vp.TopLeftX += offset.x;
+               vp.TopLeftY += offset.y;
+               vp.Width    -= offset.x;
+               vp.Height   -= offset.y;
+            }
             native_device_context->RSSetViewports(1, &vp);
 
             state = ReplacedAndDrawing;
@@ -2247,7 +2283,7 @@ namespace MSAA
 
                // Resolve: depth
                ResolveMode mode = FastDepth;
-               if (ps == 0x68722F15 && !AntiAliasing::DoesAARequireDepthBuffer())
+               if (ps == 0x68722F15 && !AntiAliasing::DoesAARequireDepthBuffer() && !XeGTAO::DoesXeGTAORequireDepthBuffer())
                   goto SkipDepthResolve; // bloom & autoexposure don't require depth resolve
                if (ps == 0x83AE9A79)
                   mode = FullDepthMax; // required to not let DoF bleed
@@ -2569,6 +2605,8 @@ namespace XeGTAO
       Done, // drawn, wait for next frame
    };
    State state = Unknown;
+   
+   bool DoesXeGTAORequireDepthBuffer() { return state == Ready; }
 
    // key: relevant shader that XeGTAO must insert to.
    // value: index to find main color RES. -1 means RTV.
@@ -7878,6 +7916,8 @@ namespace RenderTracker // partial
 
 namespace UserPresets
 {
+   bool is_renderwhilepausedll = false;
+   
    namespace Quality
    {
       struct UserPreset
@@ -8020,6 +8060,11 @@ namespace UserPresets
          ShaderDefineInfo::Set(ShaderDefineInfo::CUSTOM_PS4BLUR_1, enable);
       }
    }
+
+   void OnInit()
+   {
+      is_renderwhilepausedll = GetModuleHandleA("RenderWhilePaused.dll") != nullptr ? 1 : 0;
+   }
 }
 } // unnamed namespace
 
@@ -8063,6 +8108,7 @@ public:
       DepthOfField::OnInit();
       MSAA::OnInit();
       SpotLightShadows::OnInit();
+      UserPresets::OnInit();
       
       // GameSettings default
       // default_luma_global_game_settings.TonemapperRolloffStart = cb_luma_global_settings.GameSettings.TonemapperRolloffStart = 36.f;
@@ -8715,6 +8761,13 @@ public:
          if (ImGui::Button("Off (Arcade, PC, Other Consoles)")) UserPresets::PS4::Apply(false); ImGui::SameLine();
          if (ImGui::Button("On (PS4 Outlier)")) UserPresets::PS4::Apply(true);
          ImGui::BulletText("Consider:"); ImGui::SameLine(); if (ImGui::Button("Future Tone UI by CoolChar (GameBanana)")) OpenURL("https://gamebanana.com/mods/471147");
+
+         if (!UserPresets::is_renderwhilepausedll)
+         {
+            ImGui::NewLine();
+            DrawColoredSubHeader("If you wish to start tinkering:");
+            if (ImGui::Button("Render While Paused by mok244 (GameBanana)")) OpenURL("https://gamebanana.com/mods/571095");
+         }
       }
 
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
@@ -9468,6 +9521,29 @@ public:
          if (prev_msaa != curr_msaa) MSAA::HardReset(); // TODO: ugly UI dependency
          prev_msaa = curr_msaa;
 
+         if (UserSettingsMisc::imgui_show_advanced)
+         {
+            ImGui::BeginDisabled(curr_msaa <= 0);
+            int fake_taa_curr = MSAA::fake_taa;
+            if (ImGui::Combo("TAA Proof of Concept", &fake_taa_curr, "Off\0SMAA T2X\0SMAA T2X but mirrored to 4 Phases\0Halton"))
+               MSAA::fake_taa = static_cast<MSAA::FakeTAA>(fake_taa_curr);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("(DOESN'T SAVE)"
+                                                                                             "\nJitter the viewport like how TAA would (though TAA would do at vertex level)."
+                                                                                             "\nIt's only a proof of concept because there is no reprojection (no velocity buffer)."
+                                                                                             "\n"
+                                                                                             "\nFor now, this is useful to take a screenshot with insane subpixel information"
+                                                                                             "\nwhen paired with PS3/PS4 Frame Blending: Drunken Smear option.");
+            if (MSAA::fake_taa == MSAA::FakeTAA_Halton)
+            {
+               ImGui::SliderInt("Halton Phases", &MSAA::fake_taa_halton, 8, 128);
+               if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("(DOESN'T SAVE)"
+                                                                                             "\nHow many subpixel offsets within the Halton sequence to use before looping.");
+            }
+
+            if (!UserPresets::is_renderwhilepausedll && ImGui::Button("Render While Paused by mok244 (GameBanana)")) OpenURL("https://gamebanana.com/mods/571095");
+            ImGui::EndDisabled();
+         }
+
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA uses geometry edges, so aliasing from textures is unresolved.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though costly, pair with SSAA to achieve Temporal AA level smoothness without smearing.");
@@ -9702,11 +9778,11 @@ public:
       {
          DrawColoredSubHeader("Insert previous frame blending/ghosting seen in Dreamy Theater (PS3) & Future Tone (PS4).");
 
-         auto d = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PS4BLUR_1, "Mode", { "Off", "On", "Horizontal Interlacing" }, "(Interlacing doesn't save performance.)");
+         auto d = ShaderDefineInfo::UIDropDown(ShaderDefineInfo::CUSTOM_PS4BLUR_1, "Mode", { "Off", "On", "Horizontal Interlacing", "Drunken Smear (Pair with TAA Proof of Concept)" }, "(Interlacing doesn't save performance.)");
 
-         if (d != 1) ImGui::BeginDisabled();
+         ImGui::BeginDisabled(!(d == 1 || d == 3));
          {
-            if (ImGui::SliderFloat("Blend Ratio", &cb_luma_global_settings.GameSettings.FrameBlendRatio, 0.f, 0.5f))
+            if (ImGui::SliderFloat("Blend Ratio", &cb_luma_global_settings.GameSettings.FrameBlendRatio, 0.f, d != 3 ? 0.5f : 1.0f))
                reshade::set_config_value(runtime, NAME, "FrameBlendRatio", cb_luma_global_settings.GameSettings.FrameBlendRatio);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The percentage of the previous frame to blend into the current."
                                                                                              "\n"
@@ -9714,7 +9790,7 @@ public:
                                                                                              "\nbut the shader from PS4 never draws on PC to provide the intended value.)");
             DrawResetButton(cb_luma_global_settings.GameSettings.FrameBlendRatio, default_luma_global_game_settings.FrameBlendRatio, "FrameBlendRatio", runtime);
          }
-         if (d != 1) ImGui::EndDisabled();
+         ImGui::EndDisabled();
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("For 60 FPS, and doesn't affect UI like original.");

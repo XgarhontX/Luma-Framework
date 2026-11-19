@@ -139,7 +139,6 @@ void main(
 
     #if CUSTOM_PS4BLUR_1 == 1 // lerp ghosting
       x = sqrt(lerp(x * x, prev * prev, GS.FrameBlendRatio)); //TODO: each scene can have a different blend factor... could it be stored in PV file?
-      // o1.xyz = x; // blur accumulate, max payne 2 dream ahh
 
       // // really dumb fake "SMAA T2X"
       // bool isEvenFrame = LumaSettings.FrameIndex % 2 == 0;
@@ -157,6 +156,12 @@ void main(
       } else {
         x = prev;
       }
+    #elif CUSTOM_PS4BLUR_1 == 3 // druken smear
+      x = pow(x, 2.2);
+      prev = pow(prev, 2.2);
+      x = PerceptualLerp(float4(x, 1), float4(prev, 1), GS.FrameBlendRatio, 2.2).xyz;
+      x = pow(x, 1/2.2);
+      o1.xyz = x; // blur accumulate, max payne 2 dream ahh
     #endif
   #endif
 
