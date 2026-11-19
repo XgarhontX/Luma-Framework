@@ -7412,15 +7412,198 @@ namespace DuplicateWorldReflections
 
 namespace PictureInPicture
 {
-   constexpr const char* reshade_save_enabled = "PictureInPictureEnabled";
-   constexpr bool enabled_def = false;
-   bool enabled = enabled_def;
-
+   enum Enabled : uint8_t
+   {
+      Off,
+      Full,
+      Half,
+      Quarter,
+      Eighth,
+      Sixteenth,
+   };
+   constexpr const char* reshadesave_enabled = "PictureInPictureEnabled";
+   Enabled enabled = Off;
+   
    // MLAA Resolve
-   // Option A. CopyResource() full res
+   // Option A. CopyResource() full res (dont care case)
    // Option B. 0x006BE25F reduce_tex_reduce_4_noalpha
    // Option C. 0x68722F15 reduce_tex_reduce_4/magnify_cone
    // Final
+   enum State : uint8_t
+   {
+      Replace,
+      MLAAResolve,
+      Draw,
+      Final,
+      Done,
+   };
+   State state = MLAAResolve;
+   uint64_t state_resource_to_replace = 0; // token
+
+   namespace Resources
+   {
+      uint2 size = { 0, 0 };
+      Enabled prev_enabled = Off;
+      
+      ComPtr<ID3D11Texture2D> tex;
+      ComPtr<ID3D11ShaderResourceView> srv;
+      ComPtr<ID3D11RenderTargetView> rtv;
+
+      void Reset()
+      {
+         size = { 0, 0 };
+         tex.reset();
+         srv.reset();
+         rtv.reset();
+      }
+
+      void Create(ID3D11Device* native_device)
+      {
+         [[likely]] if (prev_enabled == enabled) return;
+         prev_enabled = enabled;
+
+         size = RenderTracker::res_main_color_size;
+         int enabled_parsed = std::pow(2, static_cast<int>(enabled));
+         size.x /= enabled_parsed;
+         size.y /= enabled_parsed;
+         
+         D3D11_TEXTURE2D_DESC tex_desc = {};
+         tex_desc.Width = size.x;
+         tex_desc.Height = size.y;
+         tex_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT; // worth the same as rgba8
+         tex_desc.ArraySize = 1;
+         tex_desc.SampleDesc.Count = 1;
+         tex_desc.SampleDesc.Quality = 0;
+         tex_desc.Usage = D3D11_USAGE_DEFAULT;
+         tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+         tex_desc.MipLevels = 1;
+
+         auto hr0 = native_device->CreateTexture2D(&tex_desc, nullptr, tex.put()); ASSERT_MSG(SUCCEEDED(hr0), "PictureInPicture: Create hr0");
+         auto hr1 = native_device->CreateShaderResourceView(tex.get(), nullptr, srv.put()); ASSERT_MSG(SUCCEEDED(hr1), "PictureInPicture: Create hr1");
+         auto hr2 = native_device->CreateRenderTargetView(tex.get(), nullptr, rtv.put()); ASSERT_MSG(SUCCEEDED(hr2), "PictureInPicture: Create hr2");
+      }
+   }
+
+   DrawOrDispatchOverrideType OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, uint32_t ps)
+   {
+      DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
+      if (enabled <= 0) return result;
+      if (DEVELOPMENT && !IsModEnabled()) return result;
+
+      bool draws_in_final = 0;
+
+      // skip state
+      if (state == Replace && ps == 0x5C5FD160) state = MLAAResolve;
+
+      switch (state)
+      {
+         case Replace:
+         {
+            // failed: wait for main color use
+            if (!RenderTracker::IsMainColorBeingOrHasBeenDrawnTo()) break;
+            ASSERT_MSG(state_resource_to_replace > 0, "PictureInPicture: Replace state but no resource to replace!");
+
+            // failed: wait for use at SRV0 // TODO: subscribe to some Luma 1.5 resource bind event instead of scanning
+            ComPtr<ID3D11ShaderResourceView> srv0;
+            native_device_context->PSGetShaderResources(0, 1, srv0.put());
+            if (!srv0) break; // failed: null
+            
+            ComPtr<ID3D11Resource> srv0_res;
+            srv0->GetResource(srv0_res.put());
+            uint64_t srv0_handle = reinterpret_cast<uint64_t>(srv0_res.get());
+            if (srv0_handle != state_resource_to_replace) break;
+
+            // replace SRV0
+            ASSERT_MSG(Resources::srv, "PictureInPicture: Resources::srv null Replace");
+            native_device_context->PSSetShaderResources(0, 1, &Resources::srv);
+            break;
+         }
+         case MLAAResolve:
+         {
+            if (ps != 0x5C5FD160) break;
+            state_resource_to_replace = 0; // reset/consume
+            state = Draw;
+            break;
+         }
+         case Draw:
+         {
+            // expected ps?
+            constexpr std::array<uint32_t, 2> expected_shaders = { 0x006BE25F, 0x68722F15 };
+            bool is_expected = std::ranges::contains(expected_shaders, ps);
+            if (!is_expected)
+            {
+               state = Done;
+               break;
+            }
+
+            // create resources
+            Resources::Create(native_device);
+
+            // save RTV0
+            ComPtr<ID3D11RenderTargetView> rtv0;
+            native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
+            ASSERT_MSG(rtv0, "PictureInPicture: rtv0 null Draw");
+            ComPtr<ID3D11Resource> rtv0_res;
+            rtv0->GetResource(rtv0_res.put());
+            state_resource_to_replace = reinterpret_cast<uint64_t>(rtv0_res.get()); // grant
+
+            // draw
+            // TODO: replace PS for HQ blur?
+            native_device_context->OMSetRenderTargets(1, &Resources::rtv, nullptr);
+
+            D3D11_VIEWPORT vp;
+            vp.TopLeftX = 0;
+            vp.TopLeftY = 0;
+            vp.Width = Resources::size.x;
+            vp.Height = Resources::size.y;
+            vp.MinDepth = 0;
+            vp.MaxDepth = 1;
+            native_device_context->RSSetViewports(1, &vp);
+            
+            // result = DrawOrDispatchOverrideType::Replaced; // we will do our own
+            state = Final;
+            draws_in_final = 0;
+            break;
+         }
+         case Final:
+         {
+            ASSERT_MSG(!draws_in_final, "PictureInPicture: OnFinalDraw() wasn't called next!!!");
+            draws_in_final = 1;
+         }
+         case Done:
+         default:
+            break;
+      }
+
+      return result;
+   }
+
+   void OnTonemapDraw()
+   {
+      state = MLAAResolve; // wait for MLAA
+   }
+
+   void OnFinalDraw()
+   {
+      state = Done;
+   }
+
+   void OnPresent()
+   {
+      state = state_resource_to_replace > 0 ? Replace : MLAAResolve;
+   }
+
+   void OnLoad(reshade::api::effect_runtime* runtime)
+   {
+      int enabled_int = 0;
+      if (reshade::get_config_value(runtime, NAME, reshadesave_enabled, enabled_int))
+         enabled = static_cast<Enabled>(enabled_int);
+   }
+
+   void OnInitSwapchain()
+   {
+      Resources::Reset();
+   }
 }
 
 #if DEVELOPMENT
@@ -7714,6 +7897,7 @@ namespace UserPresets
          int   reflections_msaa = 1;  
          bool  spotlights_enabled = true;
          DepthOfField::Enabled dof_enabled = DepthOfField::Enhanced;
+         PictureInPicture::Enabled pip_enabled = PictureInPicture::Half;
 
          void Apply()
          {
@@ -7757,6 +7941,9 @@ namespace UserPresets
 
             DepthOfField::enabled = dof_enabled;
             reshade::set_config_value(nullptr, NAME, DepthOfField::reshadesave_enabled, DepthOfField::enabled);
+
+            PictureInPicture::enabled = pip_enabled;
+            reshade::set_config_value(nullptr, NAME, PictureInPicture::reshadesave_enabled, static_cast<int>(PictureInPicture::enabled));
          }
       };
 
@@ -7784,6 +7971,7 @@ namespace UserPresets
          // preset.reflections_msaa = 0;
          preset.spotlights_enabled = false;
          preset.dof_enabled = DepthOfField::Vanilla;
+         preset.pip_enabled = PictureInPicture::Off;
          preset.Apply();
       }
 
@@ -7845,6 +8033,9 @@ public:
 
       // force same version before load to not reset settings
       reshade::set_config_value(nullptr, NAME, "Version", Globals::VERSION); // TODO: WHY IS THIS TROLLING?!?!?
+      
+      // HighFPS
+      MemoryHack::Init();
 
       // ShaderHashLists
       ShaderHashesLists::OnInit();
@@ -7946,9 +8137,6 @@ public:
    {
       // log
       message(reshade::log::level::info, "OnCreateDevice()");
-      
-      // HighFPS
-      MemoryHack::Init();
    }
 
    void OnInitSwapchain_ResetEvent(bool is_resolution_changed)
@@ -7969,6 +8157,7 @@ public:
       // UISeparation::ResetOnSwapchain();
       ShadowMap::HardReset();
       DuplicateWorldReflections::HardReset();
+      PictureInPicture::OnInitSwapchain();
    }
 
    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
@@ -8087,6 +8276,11 @@ public:
          auto r = DepthOfField::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
          if (r != DrawOrDispatchOverrideType::None) return r;
       }
+      // Picture in Picture /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+      {
+         auto r = PictureInPicture::OnDrawOrDispatchOverride(native_device, native_device_context, cmd_list_data, device_data, ps);
+         if (r != DrawOrDispatchOverrideType::None) return r;
+      }
       // TONEMAP UBER //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
       if (!TonemapInfo::GetDrawnFinal(cb_luma_global_settings.GameSettings.TonemapInfo) && //if final drawn, no tonemap possible
          !TonemapInfo::GetDrawnTonemap(cb_luma_global_settings.GameSettings.TonemapInfo))
@@ -8109,6 +8303,7 @@ public:
             SpotLightShadows::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
             DepthOfField::OnTonemapAndFinalDraw();
             MSAA::OnTonemapAndFinalDraw();
+            PictureInPicture::OnTonemapDraw();
 #if DEVELOPMENT
             LUTBuilderScan::OnTonemapDraw(native_device, native_device_context, cmd_list_data, device_data);
 #endif
@@ -8138,6 +8333,7 @@ public:
          auto sepui_rtv = SeparableUI::OnDrawFinal(native_device, native_device_context, cmd_list_data, device_data); // can replace RTV2, Viewports
          DepthOfField::OnTonemapAndFinalDraw();
          MSAA::OnTonemapAndFinalDraw();
+         PictureInPicture::OnFinalDraw();
 
          // 0-3 RTVs & Viewports
          if (ps4blur_rtv != nullptr || sepui_rtv != nullptr)
@@ -8266,6 +8462,7 @@ public:
       DepthOfField::OnPresent();
       ShadowMap::OnPresent();
       DuplicateWorldReflections::OnPresent();
+      PictureInPicture::OnPresent();
       
       // reset TonemapInfo
       TonemapInfo::tonemapinfo_prev = cb_luma_global_settings.GameSettings.TonemapInfo;
@@ -8388,6 +8585,8 @@ public:
       ShadowMap::OnLoad(runtime);
 
       DuplicateWorldReflections::OnLoad(runtime);
+
+      PictureInPicture::OnLoad(runtime);
    }
 
    void OnShaderDefinesChanged()
@@ -9209,7 +9408,11 @@ public:
       // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
 
       ImGui::PushID("###AntiAliasing");
-      if (DrawCollapsingHeaderEnabledColored("Anti-Aliasing", AntiAliasing::enabled > AntiAliasing::Vanilla))
+      if (DrawCollapsingHeaderEnabledColored("Anti-Aliasing",
+         AntiAliasing::enabled > AntiAliasing::Vanilla
+         || (SSAA::enabled && ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_SSAA_FILTER) > 0)
+         || ShaderDefineInfo::Get(ShaderDefineInfo::CUSTOM_MSAA) > 0)
+         )
       {
          DrawColoredSubHeader("Screen Space: Post hoc blurring of edges that should be smooth if given subpixel info.");
          
@@ -9471,6 +9674,24 @@ public:
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("This FX is rather rare. 2 PVs using this are Meiteki Cybernetics & Gaikotsu Gakudan to Riria.");
          ImGui::PopStyleColor();
+      }
+      ImGui::PopID();
+
+      // ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////////////
+
+      // PictureInPicture
+      ImGui::PushID("###PictureInPicture");
+      if (DrawCollapsingHeaderEnabledColored("Picture-in-Picture", PictureInPicture::enabled > 0))
+      {
+         DrawColoredSubHeader("Saves final color to then draw it next frame on screens and whatnot.");
+         
+         auto curr = static_cast<int>(PictureInPicture::enabled);
+         if (ImGui::Combo("Mode", &curr, "Off\0Full\0Half\0Quarter\0Eighth\0Sixteenth\0"))
+         {
+            reshade::set_config_value(runtime, NAME, PictureInPicture::reshadesave_enabled, curr);
+            PictureInPicture::enabled = static_cast<PictureInPicture::Enabled>(curr);
+         }
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("The replacement texture's resolution.");
       }
       ImGui::PopID();
       
