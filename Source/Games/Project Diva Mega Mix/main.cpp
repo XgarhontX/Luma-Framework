@@ -8750,8 +8750,9 @@ public:
          if (ImGui::Button("Off")) UserPresets::Quality::ApplyOff(); ImGui::SameLine();
          if (ImGui::Button("High")) UserPresets::Quality::ApplyOn(); ImGui::SameLine();
          if (ImGui::Button("Extreme")) UserPresets::Quality::ApplyOnHigh(); ImGui::SameLine();
-         if (ImGui::Button("Extra Extreme")) UserPresets::Quality::ApplyOnHigh2(); ImGui::SameLine();
-         if (ImGui::Button("Extreme for SSAA")) UserPresets::Quality::ApplySSAAHigh();
+         if (ImGui::Button("Extreme (for SSAA)")) UserPresets::Quality::ApplySSAAHigh(); ImGui::SameLine();
+         if (ImGui::Button("Extra Extreme (Diminishing Returns)")) UserPresets::Quality::ApplyOnHigh2();
+         
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.f));
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Requires MLAA selected in graphics settings!");
          ImGui::PopStyleColor();
@@ -8777,7 +8778,7 @@ public:
          HighFPS::enabled || HighFPS::has_high_frame_rate_mod || HighFPS::has_display_commander,
          (!UserSettingsMisc::imgui_readme_done && (!HighFPS::has_high_frame_rate_mod && !HighFPS::has_display_commander))))
       {
-         DrawColoredSubHeader("Continuously patches the game's memory to set a new limit.");
+         DrawColoredSubHeader("Continuously patch the game's memory to set a new limit.");
 
          bool is_draw_settings = true;
          if (HighFPS::has_high_frame_rate_mod)
@@ -9479,10 +9480,10 @@ public:
                                                                                           "\n"
                                                                                           "\n[MLAA (Morphological Anti-Aliasing)]"
                                                                                           "\nThe vanilla option, blurring the least."
-                                                                                          "\nThis algorithm is the OG/seminal, where edges to blur are found geometrically."
+                                                                                          "\nThis algorithm is the OG, where edges to blur are found geometrically instead of luminance weights (FXAA)."
                                                                                           "\n"
                                                                                           "\n[DLAA (Directional Localized Anti-Aliasing)]"
-                                                                                          "\nMore lenient, DLAA will result in a more blurred look."
+                                                                                          "\nOverdone/Lenient, DLAA will result in a more blurred look."
                                                                                           "\nDebuting in Star Wars: The Force Unleashed II, DLAA finds and blurs along the direction of edges."
                                                                                           "\nThis is about the same cost as MLAA."
                                                                                           "\n"
@@ -9528,7 +9529,7 @@ public:
             if (ImGui::Combo("TAA Proof of Concept", &fake_taa_curr, "Off\0SMAA T2X\0SMAA T2X but mirrored to 4 Phases\0Halton"))
                MSAA::fake_taa = static_cast<MSAA::FakeTAA>(fake_taa_curr);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("(DOESN'T SAVE)"
-                                                                                             "\nJitter the viewport like how TAA would (though TAA would do at vertex level)."
+                                                                                             "\nJitter the viewport like how Temporal AA would (though TAA would do at vertex level)."
                                                                                              "\nIt's only a proof of concept because there is no reprojection (no velocity buffer)."
                                                                                              "\n"
                                                                                              "\nFor now, this is useful to take a screenshot with insane subpixel information"
@@ -9545,7 +9546,7 @@ public:
          }
 
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
-         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA uses geometry edges, so aliasing from textures is unresolved.");
+         ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("MSAA is spatial, so aliasing from textures on flat surfaces are unresolved.");
          ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Though costly, pair with SSAA to achieve Temporal AA level smoothness without smearing.");
          ImGui::PopStyleColor();
       }

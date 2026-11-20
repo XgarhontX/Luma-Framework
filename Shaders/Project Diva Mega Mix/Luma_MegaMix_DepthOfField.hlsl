@@ -370,7 +370,7 @@ void Upsample(
   // mask feather (AI helped)
   const float radiusStart = 0.0; // fudge
   const float radiusEnd = 16.0 * texSizeMain.y / 2160.0; // fudge, based on 4k
-  const float coverageConfidence = 0.2; // fudge
+  const float coverageConfidence = 0.5; // fudge
   float mask = smoothstep(radiusStart, radiusEnd, radiusPixels);
   mask *= smoothstep(0, coverageConfidence, A);
   float3 rgb = lerp(cs.rgb, B, mask);
